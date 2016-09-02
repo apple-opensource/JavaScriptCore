@@ -87,6 +87,10 @@ Lexer::Lexer()
     , next1(0)
     , next2(0)
     , next3(0)
+    , m_currentOffset(0)
+    , m_nextOffset1(0)
+    , m_nextOffset2(0)
+    , m_nextOffset3(0)
 {
     m_buffer8.reserveCapacity(initialReadBufferCapacity);
     m_buffer16.reserveCapacity(initialReadBufferCapacity);
@@ -94,17 +98,18 @@ Lexer::Lexer()
     m_identifiers.reserveCapacity(initialStringTableCapacity);
 }
 
-void Lexer::setCode(int startingLineNumber, const KJS::UChar *c, unsigned int len)
+void Lexer::setCode(const SourceCode& source)
 {
-    yylineno = 1 + startingLineNumber;
+    yylineno = source.firstLine();
     restrKeyword = false;
     delimited = false;
     eatNextIdentifier = false;
     stackToken = -1;
     lastToken = -1;
     pos = 0;
-    code = c;
-    length = len;
+    m_source = &source;
+    code = source.provider()->data() + source.startOffset();
+    length = source.length();
     skipLF = false;
     skipCR = false;
     error = false;
@@ -123,11 +128,17 @@ void Lexer::shift(unsigned p)
         current = next1;
         next1 = next2;
         next2 = next3;
+        m_currentOffset = m_nextOffset1;
+        m_nextOffset1 = m_nextOffset2;
+        m_nextOffset2 = m_nextOffset3;
         do {
             if (pos >= length) {
+                m_nextOffset3 = pos;
+                pos++;
                 next3 = -1;
                 break;
             }
+            m_nextOffset3 = pos;
             next3 = code[pos++].uc;
         } while (next3 == 0xFEFF);
     }
@@ -166,6 +177,7 @@ int Lexer::lex()
     stackToken = 0;
   }
 
+  int startOffset = m_currentOffset;
   while (!done) {
     if (skipLF && current != '\n') // found \r but not \n afterwards
         skipLF = false;
@@ -179,6 +191,7 @@ int Lexer::lex()
     }
     switch (state) {
     case Start:
+      startOffset = m_currentOffset;
       if (isWhiteSpace()) {
         // do nothing
       } else if (current == '/' && next1 == '/') {
@@ -229,7 +242,7 @@ int Lexer::lex()
         shift(2);
         state = InSingleLineComment;
       } else {
-        token = matchPunctuator(current, next1, next2, next3);
+        token = matchPunctuator(kjsyylval.intValue, current, next1, next2, next3);
         if (token != -1) {
           setDone(Other);
         } else {
@@ -636,7 +649,7 @@ bool Lexer::isOctalDigit(int c)
   return (c >= '0' && c <= '7');
 }
 
-int Lexer::matchPunctuator(int c1, int c2, int c3, int c4)
+int Lexer::matchPunctuator(int& charPos, int c1, int c2, int c3, int c4)
 {
   if (c1 == '>' && c2 == '>' && c3 == '>' && c4 == '=') {
     shift(4);
@@ -738,13 +751,19 @@ int Lexer::matchPunctuator(int c1, int c2, int c3, int c4)
     case '%':
     case '(':
     case ')':
-    case '{':
-    case '}':
     case '[':
     case ']':
     case ';':
       shift(1);
       return static_cast<int>(c1);
+    case '{':
+      charPos = pos - 4;
+      shift(1);
+      return OPENBRACE;
+    case '}':
+      charPos = pos - 4;
+      shift(1);
+      return CLOSEBRACE;
     default:
       return -1;
   }

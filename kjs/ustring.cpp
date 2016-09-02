@@ -172,8 +172,6 @@ static int statBufferSize = 0;
 
 PassRefPtr<UString::Rep> UString::Rep::createCopying(const UChar *d, int l)
 {
-  ASSERT(JSLock::lockCount() > 0);
-
   int sizeInBytes = l * sizeof(UChar);
   UChar *copyD = static_cast<UChar *>(fastMalloc(sizeInBytes));
   memcpy(copyD, d, sizeInBytes);
@@ -183,8 +181,6 @@ PassRefPtr<UString::Rep> UString::Rep::createCopying(const UChar *d, int l)
 
 PassRefPtr<UString::Rep> UString::Rep::create(UChar *d, int l)
 {
-  ASSERT(JSLock::lockCount() > 0);
-
   Rep* r = new Rep;
   r->offset = 0;
   r->len = l;
@@ -205,7 +201,6 @@ PassRefPtr<UString::Rep> UString::Rep::create(UChar *d, int l)
 
 PassRefPtr<UString::Rep> UString::Rep::create(PassRefPtr<Rep> base, int offset, int length)
 {
-  ASSERT(JSLock::lockCount() > 0);
   ASSERT(base);
 
   int baseOffset = base->offset;
@@ -235,8 +230,6 @@ PassRefPtr<UString::Rep> UString::Rep::create(PassRefPtr<Rep> base, int offset, 
 
 void UString::Rep::destroy()
 {
-  ASSERT(JSLock::lockCount() > 0);
-
   if (isIdentifier)
     Identifier::remove(this);
   if (baseString != this) {

@@ -25,11 +25,12 @@
 #ifndef Parser_h
 #define Parser_h
 
+#include "SourceProvider.h"
+#include "nodes.h"
 #include <wtf/Forward.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/OwnPtr.h>
 #include <wtf/RefPtr.h>
-#include "nodes.h"
 
 namespace KJS {
 
@@ -45,26 +46,20 @@ namespace KJS {
 
     class Parser : Noncopyable {
     public:
-        template <class ParsedNode>
-        PassRefPtr<ParsedNode> parse(const UString& sourceURL, int startingLineNumber,
-            const UChar* code, unsigned length,
-            int* sourceId = 0, int* errLine = 0, UString* errMsg = 0);
-
-        UString sourceURL() const { return m_sourceURL; }
-        int sourceId() const { return m_sourceId; }
+        template <class ParsedNode> PassRefPtr<ParsedNode> parse(PassRefPtr<SourceProvider>, int* errLine = 0, UString* errMsg = 0);
+        template <class ParsedNode> PassRefPtr<ParsedNode> parse(const SourceCode&, int* errLine = 0, UString* errMsg = 0);
 
         void didFinishParsing(SourceElements*, ParserRefCountedData<DeclarationStacks::VarStack>*, 
                               ParserRefCountedData<DeclarationStacks::FunctionStack>*, int lastLine);
 
+        void reparse(FunctionBodyNode*);
+
     private:
         friend Parser& parser();
 
-        Parser(); // Use parser() instead.
-        void parse(int startingLineNumber, const UChar* code, unsigned length,
-            int* sourceId, int* errLine, UString* errMsg);
+        void parse(int* errLine, UString* errMsg);
 
-        UString m_sourceURL;
-        int m_sourceId;
+        const SourceCode* m_source;
         RefPtr<SourceElements> m_sourceElements;
         RefPtr<ParserRefCountedData<DeclarationStacks::VarStack> > m_varDeclarations;
         RefPtr<ParserRefCountedData<DeclarationStacks::FunctionStack> > m_funcDeclarations;
@@ -73,25 +68,24 @@ namespace KJS {
     
     Parser& parser(); // Returns the singleton JavaScript parser.
 
-    template <class ParsedNode>
-    PassRefPtr<ParsedNode> Parser::parse(const UString& sourceURL, int startingLineNumber,
-        const UChar* code, unsigned length,
-        int* sourceId, int* errLine, UString* errMsg)
+    template <class ParsedNode> PassRefPtr<ParsedNode> Parser::parse(const SourceCode& source, int* errLine, UString* errMsg)
     {
-        m_sourceURL = sourceURL;
-        parse(startingLineNumber, code, length, sourceId, errLine, errMsg);
-        if (!m_sourceElements) {
-            m_sourceURL = UString();
-            return 0;
+        m_source = &source;
+        parse(errLine, errMsg);
+        RefPtr<ParsedNode> result;
+        if (m_sourceElements) {
+            result = ParsedNode::create(*m_source,
+                                        m_sourceElements.get(),
+                                        m_varDeclarations ? &m_varDeclarations->data : 0, 
+                                        m_funcDeclarations ? &m_funcDeclarations->data : 0);
+            result->setLoc(m_source->firstLine(), m_lastLine);
         }
-        RefPtr<ParsedNode> node = ParsedNode::create(m_sourceElements.release().get(),
-                                                     m_varDeclarations ? &m_varDeclarations->data : 0, 
-                                                     m_funcDeclarations ? &m_funcDeclarations->data : 0);
+
+        m_source = 0;
+        m_sourceElements = 0;
         m_varDeclarations = 0;
         m_funcDeclarations = 0;
-        m_sourceURL = UString();
-        node->setLoc(startingLineNumber, m_lastLine);
-        return node.release();
+        return result.release();
     }
 
 } // namespace KJS

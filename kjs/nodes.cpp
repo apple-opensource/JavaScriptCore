@@ -261,10 +261,10 @@ static void substitute(UString& string, const UString& substring)
     string = newString;
 }
 
-static inline int currentSourceId(ExecState* exec) KJS_FAST_CALL;
-static inline int currentSourceId(ExecState* exec)
+static inline int currentSourceID(ExecState* exec) KJS_FAST_CALL;
+static inline int currentSourceID(ExecState* exec)
 {
-    return exec->scopeNode()->sourceId();
+    return exec->scopeNode()->sourceID();
 }
 
 static inline const UString& currentSourceURL(ExecState* exec) KJS_FAST_CALL;
@@ -275,31 +275,31 @@ static inline const UString& currentSourceURL(ExecState* exec)
 
 JSValue* Node::setInterruptedCompletion(ExecState* exec)
 {
-    return exec->setInterruptedCompletion(Error::create(exec, TimeoutError, "JavaScript execution exceeded timeout.", lineNo(), currentSourceId(exec), currentSourceURL(exec)));
+    return exec->setInterruptedCompletion(Error::create(exec, TimeoutError, "JavaScript execution exceeded timeout.", lineNo(), currentSourceID(exec), currentSourceURL(exec)));
 }
 
 JSValue* Node::setErrorCompletion(ExecState* exec, ErrorType e, const char* msg)
 {
-    return exec->setThrowCompletion(Error::create(exec, e, msg, lineNo(), currentSourceId(exec), currentSourceURL(exec)));
+    return exec->setThrowCompletion(Error::create(exec, e, msg, lineNo(), currentSourceID(exec), currentSourceURL(exec)));
 }
 
 JSValue* Node::setErrorCompletion(ExecState* exec, ErrorType e, const char* msg, const Identifier& ident)
 {
     UString message = msg;
     substitute(message, ident.ustring());
-    return exec->setThrowCompletion(Error::create(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec)));
+    return exec->setThrowCompletion(Error::create(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec)));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg)
 {
-    return KJS::throwError(exec, e, msg, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, msg, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, const char* string)
 {
     UString message = msg;
     substitute(message, string);
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue* v, Node* expr)
@@ -307,14 +307,14 @@ JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue
     UString message = msg;
     substitute(message, v->toString(exec));
     substitute(message, expr->toString());
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, const Identifier& label)
 {
     UString message = msg;
     substitute(message, label.ustring());
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue* v, Node* e1, Node* e2)
@@ -323,7 +323,7 @@ JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue
     substitute(message, v->toString(exec));
     substitute(message, e1->toString());
     substitute(message, e2->toString());
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue* v, Node* expr, const Identifier& label)
@@ -332,7 +332,7 @@ JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue
     substitute(message, v->toString(exec));
     substitute(message, expr->toString());
     substitute(message, label.ustring());
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue* v, const Identifier& label)
@@ -340,7 +340,7 @@ JSValue* Node::throwError(ExecState* exec, ErrorType e, const char* msg, JSValue
     UString message = msg;
     substitute(message, v->toString(exec));
     substitute(message, label.ustring());
-    return KJS::throwError(exec, e, message, lineNo(), currentSourceId(exec), currentSourceURL(exec));
+    return KJS::throwError(exec, e, message, lineNo(), currentSourceID(exec), currentSourceURL(exec));
 }
 
 JSValue* Node::throwUndefinedVariableError(ExecState* exec, const Identifier& ident)
@@ -364,7 +364,7 @@ void Node::handleException(ExecState* exec, JSValue* exceptionValue)
     }
     Debugger* dbg = exec->dynamicGlobalObject()->debugger();
     if (dbg && !dbg->hasHandledException(exec, exceptionValue)) {
-        bool cont = dbg->exception(exec, currentSourceId(exec), m_line, exceptionValue);
+        bool cont = dbg->exception(exec, currentSourceID(exec), m_line, exceptionValue);
         if (!cont)
             dbg->imp()->abort();
     }
@@ -416,12 +416,12 @@ BreakpointCheckStatement::BreakpointCheckStatement(PassRefPtr<StatementNode> sta
 JSValue* BreakpointCheckStatement::execute(ExecState* exec)
 {
     if (Debugger* debugger = exec->dynamicGlobalObject()->debugger())
-        if (!debugger->atStatement(exec, currentSourceId(exec), m_statement->firstLine(), m_statement->lastLine()))
+        if (!debugger->atStatement(exec, currentSourceID(exec), m_statement->firstLine(), m_statement->lastLine()))
             return exec->setNormalCompletion();
     return m_statement->execute(exec);
 }
 
-void BreakpointCheckStatement::streamTo(SourceStream& stream) const
+void BreakpointCheckStatement::streamTo(SourceStream& stream)
 {
     m_statement->streamTo(stream);
 }
@@ -3698,6 +3698,10 @@ static inline JSValue* statementListExecute(StatementVector& statements, ExecSta
 
 // ------------------------------ BlockNode ------------------------------------
 
+BlockNode::BlockNode()
+{
+}
+
 BlockNode::BlockNode(SourceElements* children)
 {
     if (children)
@@ -4329,11 +4333,25 @@ JSValue* TryNode::execute(ExecState* exec)
 
 // ------------------------------ FunctionBodyNode -----------------------------
 
-ScopeNode::ScopeNode(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
-    : BlockNode(children)
-    , m_sourceURL(parser().sourceURL())
-    , m_sourceId(parser().sourceId())
+ScopeNode::ScopeNode()
+    : BlockNode()
 {
+}
+
+ScopeNode::ScopeNode(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+    : BlockNode(children)
+    , m_source(source)
+{
+    if (varStack)
+        m_varStack = *varStack;
+    if (funcStack)
+        m_functionStack = *funcStack;
+}
+
+void ScopeNode::setData(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+{
+    if (children)
+        children->releaseContentsIntoVector(m_children);
     if (varStack)
         m_varStack = *varStack;
     if (funcStack)
@@ -4342,41 +4360,57 @@ ScopeNode::ScopeNode(SourceElements* children, VarStack* varStack, FunctionStack
 
 // ------------------------------ ProgramNode -----------------------------
 
-ProgramNode::ProgramNode(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
-    : ScopeNode(children, varStack, funcStack)
+ProgramNode::ProgramNode(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+    : ScopeNode(source, children, varStack, funcStack)
 {
 }
 
-ProgramNode* ProgramNode::create(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+ProgramNode* ProgramNode::create(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
 {
-    return new ProgramNode(children, varStack, funcStack);
+    return new ProgramNode(source, children, varStack, funcStack);
 }
 
 // ------------------------------ EvalNode -----------------------------
 
-EvalNode::EvalNode(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
-    : ScopeNode(children, varStack, funcStack)
+EvalNode::EvalNode(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+    : ScopeNode(source, children, varStack, funcStack)
 {
 }
 
-EvalNode* EvalNode::create(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+EvalNode* EvalNode::create(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
 {
-    return new EvalNode(children, varStack, funcStack);
+    return new EvalNode(source, children, varStack, funcStack);
 }
 
 // ------------------------------ FunctionBodyNode -----------------------------
 
-FunctionBodyNode::FunctionBodyNode(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
-    : ScopeNode(children, varStack, funcStack)
+FunctionBodyNode::FunctionBodyNode()
+    : ScopeNode()
     , m_initialized(false)
 {
 }
 
+FunctionBodyNode::FunctionBodyNode(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+    : ScopeNode(source, children, varStack, funcStack)
+    , m_initialized(false)
+{
+}
+
+FunctionBodyNode* FunctionBodyNode::create()
+{
+    return new FunctionBodyNode();
+}
+
 FunctionBodyNode* FunctionBodyNode::create(SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
 {
-    if (Debugger::debuggersPresent)
-        return new FunctionBodyNodeWithDebuggerHooks(children, varStack, funcStack);
-    return new FunctionBodyNode(children, varStack, funcStack);
+    // debugger code removed
+    return new FunctionBodyNode(SourceCode(), children, varStack, funcStack);
+}
+
+FunctionBodyNode* FunctionBodyNode::create(const SourceCode& source, SourceElements* children, VarStack* varStack, FunctionStack* funcStack)
+{
+    // debugger code removed
+    return new FunctionBodyNode(source, children, varStack, funcStack);
 }
 
 void FunctionBodyNode::initializeSymbolTable(ExecState* exec)
@@ -4627,6 +4661,8 @@ JSValue* EvalNode::execute(ExecState* exec)
 
 JSValue* FunctionBodyNode::execute(ExecState* exec)
 {
+    if (m_children.isEmpty())
+        parser().reparse(this);
     processDeclarations(exec);
     return ScopeNode::execute(exec);
 }
@@ -4634,14 +4670,14 @@ JSValue* FunctionBodyNode::execute(ExecState* exec)
 // ------------------------------ FunctionBodyNodeWithDebuggerHooks ---------------------------------
 
 FunctionBodyNodeWithDebuggerHooks::FunctionBodyNodeWithDebuggerHooks(SourceElements* children, DeclarationStacks::VarStack* varStack, DeclarationStacks::FunctionStack* funcStack)
-    : FunctionBodyNode(children, varStack, funcStack)
+    : FunctionBodyNode(SourceCode(), children, varStack, funcStack)
 {
 }
 
 JSValue* FunctionBodyNodeWithDebuggerHooks::execute(ExecState* exec)
 {
     if (Debugger* dbg = exec->dynamicGlobalObject()->debugger()) {
-        if (!dbg->callEvent(exec, sourceId(), lineNo(), exec->function(), *exec->arguments())) {
+        if (!dbg->callEvent(exec, sourceID(), lineNo(), exec->function(), *exec->arguments())) {
             dbg->imp()->abort();
             return exec->setInterruptedCompletion();
         }
@@ -4652,7 +4688,7 @@ JSValue* FunctionBodyNodeWithDebuggerHooks::execute(ExecState* exec)
     if (Debugger* dbg = exec->dynamicGlobalObject()->debugger()) {
         if (exec->completionType() == Throw)
             exec->setException(result);
-        if (!dbg->returnEvent(exec, sourceId(), lastLine(), exec->function())) {
+        if (!dbg->returnEvent(exec, sourceID(), lineNo(), exec->function())) {
             dbg->imp()->abort();
             return exec->setInterruptedCompletion();
         }

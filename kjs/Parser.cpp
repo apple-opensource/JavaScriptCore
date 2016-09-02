@@ -33,14 +33,7 @@ extern int kjsyyparse();
 
 namespace KJS {
 
-Parser::Parser()
-    : m_sourceId(0)
-{
-}
-
-void Parser::parse(int startingLineNumber,
-    const UChar* code, unsigned length,
-    int* sourceId, int* errLine, UString* errMsg)
+void Parser::parse(int* errLine, UString* errMsg)
 {
     ASSERT(!m_sourceElements);
 
@@ -50,11 +43,7 @@ void Parser::parse(int startingLineNumber,
         *errMsg = 0;
         
     Lexer& lexer = KJS::lexer();
-
-    lexer.setCode(startingLineNumber, code, length);
-    m_sourceId++;
-    if (sourceId)
-        *sourceId = m_sourceId;
+    lexer.setCode(*m_source);
 
     int parseError = kjsyyparse();
     bool lexError = lexer.sawError();
@@ -69,6 +58,23 @@ void Parser::parse(int startingLineNumber,
             *errMsg = "Parse error";
         m_sourceElements.clear();
     }
+}
+
+void Parser::reparse(FunctionBodyNode* functionBodyNode)
+{
+    m_source = &functionBodyNode->source();
+    parse(0, 0);
+    ASSERT(m_sourceElements);
+
+    functionBodyNode->setData(m_sourceElements.get(),
+                              m_varDeclarations ? &m_varDeclarations->data : 0, 
+                              m_funcDeclarations ? &m_funcDeclarations->data : 0);
+    functionBodyNode->setLoc(m_source->firstLine(), m_lastLine);
+
+    m_source = 0;
+    m_sourceElements = 0;
+    m_varDeclarations = 0;
+    m_funcDeclarations = 0;
 }
 
 void Parser::didFinishParsing(SourceElements* sourceElements, ParserRefCountedData<DeclarationStacks::VarStack>* varStack, 

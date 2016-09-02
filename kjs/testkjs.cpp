@@ -26,6 +26,7 @@
 #include "JSGlobalObject.h"
 #include "JSLock.h"
 #include "Parser.h"
+#include "SourceCode.h"
 #include "collector.h"
 #include "interpreter.h"
 #include "nodes.h"
@@ -165,7 +166,8 @@ JSValue* TestFunctionImp::callAsFunction(ExecState* exec, JSObject*, const List 
         return throwError(exec, GeneralError, "Could not open file.");
 
       stopWatch.start();
-      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), fileName, 0, script.data());
+      
+      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), makeSource(script.data(), fileName));
       stopWatch.stop();
       
       return jsNumber(stopWatch.getElapsedMS());
@@ -177,7 +179,7 @@ JSValue* TestFunctionImp::callAsFunction(ExecState* exec, JSObject*, const List 
       if (!fillBufferWithContentsOfFile(fileName, script))
         return throwError(exec, GeneralError, "Could not open file.");
 
-      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), fileName, 0, script.data());
+      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), makeSource(script.data(), fileName));
 
       return jsUndefined();
     }
@@ -247,8 +249,8 @@ static bool prettyPrintScript(const UString& fileName, const Vector<char>& scrip
 {
   int errLine = 0;
   UString errMsg;
-  UString scriptUString(script.data());
-  RefPtr<ProgramNode> programNode = parser().parse<ProgramNode>(fileName, 0, scriptUString.data(), scriptUString.size(), 0, &errLine, &errMsg);
+
+  RefPtr<ProgramNode> programNode = parser().parse<ProgramNode>(makeSource(script.data(), fileName), &errLine, &errMsg);
   if (!programNode) {
     fprintf(stderr, "%s:%d: %s.\n", fileName.UTF8String().c_str(), errLine, errMsg.UTF8String().c_str());
     return false;
@@ -274,7 +276,7 @@ static bool runWithScripts(const Vector<UString>& fileNames, bool prettyPrint)
     if (prettyPrint)
       prettyPrintScript(fileName, script);
     else {
-      Completion completion = Interpreter::evaluate(globalObject->globalExec(), fileName, 0, script.data());
+      Completion completion = Interpreter::evaluate(globalObject->globalExec(), makeSource(script.data(), fileName));
       success = success && completion.complType() != Throw;
     }
   }

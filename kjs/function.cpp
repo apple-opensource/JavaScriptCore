@@ -698,21 +698,17 @@ JSValue* globalFuncEval(ExecState* exec, JSObject* thisObj, const List& args)
 
     UString s = x->toString(exec);
 
-    int sourceId;
     int errLine;
     UString errMsg;
-    RefPtr<EvalNode> evalNode = parser().parse<EvalNode>(UString(), 0, s.data(), s.size(), &sourceId, &errLine, &errMsg);
 
-    Debugger* dbg = exec->dynamicGlobalObject()->debugger();
-    if (dbg) {
-        bool cont = dbg->sourceParsed(exec, sourceId, UString(), s, 0, errLine, errMsg);
-        if (!cont)
-            return jsUndefined();
-    }
+    SourceCode source = makeSource(s); 
+    RefPtr<EvalNode> evalNode = parser().parse<EvalNode>(source, &errLine, &errMsg);
+
+    // debugger code removed
 
     // No program node means a syntax occurred
     if (!evalNode)
-        return throwError(exec, SyntaxError, errMsg, errLine, sourceId, NULL);
+        return throwError(exec, SyntaxError, errMsg, errLine, source.provider()->asID(), NULL);
 
     bool switchGlobal = thisObj && thisObj != exec->dynamicGlobalObject() && thisObj->isGlobalObject();
 

@@ -162,27 +162,18 @@ JSObject* FunctionObjectImp::construct(ExecState* exec, const List& args, const 
     }
 
     // parse the source code
-    int sourceId;
     int errLine;
     UString errMsg;
-    RefPtr<FunctionBodyNode> functionBody = parser().parse<FunctionBodyNode>(sourceURL, lineNumber, body.data(), body.size(), &sourceId, &errLine, &errMsg);
+    SourceCode source = makeSource(body, sourceURL, lineNumber); 
+    RefPtr<FunctionBodyNode> functionBody = parser().parse<FunctionBodyNode>(source, &errLine, &errMsg);
 
-    // notify debugger that source has been parsed
-    Debugger* dbg = exec->dynamicGlobalObject()->debugger();
-    if (dbg) {
-        // send empty sourceURL to indicate constructed code
-        bool cont = dbg->sourceParsed(exec, sourceId, UString(), body, lineNumber, errLine, errMsg);
-        if (!cont) {
-            dbg->imp()->abort();
-            return new JSObject();
-        }
-    }
+    // debugger code removed
 
     // No program node == syntax error - throw a syntax error
     if (!functionBody)
         // We can't return a Completion(Throw) here, so just set the exception
         // and return it
-        return throwError(exec, SyntaxError, errMsg, errLine, sourceId, sourceURL);
+        return throwError(exec, SyntaxError, errMsg, errLine, source.provider()->asID(), source.provider()->url());
 
     ScopeChain scopeChain;
     scopeChain.push(exec->lexicalGlobalObject());

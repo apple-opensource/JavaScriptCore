@@ -65,7 +65,7 @@ static LessNode* makeLessNode(ExpressionNode*, ExpressionNode*);
 static ExpressionNode* makeAssignNode(ExpressionNode* loc, Operator, ExpressionNode* expr);
 static ExpressionNode* makePrefixNode(ExpressionNode* expr, Operator);
 static ExpressionNode* makePostfixNode(ExpressionNode* expr, Operator);
-static PropertyNode* makeGetterOrSetterPropertyNode(const Identifier &getOrSet, const Identifier& name, ParameterNode*, FunctionBodyNode*);
+static PropertyNode* makeGetterOrSetterPropertyNode(const Identifier &getOrSet, const Identifier& name, ParameterNode*, FunctionBodyNode*, const SourceCode&);
 static ExpressionNode* makeFunctionCallNode(ExpressionNode* func, ArgumentsNode*);
 static ExpressionNode* makeTypeOfNode(ExpressionNode*);
 static ExpressionNode* makeDeleteNode(ExpressionNode*);
@@ -198,6 +198,8 @@ static inline void appendToVarDeclarationList(ParserRefCountedData<DeclarationSt
 %token RSHIFTEQUAL URSHIFTEQUAL    /* >>= and >>>= */
 %token ANDEQUAL MODEQUAL           /* &= and %= */
 %token XOREQUAL OREQUAL            /* ^= and |= */
+%token <intValue> OPENBRACE        /* { (with char offset) */
+%token <intValue> CLOSEBRACE        /* { (with char offset) */
 
 /* terminal types */
 %token <doubleValue> NUMBER
@@ -287,9 +289,9 @@ Property:
     IDENT ':' AssignmentExpr            { $$ = new PropertyNode(*$1, $3, PropertyNode::Constant); }
   | STRING ':' AssignmentExpr           { $$ = new PropertyNode(Identifier(*$1), $3, PropertyNode::Constant); }
   | NUMBER ':' AssignmentExpr           { $$ = new PropertyNode(Identifier(UString::from($1)), $3, PropertyNode::Constant); }
-  | IDENT IDENT '(' ')' '{' FunctionBody '}'    { $$ = makeGetterOrSetterPropertyNode(*$1, *$2, 0, $6); DBG($6, @5, @7); if (!$$) YYABORT; }
-  | IDENT IDENT '(' FormalParameterList ')' '{' FunctionBody '}'
-                                        { $$ = makeGetterOrSetterPropertyNode(*$1, *$2, $4.head, $7); DBG($7, @6, @8); if (!$$) YYABORT; }
+  | IDENT IDENT '(' ')' OPENBRACE FunctionBody CLOSEBRACE    { $$ = makeGetterOrSetterPropertyNode(*$1, *$2, 0, $6, lexer().sourceCode($5, $7, @5.first_line)); DBG($6, @5, @7); if (!$$) YYABORT; }
+  | IDENT IDENT '(' FormalParameterList ')' OPENBRACE FunctionBody CLOSEBRACE
+                                        { $$ = makeGetterOrSetterPropertyNode(*$1, *$2, $4.head, $7, lexer().sourceCode($6, $8, @6.first_line)); DBG($7, @6, @8); if (!$$) YYABORT; }
 ;
 
 PropertyList:
@@ -301,10 +303,10 @@ PropertyList:
 
 PrimaryExpr:
     PrimaryExprNoBrace
-  | '{' '}'                             { $$ = new ObjectLiteralNode(); }
-  | '{' PropertyList '}'                { $$ = new ObjectLiteralNode($2.head); }
+  | OPENBRACE CLOSEBRACE                             { $$ = new ObjectLiteralNode(); }
+  | OPENBRACE PropertyList CLOSEBRACE                { $$ = new ObjectLiteralNode($2.head); }
   /* allow extra comma, see http://bugs.webkit.org/show_bug.cgi?id=5939 */
-  | '{' PropertyList ',' '}'            { $$ = new ObjectLiteralNode($2.head); }
+  | OPENBRACE PropertyList ',' CLOSEBRACE            { $$ = new ObjectLiteralNode($2.head); }
 ;
 
 PrimaryExprNoBrace:
@@ -711,9 +713,9 @@ Statement:
 ;
 
 Block:
-    '{' '}'                             { $$ = createNodeInfo<StatementNode*>(new BlockNode(0), 0, 0);
+    OPENBRACE CLOSEBRACE                             { $$ = createNodeInfo<StatementNode*>(new BlockNode(0), 0, 0);
                                           DBG($$.m_node, @1, @2); }
-  | '{' SourceElements '}'              { $$ = createNodeInfo<StatementNode*>(new BlockNode($2.m_node), $2.m_varDeclarations, $2.m_funcDeclarations);
+  | OPENBRACE SourceElements CLOSEBRACE              { $$ = createNodeInfo<StatementNode*>(new BlockNode($2.m_node), $2.m_varDeclarations, $2.m_funcDeclarations);
                                           DBG($$.m_node, @1, @3); }
 ;
 
@@ -913,8 +915,8 @@ SwitchStatement:
 ;
 
 CaseBlock:
-    '{' CaseClausesOpt '}'              { $$ = createNodeInfo<CaseBlockNode*>(new CaseBlockNode($2.m_node.head, 0, 0), $2.m_varDeclarations, $2.m_funcDeclarations); }
-  | '{' CaseClausesOpt DefaultClause CaseClausesOpt '}'
+    OPENBRACE CaseClausesOpt CLOSEBRACE              { $$ = createNodeInfo<CaseBlockNode*>(new CaseBlockNode($2.m_node.head, 0, 0), $2.m_varDeclarations, $2.m_funcDeclarations); }
+  | OPENBRACE CaseClausesOpt DefaultClause CaseClausesOpt CLOSEBRACE
                                         { $$ = createNodeInfo<CaseBlockNode*>(new CaseBlockNode($2.m_node.head, $3.m_node, $4.m_node.head),
                                                                               mergeDeclarationLists(mergeDeclarationLists($2.m_varDeclarations, $3.m_varDeclarations), $4.m_varDeclarations),
                                                                               mergeDeclarationLists(mergeDeclarationLists($2.m_funcDeclarations, $3.m_funcDeclarations), $4.m_funcDeclarations)); }
@@ -981,16 +983,16 @@ DebuggerStatement:
 ;
 
 FunctionDeclaration:
-    FUNCTION IDENT '(' ')' '{' FunctionBody '}' { $$ = new FuncDeclNode(*$2, $6); DBG($6, @5, @7); }
-  | FUNCTION IDENT '(' FormalParameterList ')' '{' FunctionBody '}'
-                                        { $$ = new FuncDeclNode(*$2, $4.head, $7); DBG($7, @6, @8); }
+    FUNCTION IDENT '(' ')' OPENBRACE FunctionBody CLOSEBRACE { $$ = new FuncDeclNode(*$2, $6, lexer().sourceCode($5, $7, @5.first_line)); DBG($6, @5, @7); }
+  | FUNCTION IDENT '(' FormalParameterList ')' OPENBRACE FunctionBody CLOSEBRACE
+                                        { $$ = new FuncDeclNode(*$2, $7, lexer().sourceCode($6, $8, @6.first_line), $4.head); DBG($7, @6, @8); }
 ;
 
 FunctionExpr:
-    FUNCTION '(' ')' '{' FunctionBody '}' { $$ = new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, $5); DBG($5, @4, @6); }
-  | FUNCTION '(' FormalParameterList ')' '{' FunctionBody '}' { $$ = new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, $6, $3.head); DBG($6, @5, @7); }
-  | FUNCTION IDENT '(' ')' '{' FunctionBody '}' { $$ = new FuncExprNode(*$2, $6); DBG($6, @5, @7); }
-  | FUNCTION IDENT '(' FormalParameterList ')' '{' FunctionBody '}' { $$ = new FuncExprNode(*$2, $7, $4.head); DBG($7, @6, @8); }
+    FUNCTION '(' ')' OPENBRACE FunctionBody CLOSEBRACE { $$ = new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, $5, lexer().sourceCode($4, $6, @4.first_line)); DBG($5, @4, @6); }
+  | FUNCTION '(' FormalParameterList ')' OPENBRACE FunctionBody CLOSEBRACE { $$ = new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, $6, lexer().sourceCode($5, $7, @5.first_line), $3.head); DBG($6, @5, @7); }
+  | FUNCTION IDENT '(' ')' OPENBRACE FunctionBody CLOSEBRACE { $$ = new FuncExprNode(*$2, $6, lexer().sourceCode($5, $7, @5.first_line)); DBG($6, @5, @7); }
+  | FUNCTION IDENT '(' FormalParameterList ')' OPENBRACE FunctionBody CLOSEBRACE { $$ = new FuncExprNode(*$2, $7, lexer().sourceCode($6, $8, @6.first_line), $4.head); DBG($7, @6, @8); }
 ;
 
 FormalParameterList:
@@ -1001,20 +1003,8 @@ FormalParameterList:
 ;
 
 FunctionBody:
-    /* not in spec */           { $$ = FunctionBodyNode::create(0, 0, 0); }
-  | SourceElements              { $$ = FunctionBodyNode::create($1.m_node, $1.m_varDeclarations ? &$1.m_varDeclarations->data : 0, 
-                                                                $1.m_funcDeclarations ? &$1.m_funcDeclarations->data : 0);
-                                  // As in mergeDeclarationLists() we have to ref/deref to safely get rid of
-                                  // the declaration lists.
-                                  if ($1.m_varDeclarations) {
-                                      $1.m_varDeclarations->ref();
-                                      $1.m_varDeclarations->deref();
-                                  }
-                                  if ($1.m_funcDeclarations) {
-                                      $1.m_funcDeclarations->ref();
-                                      $1.m_funcDeclarations->deref();
-                                  }
-                                }
+    /* not in spec */                   { $$ = FunctionBodyNode::create(); }
+  | SourceElements_NoNode               { $$ = FunctionBodyNode::create(); }
 ;
 
 Program:
@@ -1038,7 +1028,600 @@ SourceElement:
     FunctionDeclaration                 { $$ = createNodeInfo<StatementNode*>($1, 0, new ParserRefCountedData<DeclarationStacks::FunctionStack>); $$.m_funcDeclarations->data.append($1); }
   | Statement                           { $$ = $1; }
 ;
- 
+
+// Start NoNodes
+
+Literal_NoNode:
+    NULLTOKEN
+  | TRUETOKEN
+  | FALSETOKEN
+  | NUMBER { }
+  | STRING { }
+  | '/' /* regexp */ { Lexer& l = lexer(); if (!l.scanRegExp()) YYABORT; }
+  | DIVEQUAL /* regexp with /= */ { Lexer& l = lexer(); if (!l.scanRegExp()) YYABORT; }
+;
+
+Property_NoNode:
+    IDENT ':' AssignmentExpr_NoNode { }
+  | STRING ':' AssignmentExpr_NoNode { }
+  | NUMBER ':' AssignmentExpr_NoNode { }
+  | IDENT IDENT '(' ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE { if (*$1 != "get" && *$1 != "set") YYABORT; }
+  | IDENT IDENT '(' FormalParameterList_NoNode ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE { if (*$1 != "get" && *$1 != "set") YYABORT; }
+;
+
+PropertyList_NoNode:
+    Property_NoNode
+  | PropertyList_NoNode ',' Property_NoNode
+;
+
+PrimaryExpr_NoNode:
+    PrimaryExprNoBrace_NoNode
+  | OPENBRACE CLOSEBRACE { }
+  | OPENBRACE PropertyList_NoNode CLOSEBRACE { }
+  /* allow extra comma, see http://bugs.webkit.org/show_bug.cgi?id=5939 */
+  | OPENBRACE PropertyList_NoNode ',' CLOSEBRACE { }
+;
+
+PrimaryExprNoBrace_NoNode:
+    THISTOKEN
+  | Literal_NoNode
+  | ArrayLiteral_NoNode
+  | IDENT { }
+  | '(' Expr_NoNode ')'
+;
+
+ArrayLiteral_NoNode:
+    '[' ElisionOpt_NoNode ']'
+  | '[' ElementList_NoNode ']'
+  | '[' ElementList_NoNode ',' ElisionOpt_NoNode ']'
+;
+
+ElementList_NoNode:
+    ElisionOpt_NoNode AssignmentExpr_NoNode
+  | ElementList_NoNode ',' ElisionOpt_NoNode AssignmentExpr_NoNode
+;
+
+ElisionOpt_NoNode:
+    /* nothing */
+  | Elision_NoNode
+;
+
+Elision_NoNode:
+    ','
+  | Elision_NoNode ','
+;
+
+MemberExpr_NoNode:
+    PrimaryExpr_NoNode
+  | FunctionExpr_NoNode
+  | MemberExpr_NoNode '[' Expr_NoNode ']'
+  | MemberExpr_NoNode '.' IDENT
+  | NEW MemberExpr_NoNode Arguments_NoNode
+;
+
+MemberExprNoBF_NoNode:
+    PrimaryExprNoBrace_NoNode
+  | MemberExprNoBF_NoNode '[' Expr_NoNode ']'
+  | MemberExprNoBF_NoNode '.' IDENT
+  | NEW MemberExpr_NoNode Arguments_NoNode
+;
+
+NewExpr_NoNode:
+    MemberExpr_NoNode
+  | NEW NewExpr_NoNode
+;
+
+NewExprNoBF_NoNode:
+    MemberExprNoBF_NoNode
+  | NEW NewExpr_NoNode
+;
+
+CallExpr_NoNode:
+    MemberExpr_NoNode Arguments_NoNode
+  | CallExpr_NoNode Arguments_NoNode
+  | CallExpr_NoNode '[' Expr_NoNode ']'
+  | CallExpr_NoNode '.' IDENT
+;
+
+CallExprNoBF_NoNode:
+    MemberExprNoBF_NoNode Arguments_NoNode
+  | CallExprNoBF_NoNode Arguments_NoNode
+  | CallExprNoBF_NoNode '[' Expr_NoNode ']'
+  | CallExprNoBF_NoNode '.' IDENT
+;
+
+Arguments_NoNode:
+    '(' ')'
+  | '(' ArgumentList_NoNode ')'
+;
+
+ArgumentList_NoNode:
+    AssignmentExpr_NoNode
+  | ArgumentList_NoNode ',' AssignmentExpr_NoNode
+;
+
+LeftHandSideExpr_NoNode:
+    NewExpr_NoNode
+  | CallExpr_NoNode
+;
+
+LeftHandSideExprNoBF_NoNode:
+    NewExprNoBF_NoNode
+  | CallExprNoBF_NoNode
+;
+
+PostfixExpr_NoNode:
+    LeftHandSideExpr_NoNode
+  | LeftHandSideExpr_NoNode PLUSPLUS
+  | LeftHandSideExpr_NoNode MINUSMINUS
+;
+
+PostfixExprNoBF_NoNode:
+    LeftHandSideExprNoBF_NoNode
+  | LeftHandSideExprNoBF_NoNode PLUSPLUS
+  | LeftHandSideExprNoBF_NoNode MINUSMINUS
+;
+
+UnaryExprCommon_NoNode:
+    DELETETOKEN UnaryExpr_NoNode
+  | VOIDTOKEN UnaryExpr_NoNode
+  | TYPEOF UnaryExpr_NoNode
+  | PLUSPLUS UnaryExpr_NoNode
+  | AUTOPLUSPLUS UnaryExpr_NoNode
+  | MINUSMINUS UnaryExpr_NoNode
+  | AUTOMINUSMINUS UnaryExpr_NoNode
+  | '+' UnaryExpr_NoNode
+  | '-' UnaryExpr_NoNode
+  | '~' UnaryExpr_NoNode
+  | '!' UnaryExpr_NoNode
+
+UnaryExpr_NoNode:
+    PostfixExpr_NoNode
+  | UnaryExprCommon_NoNode
+;
+
+UnaryExprNoBF_NoNode:
+    PostfixExprNoBF_NoNode
+  | UnaryExprCommon_NoNode
+;
+
+MultiplicativeExpr_NoNode:
+    UnaryExpr_NoNode
+  | MultiplicativeExpr_NoNode '*' UnaryExpr_NoNode
+  | MultiplicativeExpr_NoNode '/' UnaryExpr_NoNode
+  | MultiplicativeExpr_NoNode '%' UnaryExpr_NoNode
+;
+
+MultiplicativeExprNoBF_NoNode:
+    UnaryExprNoBF_NoNode
+  | MultiplicativeExprNoBF_NoNode '*' UnaryExpr_NoNode
+  | MultiplicativeExprNoBF_NoNode '/' UnaryExpr_NoNode
+  | MultiplicativeExprNoBF_NoNode '%' UnaryExpr_NoNode
+;
+
+AdditiveExpr_NoNode:
+    MultiplicativeExpr_NoNode
+  | AdditiveExpr_NoNode '+' MultiplicativeExpr_NoNode
+  | AdditiveExpr_NoNode '-' MultiplicativeExpr_NoNode
+;
+
+AdditiveExprNoBF_NoNode:
+    MultiplicativeExprNoBF_NoNode
+  | AdditiveExprNoBF_NoNode '+' MultiplicativeExpr_NoNode
+  | AdditiveExprNoBF_NoNode '-' MultiplicativeExpr_NoNode
+;
+
+ShiftExpr_NoNode:
+    AdditiveExpr_NoNode
+  | ShiftExpr_NoNode LSHIFT AdditiveExpr_NoNode
+  | ShiftExpr_NoNode RSHIFT AdditiveExpr_NoNode
+  | ShiftExpr_NoNode URSHIFT AdditiveExpr_NoNode
+;
+
+ShiftExprNoBF_NoNode:
+    AdditiveExprNoBF_NoNode
+  | ShiftExprNoBF_NoNode LSHIFT AdditiveExpr_NoNode
+  | ShiftExprNoBF_NoNode RSHIFT AdditiveExpr_NoNode
+  | ShiftExprNoBF_NoNode URSHIFT AdditiveExpr_NoNode
+;
+
+RelationalExpr_NoNode:
+    ShiftExpr_NoNode
+  | RelationalExpr_NoNode '<' ShiftExpr_NoNode
+  | RelationalExpr_NoNode '>' ShiftExpr_NoNode
+  | RelationalExpr_NoNode LE ShiftExpr_NoNode
+  | RelationalExpr_NoNode GE ShiftExpr_NoNode
+  | RelationalExpr_NoNode INSTANCEOF ShiftExpr_NoNode
+  | RelationalExpr_NoNode INTOKEN ShiftExpr_NoNode
+;
+
+RelationalExprNoIn_NoNode:
+    ShiftExpr_NoNode
+  | RelationalExprNoIn_NoNode '<' ShiftExpr_NoNode
+  | RelationalExprNoIn_NoNode '>' ShiftExpr_NoNode
+  | RelationalExprNoIn_NoNode LE ShiftExpr_NoNode
+  | RelationalExprNoIn_NoNode GE ShiftExpr_NoNode
+  | RelationalExprNoIn_NoNode INSTANCEOF ShiftExpr_NoNode
+;
+
+RelationalExprNoBF_NoNode:
+    ShiftExprNoBF_NoNode
+  | RelationalExprNoBF_NoNode '<' ShiftExpr_NoNode
+  | RelationalExprNoBF_NoNode '>' ShiftExpr_NoNode
+  | RelationalExprNoBF_NoNode LE ShiftExpr_NoNode
+  | RelationalExprNoBF_NoNode GE ShiftExpr_NoNode
+  | RelationalExprNoBF_NoNode INSTANCEOF ShiftExpr_NoNode
+  | RelationalExprNoBF_NoNode INTOKEN ShiftExpr_NoNode
+;
+
+EqualityExpr_NoNode:
+    RelationalExpr_NoNode
+  | EqualityExpr_NoNode EQEQ RelationalExpr_NoNode
+  | EqualityExpr_NoNode NE RelationalExpr_NoNode
+  | EqualityExpr_NoNode STREQ RelationalExpr_NoNode
+  | EqualityExpr_NoNode STRNEQ RelationalExpr_NoNode
+;
+
+EqualityExprNoIn_NoNode:
+    RelationalExprNoIn_NoNode
+  | EqualityExprNoIn_NoNode EQEQ RelationalExprNoIn_NoNode
+  | EqualityExprNoIn_NoNode NE RelationalExprNoIn_NoNode
+  | EqualityExprNoIn_NoNode STREQ RelationalExprNoIn_NoNode
+  | EqualityExprNoIn_NoNode STRNEQ RelationalExprNoIn_NoNode
+;
+
+EqualityExprNoBF_NoNode:
+    RelationalExprNoBF_NoNode
+  | EqualityExprNoBF_NoNode EQEQ RelationalExpr_NoNode
+  | EqualityExprNoBF_NoNode NE RelationalExpr_NoNode
+  | EqualityExprNoBF_NoNode STREQ RelationalExpr_NoNode
+  | EqualityExprNoBF_NoNode STRNEQ RelationalExpr_NoNode
+;
+
+BitwiseANDExpr_NoNode:
+    EqualityExpr_NoNode
+  | BitwiseANDExpr_NoNode '&' EqualityExpr_NoNode
+;
+
+BitwiseANDExprNoIn_NoNode:
+    EqualityExprNoIn_NoNode
+  | BitwiseANDExprNoIn_NoNode '&' EqualityExprNoIn_NoNode
+;
+
+BitwiseANDExprNoBF_NoNode:
+    EqualityExprNoBF_NoNode
+  | BitwiseANDExprNoBF_NoNode '&' EqualityExpr_NoNode
+;
+
+BitwiseXORExpr_NoNode:
+    BitwiseANDExpr_NoNode
+  | BitwiseXORExpr_NoNode '^' BitwiseANDExpr_NoNode
+;
+
+BitwiseXORExprNoIn_NoNode:
+    BitwiseANDExprNoIn_NoNode
+  | BitwiseXORExprNoIn_NoNode '^' BitwiseANDExprNoIn_NoNode
+;
+
+BitwiseXORExprNoBF_NoNode:
+    BitwiseANDExprNoBF_NoNode
+  | BitwiseXORExprNoBF_NoNode '^' BitwiseANDExpr_NoNode
+;
+
+BitwiseORExpr_NoNode:
+    BitwiseXORExpr_NoNode
+  | BitwiseORExpr_NoNode '|' BitwiseXORExpr_NoNode
+;
+
+BitwiseORExprNoIn_NoNode:
+    BitwiseXORExprNoIn_NoNode
+  | BitwiseORExprNoIn_NoNode '|' BitwiseXORExprNoIn_NoNode
+;
+
+BitwiseORExprNoBF_NoNode:
+    BitwiseXORExprNoBF_NoNode
+  | BitwiseORExprNoBF_NoNode '|' BitwiseXORExpr_NoNode
+;
+
+LogicalANDExpr_NoNode:
+    BitwiseORExpr_NoNode
+  | LogicalANDExpr_NoNode AND BitwiseORExpr_NoNode
+;
+
+LogicalANDExprNoIn_NoNode:
+    BitwiseORExprNoIn_NoNode
+  | LogicalANDExprNoIn_NoNode AND BitwiseORExprNoIn_NoNode
+;
+
+LogicalANDExprNoBF_NoNode:
+    BitwiseORExprNoBF_NoNode
+  | LogicalANDExprNoBF_NoNode AND BitwiseORExpr_NoNode
+;
+
+LogicalORExpr_NoNode:
+    LogicalANDExpr_NoNode
+  | LogicalORExpr_NoNode OR LogicalANDExpr_NoNode
+;
+
+LogicalORExprNoIn_NoNode:
+    LogicalANDExprNoIn_NoNode
+  | LogicalORExprNoIn_NoNode OR LogicalANDExprNoIn_NoNode
+;
+
+LogicalORExprNoBF_NoNode:
+    LogicalANDExprNoBF_NoNode
+  | LogicalORExprNoBF_NoNode OR LogicalANDExpr_NoNode
+;
+
+ConditionalExpr_NoNode:
+    LogicalORExpr_NoNode
+  | LogicalORExpr_NoNode '?' AssignmentExpr_NoNode ':' AssignmentExpr_NoNode
+;
+
+ConditionalExprNoIn_NoNode:
+    LogicalORExprNoIn_NoNode
+  | LogicalORExprNoIn_NoNode '?' AssignmentExprNoIn_NoNode ':' AssignmentExprNoIn_NoNode
+;
+
+ConditionalExprNoBF_NoNode:
+    LogicalORExprNoBF_NoNode
+  | LogicalORExprNoBF_NoNode '?' AssignmentExpr_NoNode ':' AssignmentExpr_NoNode
+;
+
+AssignmentExpr_NoNode:
+    ConditionalExpr_NoNode
+  | LeftHandSideExpr_NoNode AssignmentOperator_NoNode AssignmentExpr_NoNode
+;
+
+AssignmentExprNoIn_NoNode:
+    ConditionalExprNoIn_NoNode
+  | LeftHandSideExpr_NoNode AssignmentOperator_NoNode AssignmentExprNoIn_NoNode
+;
+
+AssignmentExprNoBF_NoNode:
+    ConditionalExprNoBF_NoNode
+  | LeftHandSideExprNoBF_NoNode AssignmentOperator_NoNode AssignmentExpr_NoNode
+;
+
+AssignmentOperator_NoNode:
+    '='
+  | PLUSEQUAL
+  | MINUSEQUAL
+  | MULTEQUAL
+  | DIVEQUAL
+  | LSHIFTEQUAL
+  | RSHIFTEQUAL
+  | URSHIFTEQUAL
+  | ANDEQUAL
+  | XOREQUAL
+  | OREQUAL
+  | MODEQUAL
+;
+
+Expr_NoNode:
+    AssignmentExpr_NoNode
+  | Expr_NoNode ',' AssignmentExpr_NoNode
+;
+
+ExprNoIn_NoNode:
+    AssignmentExprNoIn_NoNode
+  | ExprNoIn_NoNode ',' AssignmentExprNoIn_NoNode
+;
+
+ExprNoBF_NoNode:
+    AssignmentExprNoBF_NoNode
+  | ExprNoBF_NoNode ',' AssignmentExpr_NoNode
+;
+
+Statement_NoNode:
+    Block_NoNode
+  | VariableStatement_NoNode
+  | ConstStatement_NoNode
+  | EmptyStatement_NoNode
+  | ExprStatement_NoNode
+  | IfStatement_NoNode
+  | IterationStatement_NoNode
+  | ContinueStatement_NoNode
+  | BreakStatement_NoNode
+  | ReturnStatement_NoNode
+  | WithStatement_NoNode
+  | SwitchStatement_NoNode
+  | LabelledStatement_NoNode
+  | ThrowStatement_NoNode
+  | TryStatement_NoNode
+  | DebuggerStatement_NoNode
+;
+
+Block_NoNode:
+    OPENBRACE CLOSEBRACE { }
+  | OPENBRACE SourceElements_NoNode CLOSEBRACE { }
+;
+
+VariableStatement_NoNode:
+    VAR VariableDeclarationList_NoNode ';'
+  | VAR VariableDeclarationList_NoNode error { AUTO_SEMICOLON; }
+;
+
+VariableDeclarationList_NoNode:
+    IDENT { }
+  | IDENT Initializer_NoNode { }
+  | VariableDeclarationList_NoNode ',' IDENT
+  | VariableDeclarationList_NoNode ',' IDENT Initializer_NoNode
+;
+
+VariableDeclarationListNoIn_NoNode:
+    IDENT { }
+  | IDENT InitializerNoIn_NoNode { }
+  | VariableDeclarationListNoIn_NoNode ',' IDENT
+  | VariableDeclarationListNoIn_NoNode ',' IDENT InitializerNoIn_NoNode
+;
+
+ConstStatement_NoNode:
+    CONSTTOKEN ConstDeclarationList_NoNode ';'
+  | CONSTTOKEN ConstDeclarationList_NoNode error { AUTO_SEMICOLON; }
+;
+
+ConstDeclarationList_NoNode:
+    ConstDeclaration_NoNode
+  | ConstDeclarationList_NoNode ',' ConstDeclaration_NoNode
+;
+
+ConstDeclaration_NoNode:
+    IDENT { }
+  | IDENT Initializer_NoNode { }
+;
+
+Initializer_NoNode:
+    '=' AssignmentExpr_NoNode
+;
+
+InitializerNoIn_NoNode:
+    '=' AssignmentExprNoIn_NoNode
+;
+
+EmptyStatement_NoNode:
+    ';'
+;
+
+ExprStatement_NoNode:
+    ExprNoBF_NoNode ';'
+  | ExprNoBF_NoNode error { AUTO_SEMICOLON; }
+;
+
+IfStatement_NoNode:
+    IF '(' Expr_NoNode ')' Statement_NoNode %prec IF_WITHOUT_ELSE
+  | IF '(' Expr_NoNode ')' Statement_NoNode ELSE Statement_NoNode
+;
+
+IterationStatement_NoNode:
+    DO Statement_NoNode WHILE '(' Expr_NoNode ')' ';'
+  | DO Statement_NoNode WHILE '(' Expr_NoNode ')' error // Always performs automatic semicolon insertion
+  | WHILE '(' Expr_NoNode ')' Statement_NoNode
+  | FOR '(' ExprNoInOpt_NoNode ';' ExprOpt_NoNode ';' ExprOpt_NoNode ')' Statement_NoNode
+  | FOR '(' VAR VariableDeclarationListNoIn_NoNode ';' ExprOpt_NoNode ';' ExprOpt_NoNode ')' Statement_NoNode
+  | FOR '(' LeftHandSideExpr_NoNode INTOKEN Expr_NoNode ')' Statement_NoNode
+  | FOR '(' VAR IDENT INTOKEN Expr_NoNode ')' Statement_NoNode
+  | FOR '(' VAR IDENT InitializerNoIn_NoNode INTOKEN Expr_NoNode ')' Statement_NoNode
+;
+
+ExprOpt_NoNode:
+    /* nothing */
+  | Expr_NoNode
+;
+
+ExprNoInOpt_NoNode:
+    /* nothing */
+  | ExprNoIn_NoNode
+;
+
+ContinueStatement_NoNode:
+    CONTINUE ';'
+  | CONTINUE error { AUTO_SEMICOLON; }
+  | CONTINUE IDENT ';'
+  | CONTINUE IDENT error { AUTO_SEMICOLON; }
+;
+
+BreakStatement_NoNode:
+    BREAK ';'
+  | BREAK error { AUTO_SEMICOLON; }
+  | BREAK IDENT ';'
+  | BREAK IDENT error { AUTO_SEMICOLON; }
+;
+
+ReturnStatement_NoNode:
+    RETURN ';'
+  | RETURN error { AUTO_SEMICOLON; }
+  | RETURN Expr_NoNode ';'
+  | RETURN Expr_NoNode error { AUTO_SEMICOLON; }
+;
+
+WithStatement_NoNode:
+    WITH '(' Expr_NoNode ')' Statement_NoNode
+;
+
+SwitchStatement_NoNode:
+    SWITCH '(' Expr_NoNode ')' CaseBlock_NoNode
+;
+
+CaseBlock_NoNode:
+    OPENBRACE CaseClausesOpt_NoNode CLOSEBRACE { }
+  | OPENBRACE CaseClausesOpt_NoNode DefaultClause_NoNode CaseClausesOpt_NoNode CLOSEBRACE { }
+;
+
+CaseClausesOpt_NoNode:
+    /* nothing */
+  | CaseClauses_NoNode
+;
+
+CaseClauses_NoNode:
+    CaseClause_NoNode
+  | CaseClauses_NoNode CaseClause_NoNode
+;
+
+CaseClause_NoNode:
+    CASE Expr_NoNode ':'
+  | CASE Expr_NoNode ':' SourceElements_NoNode
+;
+
+DefaultClause_NoNode:
+    DEFAULT ':'
+  | DEFAULT ':' SourceElements_NoNode
+;
+
+LabelledStatement_NoNode:
+    IDENT ':' Statement_NoNode { }
+;
+
+ThrowStatement_NoNode:
+    THROW Expr_NoNode ';'
+  | THROW Expr_NoNode error { AUTO_SEMICOLON; }
+;
+
+TryStatement_NoNode:
+    TRY Block_NoNode FINALLY Block_NoNode
+  | TRY Block_NoNode CATCH '(' IDENT ')' Block_NoNode
+  | TRY Block_NoNode CATCH '(' IDENT ')' Block_NoNode FINALLY Block_NoNode
+;
+
+DebuggerStatement_NoNode:
+    DEBUGGER ';'
+  | DEBUGGER error { AUTO_SEMICOLON; }
+;
+
+FunctionDeclaration_NoNode:
+    FUNCTION IDENT '(' ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+  | FUNCTION IDENT '(' FormalParameterList_NoNode ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+;
+
+FunctionExpr_NoNode:
+    FUNCTION '(' ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+  | FUNCTION '(' FormalParameterList_NoNode ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+  | FUNCTION IDENT '(' ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+  | FUNCTION IDENT '(' FormalParameterList_NoNode ')' OPENBRACE FunctionBody_NoNode CLOSEBRACE
+;
+
+FormalParameterList_NoNode:
+    IDENT { }
+  | FormalParameterList_NoNode ',' IDENT
+;
+
+FunctionBody_NoNode:
+    /* not in spec */
+  | SourceElements_NoNode
+;
+
+SourceElements_NoNode:
+    SourceElement_NoNode
+  | SourceElements_NoNode SourceElement_NoNode
+;
+
+SourceElement_NoNode:
+    FunctionDeclaration_NoNode
+  | Statement_NoNode
+;
+
+// End NoNodes
+
 %%
 
 static AddNode* makeAddNode(ExpressionNode* left, ExpressionNode* right)
@@ -1196,7 +1779,7 @@ static ExpressionNode* makeDeleteNode(ExpressionNode* expr)
     return new DeleteDotNode(dot->base(), dot->identifier());
 }
 
-static PropertyNode* makeGetterOrSetterPropertyNode(const Identifier& getOrSet, const Identifier& name, ParameterNode* params, FunctionBodyNode* body)
+static PropertyNode* makeGetterOrSetterPropertyNode(const Identifier& getOrSet, const Identifier& name, ParameterNode* params, FunctionBodyNode* body, const SourceCode& source)
 {
     PropertyNode::Type type;
     if (getOrSet == "get")
@@ -1205,7 +1788,7 @@ static PropertyNode* makeGetterOrSetterPropertyNode(const Identifier& getOrSet, 
         type = PropertyNode::Setter;
     else
         return 0;
-    return new PropertyNode(name, new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, body, params), type);
+    return new PropertyNode(name, new FuncExprNode(CommonIdentifiers::shared()->nullIdentifier, body, source, params), type);
 }
 
 static ExpressionNode* makeNegateNode(ExpressionNode* n)
@@ -1239,7 +1822,7 @@ int yyerror(const char *)
 /* may we automatically insert a semicolon ? */
 static bool allowAutomaticSemicolon()
 {
-    return yychar == '}' || yychar == 0 || lexer().prevTerminator();
+    return yychar == CLOSEBRACE || yychar == 0 || lexer().prevTerminator();
 }
 
 static ExpressionNode* combineVarInitializers(ExpressionNode* list, AssignResolveNode* init)

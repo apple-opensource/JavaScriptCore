@@ -28,6 +28,7 @@
 #include "JSBase.h"
 
 #include "APICast.h"
+#include "SourceCode.h"
 #include <kjs/ExecState.h>
 #include <kjs/JSGlobalObject.h>
 #include <kjs/JSLock.h>
@@ -43,8 +44,9 @@ JSValueRef JSEvaluateScript(JSContextRef ctx, JSStringRef script, JSObjectRef th
     JSObject* jsThisObject = toJS(thisObject);
     UString::Rep* scriptRep = toJS(script);
     UString::Rep* sourceURLRep = sourceURL ? toJS(sourceURL) : &UString::Rep::null;
+    SourceCode source = makeSource(UString(scriptRep), UString(sourceURLRep), startingLineNumber);
     // Interpreter::evaluate sets "this" to the global object if it is NULL
-    Completion completion = Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), UString(sourceURLRep), startingLineNumber, UString(scriptRep), jsThisObject);
+    Completion completion = Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), source, jsThisObject);
 
     if (completion.complType() == Throw) {
         if (exception)
@@ -66,7 +68,8 @@ bool JSCheckScriptSyntax(JSContextRef ctx, JSStringRef script, JSStringRef sourc
     ExecState* exec = toJS(ctx);
     UString::Rep* scriptRep = toJS(script);
     UString::Rep* sourceURLRep = sourceURL ? toJS(sourceURL) : &UString::Rep::null;
-    Completion completion = Interpreter::checkSyntax(exec->dynamicGlobalObject()->globalExec(), UString(sourceURLRep), startingLineNumber, UString(scriptRep));
+    SourceCode source = makeSource(UString(scriptRep), UString(sourceURLRep), startingLineNumber);
+    Completion completion = Interpreter::checkSyntax(exec->dynamicGlobalObject()->globalExec(), source);
     if (completion.complType() == Throw) {
         if (exception)
             *exception = toRef(completion.value());

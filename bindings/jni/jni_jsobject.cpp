@@ -27,6 +27,7 @@
 
 #if ENABLE(JAVA_BINDINGS)
 
+#include "SourceCode.h"
 #include "identifier.h"
 #include "internal.h"
 #include "interpreter.h"
@@ -202,7 +203,10 @@ jobject JavaJSObject::eval(jstring script) const
         return 0;
 
     rootObject->globalObject()->startTimeoutCheck();
-    Completion completion = Interpreter::evaluate(rootObject->globalObject()->globalExec(), UString(), 0, JavaString(script).ustring(),thisObj);
+
+    SourceCode source = makeSource(JavaString(script).ustring(), UString());
+    Completion completion = Interpreter::evaluate(rootObject->globalObject()->globalExec(), source, thisObj);
+
     rootObject->globalObject()->stopTimeoutCheck();
     ComplType type = completion.complType();
     

@@ -24,6 +24,7 @@
 #ifndef Lexer_h
 #define Lexer_h
 
+#include "SourceCode.h"
 #include "ustring.h"
 #include <wtf/Vector.h>
 
@@ -34,7 +35,7 @@ namespace KJS {
 
   class Lexer : Noncopyable {
   public:
-    void setCode(int startingLineNumber, const UChar *c, unsigned int len);
+    void setCode(const SourceCode&);
     int lex();
 
     int lineNo() const { return yylineno; }
@@ -85,6 +86,13 @@ namespace KJS {
     bool sawError() const { return error; }
 
     void clear();
+    SourceCode sourceCode(int openBrace, int closeBrace, int firstLine)
+    {
+        // The SourceCode constructor adds 1 to the line number to account for
+        // all of the callers in WebCore that use zero-based line numbers, so
+        // we regrettably subtract 1 here to deal with that.
+        return SourceCode(m_source->provider(), m_source->startOffset() + openBrace + 1, m_source->startOffset() + closeBrace, firstLine - 1);
+    }
 
   private:
     friend Lexer& lexer();
@@ -115,7 +123,7 @@ namespace KJS {
     bool isLineTerminator();
     static bool isOctalDigit(int);
 
-    int matchPunctuator(int c1, int c2, int c3, int c4);
+    int matchPunctuator(int& charPos, int c1, int c2, int c3, int c4);
     static unsigned short singleEscape(unsigned short);
     static unsigned short convertOctal(int c1, int c2, int c3);
 
@@ -126,6 +134,7 @@ namespace KJS {
     KJS::Identifier* makeIdentifier(const Vector<UChar>& buffer);
     UString* makeUString(const Vector<UChar>& buffer);
 
+    const SourceCode* m_source;
     const UChar* code;
     unsigned int length;
     int yycolumn;
@@ -134,6 +143,11 @@ namespace KJS {
 
     // current and following unicode characters (int to allow for -1 for end-of-file marker)
     int current, next1, next2, next3;
+
+    int m_currentOffset;
+    int m_nextOffset1;
+    int m_nextOffset2;
+    int m_nextOffset3;
 
     Vector<UString*> m_strings;
     Vector<KJS::Identifier*> m_identifiers;

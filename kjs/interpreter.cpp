@@ -54,29 +54,19 @@
 
 namespace KJS {
 
-Completion Interpreter::checkSyntax(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UString& code)
-{
-    return checkSyntax(exec, sourceURL, startingLineNumber, code.data(), code.size());
-}
-
-Completion Interpreter::checkSyntax(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UChar* code, int codeLength)
+Completion Interpreter::checkSyntax(ExecState* exec, const SourceCode& source)
 {
     JSLock lock;
 
     int errLine;
     UString errMsg;
-    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(sourceURL, startingLineNumber, code, codeLength, 0, &errLine, &errMsg);
+    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(source, &errLine, &errMsg);
     if (!progNode)
-        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, 0, sourceURL));
+        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, source.provider()->asID(), source.provider()->url()));
     return Completion(Normal);
 }
 
-Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UString& code, JSValue* thisV)
-{
-    return evaluate(exec, sourceURL, startingLineNumber, code.data(), code.size(), thisV);
-}
-
-Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UChar* code, int codeLength, JSValue* thisV)
+Completion Interpreter::evaluate(ExecState* exec, const SourceCode& source, JSValue* thisV)
 {
     JSLock lock;
     
@@ -86,21 +76,15 @@ Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int 
         return Completion(Throw, Error::create(exec, GeneralError, "Recursion too deep"));
     
     // parse the source code
-    int sourceId;
     int errLine;
     UString errMsg;
-    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(sourceURL, startingLineNumber, code, codeLength, &sourceId, &errLine, &errMsg);
+    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(source, &errLine, &errMsg);
     
-    // notify debugger that source has been parsed
-    if (globalObject->debugger()) {
-        bool cont = globalObject->debugger()->sourceParsed(exec, sourceId, sourceURL, UString(code, codeLength), startingLineNumber, errLine, errMsg);
-        if (!cont)
-            return Completion(Break);
-    }
+    // removed debugger support
     
     // no program node means a syntax error occurred
     if (!progNode)
-        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, sourceId, sourceURL));
+        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, source.provider()->asID(), source.provider()->url()));
     
     exec->clearException();
     
@@ -128,7 +112,7 @@ Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int 
     if (shouldPrintExceptions() && res.complType() == Throw) {
         JSLock lock;
         ExecState* exec = globalObject->globalExec();
-        CString f = sourceURL.UTF8String();
+        CString f = source.provider()->url().UTF8String();
         CString message = res.value()->toObject(exec)->toString(exec).UTF8String();
         int line = res.value()->toObject(exec)->get(exec, "line")->toUInt32(exec);
 #if PLATFORM(WIN_OS)

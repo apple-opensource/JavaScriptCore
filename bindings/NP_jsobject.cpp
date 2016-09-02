@@ -31,6 +31,7 @@
 
 #include "JSGlobalObject.h"
 #include "PropertyNameArray.h"
+#include "SourceCode.h"
 #include "c_utility.h"
 #include "interpreter.h"
 #include "npruntime_impl.h"
@@ -197,7 +198,9 @@ bool _NPN_Evaluate(NPP, NPObject* o, NPString* s, NPVariant* variant)
         unsigned int UTF16Length;
         convertNPStringToUTF16(s, &scriptString, &UTF16Length); // requires free() of returned memory
         rootObject->globalObject()->startTimeoutCheck();
-        Completion completion = Interpreter::evaluate(rootObject->globalObject()->globalExec(), UString(), 0, UString(reinterpret_cast<const UChar*>(scriptString), UTF16Length));
+
+        SourceCode source = makeSource(UString(reinterpret_cast<const UChar*>(scriptString), UTF16Length), UString());
+        Completion completion = Interpreter::evaluate(rootObject->globalObject()->globalExec(), source);
         rootObject->globalObject()->stopTimeoutCheck();
         ComplType type = completion.complType();
         

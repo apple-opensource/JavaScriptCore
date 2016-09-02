@@ -155,8 +155,8 @@ namespace KJS {
       static unsigned computeHash(const UChar *, int length);
       static unsigned computeHash(const char *);
 
-      Rep* ref() { ASSERT(JSLock::lockCount() > 0); ++rc; return this; }
-      ALWAYS_INLINE void deref() { ASSERT(JSLock::lockCount() > 0); if (--rc == 0) destroy(); }
+      Rep* ref() { ++rc; return this; }
+      ALWAYS_INLINE void deref() { if (--rc == 0) destroy(); }
 
       // unshared data
       int offset;

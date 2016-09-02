@@ -417,8 +417,10 @@ void TCMalloc_SystemRelease(void* start, size_t length)
   if (new_end > new_start) {
     // Note -- ignoring most return codes, because if this fails it
     // doesn't matter...
-    while (madvise(reinterpret_cast<char*>(new_start), new_end - new_start,
-                   MADV_DONTNEED) == -1 &&
+    // The msync call with MS_KILLPAGES on Leopard is equivalent to an
+    // madvise call with MADV_FREE on SnowLeopard
+    while (msync(reinterpret_cast<char*>(new_start), new_end - new_start,
+                   MS_KILLPAGES) == -1 &&
            errno == EAGAIN) {
       // NOP
     }

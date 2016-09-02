@@ -412,7 +412,7 @@ static const int kMaxFreeListLength = 256;
 
 // Lower and upper bounds on the per-thread cache sizes
 static const size_t kMinThreadCacheSize = kMaxSize * 2;
-static const size_t kMaxThreadCacheSize = 2 << 20;
+static const size_t kMaxThreadCacheSize = 512 * 1024;
 
 // Default bound on the total amount of thread caches
 static const size_t kDefaultOverallThreadCacheSize = 16 << 20;
@@ -3633,6 +3633,13 @@ void FastMallocZone::init()
 
 void releaseFastMallocFreeMemory()
 {
+    // Flush free pages in the current thread cache back to the page heap.
+    // Scavenging twice flushes everything
+    if (TCMalloc_ThreadCache* threadCache = TCMalloc_ThreadCache::GetCacheIfPresent()) {
+        threadCache->Scavenge();
+        threadCache->Scavenge();
+    }
+
     SpinLockHolder h(&pageheap_lock);
     pageheap->ReleaseFreePages();
 }

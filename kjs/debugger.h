@@ -33,6 +33,7 @@ namespace KJS {
   class JSGlobalObject;
   class JSObject;
   class JSValue;
+  class SourceCode;
   class UString;
   class List;
 
@@ -114,8 +115,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool sourceParsed(ExecState *exec, int sourceId, const UString &sourceURL,
-                              const UString &source, int startingLineNumber, int errorLine, const UString &errorMsg);
+    virtual bool sourceParsed(ExecState*, const SourceCode&, int errorLine, const UString& errorMsg) = 0;
 
     /**
      * Called when all functions/programs associated with a particular
@@ -131,7 +131,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool sourceUnused(ExecState *exec, int sourceId);
+    virtual bool sourceUnused(ExecState *exec, intptr_t sourceID);
 
     /**
      * Called when an exception is thrown during script execution.
@@ -146,7 +146,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool exception(ExecState *exec, int sourceId, int lineno,
+    virtual bool exception(ExecState *exec, intptr_t sourceID, int lineno,
                            JSValue *exception);
 
     bool hasHandledException(ExecState *, JSValue *);
@@ -166,7 +166,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool atStatement(ExecState *exec, int sourceId, int firstLine,
+    virtual bool atStatement(ExecState *exec, intptr_t sourceID, int firstLine,
                              int lastLine);
     /**
      * Called on each function call. Use together with @ref #returnEvent
@@ -188,7 +188,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool callEvent(ExecState *exec, int sourceId, int lineno,
+    virtual bool callEvent(ExecState *exec, intptr_t sourceID, int lineno,
                            JSObject *function, const List &args);
 
     /**
@@ -209,7 +209,7 @@ namespace KJS {
      * @return true if execution should be continue, false if it should
      * be aborted
      */
-    virtual bool returnEvent(ExecState *exec, int sourceId, int lineno,
+    virtual bool returnEvent(ExecState *exec, intptr_t sourceID, int lineno,
                              JSObject *function);
 
   private:
