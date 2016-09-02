@@ -39,4 +39,6 @@ namespace WTF {
 
 }
 
+using WTF::randomNumber;
+
 #endif

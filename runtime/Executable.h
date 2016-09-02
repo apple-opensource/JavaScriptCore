@@ -82,10 +82,10 @@ namespace JSC {
 #if ENABLE(JIT)
     class NativeExecutable : public ExecutableBase {
     public:
-        NativeExecutable(ExecState* exec)
+        NativeExecutable(JITCode thunk)
             : ExecutableBase(NUM_PARAMETERS_IS_HOST)
         {
-            m_jitCode = JITCode(JITCode::HostFunction(exec->globalData().jitStubs.ctiNativeCallThunk()));
+            m_jitCode = thunk;
         }
 
         ~NativeExecutable();
@@ -284,7 +284,7 @@ namespace JSC {
 
         const Identifier& name() { return m_name; }
         size_t parameterCount() const { return m_parameters->size(); }
-        size_t variableCount() const { return m_numVariables; }
+        unsigned variableCount() const { return m_numVariables; }
         UString paramString() const;
 
         void recompile(ExecState*);
@@ -295,11 +295,11 @@ namespace JSC {
     private:
         FunctionExecutable(JSGlobalData* globalData, const Identifier& name, const SourceCode& source, bool forceUsesArguments, FunctionParameters* parameters, int firstLine, int lastLine)
             : ScriptExecutable(globalData, source)
+            , m_numVariables(0)
             , m_forceUsesArguments(forceUsesArguments)
             , m_parameters(parameters)
             , m_codeBlock(0)
             , m_name(name)
-            , m_numVariables(0)
         {
             m_firstLine = firstLine;
             m_lastLine = lastLine;
@@ -307,11 +307,11 @@ namespace JSC {
 
         FunctionExecutable(ExecState* exec, const Identifier& name, const SourceCode& source, bool forceUsesArguments, FunctionParameters* parameters, int firstLine, int lastLine)
             : ScriptExecutable(exec, source)
+            , m_numVariables(0)
             , m_forceUsesArguments(forceUsesArguments)
             , m_parameters(parameters)
             , m_codeBlock(0)
             , m_name(name)
-            , m_numVariables(0)
         {
             m_firstLine = firstLine;
             m_lastLine = lastLine;
@@ -319,11 +319,12 @@ namespace JSC {
 
         void compile(ExecState*, ScopeChainNode*);
 
-        bool m_forceUsesArguments;
+        unsigned m_numVariables : 31;
+        bool m_forceUsesArguments : 1;
+
         RefPtr<FunctionParameters> m_parameters;
         CodeBlock* m_codeBlock;
         Identifier m_name;
-        size_t m_numVariables;
 
 #if ENABLE(JIT)
     public:

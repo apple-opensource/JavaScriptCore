@@ -29,10 +29,10 @@
 #ifndef JITStubs_h
 #define JITStubs_h
 
-#include <wtf/Platform.h>
-
 #include "MacroAssemblerCodeRef.h"
 #include "Register.h"
+#include "ThunkGenerators.h"
+#include <wtf/HashMap.h>
 
 #if ENABLE(JIT)
 
@@ -45,16 +45,16 @@ namespace JSC {
     class FunctionExecutable;
     class Identifier;
     class JSGlobalData;
-    class JSGlobalData;
+    class JSGlobalObject;
     class JSObject;
     class JSPropertyNameIterator;
     class JSValue;
     class JSValueEncodedAsPointer;
+    class NativeExecutable;
     class Profiler;
     class PropertySlot;
     class PutPropertySlot;
     class RegisterFile;
-    class JSGlobalObject;
     class RegExp;
 
     union JITStubArg {
@@ -73,6 +73,14 @@ namespace JSC {
         JSGlobalObject* globalObject() { return static_cast<JSGlobalObject*>(asPointer); }
         JSString* jsString() { return static_cast<JSString*>(asPointer); }
         ReturnAddressPtr returnAddress() { return ReturnAddressPtr(asPointer); }
+    };
+    
+    struct TrampolineStructure {
+        MacroAssemblerCodePtr ctiStringLengthTrampoline;
+        MacroAssemblerCodePtr ctiVirtualCallLink;
+        MacroAssemblerCodePtr ctiVirtualCall;
+        RefPtr<NativeExecutable> ctiNativeCallThunk;
+        MacroAssemblerCodePtr ctiSoftModulo;
     };
 
 #if CPU(X86_64)
@@ -100,10 +108,10 @@ namespace JSC {
         ReturnAddressPtr* returnAddressSlot() { return reinterpret_cast<ReturnAddressPtr*>(this) - 1; }
     };
 #elif CPU(X86)
-#if COMPILER(MSVC)
+#if COMPILER(MSVC) || (OS(WINDOWS) && COMPILER(GCC))
 #pragma pack(push)
 #pragma pack(4)
-#endif // COMPILER(MSVC)
+#endif // COMPILER(MSVC) || (OS(WINDOWS) && COMPILER(GCC))
     struct JITStackFrame {
         void* reserved; // Unused
         JITStubArg args[6];
@@ -127,9 +135,9 @@ namespace JSC {
         // When JIT code makes a call, it pushes its return address just below the rest of the stack.
         ReturnAddressPtr* returnAddressSlot() { return reinterpret_cast<ReturnAddressPtr*>(this) - 1; }
     };
-#if COMPILER(MSVC)
+#if COMPILER(MSVC) || (OS(WINDOWS) && COMPILER(GCC))
 #pragma pack(pop)
-#endif // COMPILER(MSVC)
+#endif // COMPILER(MSVC) || (OS(WINDOWS) && COMPILER(GCC))
 #elif CPU(ARM_THUMB2)
     struct JITStackFrame {
         void* reserved; // Unused
@@ -181,6 +189,30 @@ namespace JSC {
         JSGlobalData* globalData;
 
         // When JIT code makes a call, it pushes its return address just below the rest of the stack.
+        ReturnAddressPtr* returnAddressSlot() { return &thunkReturnAddress; }
+    };
+#elif CPU(MIPS)
+    struct JITStackFrame {
+        void* reserved; // Unused
+        JITStubArg args[6];
+
+        void* preservedGP; // store GP when using PIC code
+        void* preservedS0;
+        void* preservedS1;
+        void* preservedS2;
+        void* preservedReturnAddress;
+
+        ReturnAddressPtr thunkReturnAddress;
+
+        // These arguments passed in a1..a3 (a0 contained the entry code pointed, which is not preserved)
+        RegisterFile* registerFile;
+        CallFrame* callFrame;
+        JSValue* exception;
+
+        // These arguments passed on the stack.
+        Profiler** enabledProfilerReference;
+        JSGlobalData* globalData;
+
         ReturnAddressPtr* returnAddressSlot() { return &thunkReturnAddress; }
     };
 #else
@@ -235,22 +267,24 @@ namespace JSC {
     class JITThunks {
     public:
         JITThunks(JSGlobalData*);
+        ~JITThunks();
 
         static void tryCacheGetByID(CallFrame*, CodeBlock*, ReturnAddressPtr returnAddress, JSValue baseValue, const Identifier& propertyName, const PropertySlot&, StructureStubInfo* stubInfo);
-        static void tryCachePutByID(CallFrame*, CodeBlock*, ReturnAddressPtr returnAddress, JSValue baseValue, const PutPropertySlot&, StructureStubInfo* stubInfo);
+        static void tryCachePutByID(CallFrame*, CodeBlock*, ReturnAddressPtr returnAddress, JSValue baseValue, const PutPropertySlot&, StructureStubInfo* stubInfo, bool direct);
 
-        MacroAssemblerCodePtr ctiStringLengthTrampoline() { return m_ctiStringLengthTrampoline; }
-        MacroAssemblerCodePtr ctiVirtualCallLink() { return m_ctiVirtualCallLink; }
-        MacroAssemblerCodePtr ctiVirtualCall() { return m_ctiVirtualCall; }
-        MacroAssemblerCodePtr ctiNativeCallThunk() { return m_ctiNativeCallThunk; }
+        MacroAssemblerCodePtr ctiStringLengthTrampoline() { return m_trampolineStructure.ctiStringLengthTrampoline; }
+        MacroAssemblerCodePtr ctiVirtualCallLink() { return m_trampolineStructure.ctiVirtualCallLink; }
+        MacroAssemblerCodePtr ctiVirtualCall() { return m_trampolineStructure.ctiVirtualCall; }
+        NativeExecutable* ctiNativeCallThunk() { return m_trampolineStructure.ctiNativeCallThunk.get(); }
+        MacroAssemblerCodePtr ctiSoftModulo() { return m_trampolineStructure.ctiSoftModulo; }
 
+        NativeExecutable* specializedThunk(JSGlobalData* globalData, ThunkGenerator generator);
     private:
+        typedef HashMap<ThunkGenerator, RefPtr<NativeExecutable> > ThunkMap;
+        ThunkMap m_thunkMap;
         RefPtr<ExecutablePool> m_executablePool;
 
-        MacroAssemblerCodePtr m_ctiStringLengthTrampoline;
-        MacroAssemblerCodePtr m_ctiVirtualCallLink;
-        MacroAssemblerCodePtr m_ctiVirtualCall;
-        MacroAssemblerCodePtr m_ctiNativeCallThunk;
+        TrampolineStructure m_trampolineStructure;
     };
 
 extern "C" {
@@ -270,6 +304,8 @@ extern "C" {
     EncodedJSValue JIT_STUB cti_op_get_by_id_array_fail(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_get_by_id_generic(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_get_by_id_method_check(STUB_ARGS_DECLARATION);
+    EncodedJSValue JIT_STUB cti_op_get_by_id_getter_stub(STUB_ARGS_DECLARATION);
+    EncodedJSValue JIT_STUB cti_op_get_by_id_custom_stub(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_get_by_id_proto_fail(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_get_by_id_proto_list(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_get_by_id_proto_list_full(STUB_ARGS_DECLARATION);
@@ -301,6 +337,7 @@ extern "C" {
     EncodedJSValue JIT_STUB cti_op_resolve(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_resolve_base(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_resolve_global(STUB_ARGS_DECLARATION);
+    EncodedJSValue JIT_STUB cti_op_resolve_global_dynamic(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_resolve_skip(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_resolve_with_base(STUB_ARGS_DECLARATION);
     EncodedJSValue JIT_STUB cti_op_rshift(STUB_ARGS_DECLARATION);
@@ -328,9 +365,7 @@ extern "C" {
     JSPropertyNameIterator* JIT_STUB cti_op_get_pnames(STUB_ARGS_DECLARATION);
     VoidPtrPair JIT_STUB cti_op_call_arityCheck(STUB_ARGS_DECLARATION);
     int JIT_STUB cti_op_eq(STUB_ARGS_DECLARATION);
-#if USE(JSVALUE32_64)
     int JIT_STUB cti_op_eq_strings(STUB_ARGS_DECLARATION);
-#endif
     int JIT_STUB cti_op_jless(STUB_ARGS_DECLARATION);
     int JIT_STUB cti_op_jlesseq(STUB_ARGS_DECLARATION);
     int JIT_STUB cti_op_jtrue(STUB_ARGS_DECLARATION);
@@ -349,6 +384,9 @@ extern "C" {
     void JIT_STUB cti_op_put_by_id(STUB_ARGS_DECLARATION);
     void JIT_STUB cti_op_put_by_id_fail(STUB_ARGS_DECLARATION);
     void JIT_STUB cti_op_put_by_id_generic(STUB_ARGS_DECLARATION);
+    void JIT_STUB cti_op_put_by_id_direct(STUB_ARGS_DECLARATION);
+    void JIT_STUB cti_op_put_by_id_direct_fail(STUB_ARGS_DECLARATION);
+    void JIT_STUB cti_op_put_by_id_direct_generic(STUB_ARGS_DECLARATION);
     void JIT_STUB cti_op_put_by_index(STUB_ARGS_DECLARATION);
     void JIT_STUB cti_op_put_by_val(STUB_ARGS_DECLARATION);
     void JIT_STUB cti_op_put_by_val_byte_array(STUB_ARGS_DECLARATION);

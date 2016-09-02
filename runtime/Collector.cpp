@@ -53,11 +53,6 @@
 #include <mach/thread_act.h>
 #include <mach/vm_map.h>
 
-#elif OS(SYMBIAN)
-#include <e32std.h>
-#include <e32cmn.h>
-#include <unistd.h>
-
 #elif OS(WINDOWS)
 
 #include <windows.h>
@@ -109,11 +104,6 @@ const size_t ALLOCATIONS_PER_COLLECTION = 3600;
 // a PIC branch in Mach-O binaries, see <rdar://problem/5971391>.
 #define MIN_ARRAY_SIZE (static_cast<size_t>(14))
 
-#if OS(SYMBIAN)
-const size_t MAX_NUM_BLOCKS = 256; // Max size of collector heap set to 16 MB
-static RHeap* userChunk = 0;
-#endif
-
 #if ENABLE(JSC_MULTIPLE_THREADS)
 
 #if OS(DARWIN)
@@ -145,30 +135,12 @@ Heap::Heap(JSGlobalData* globalData)
     , m_registeredThreads(0)
     , m_currentThreadRegistrar(0)
 #endif
+#if OS(SYMBIAN)
+    , m_blockallocator(JSCCOLLECTOR_VIRTUALMEM_RESERVATION, BLOCK_SIZE)
+#endif
     , m_globalData(globalData)
 {
     ASSERT(globalData);
-    
-#if OS(SYMBIAN)
-    // Symbian OpenC supports mmap but currently not the MAP_ANON flag.
-    // Using fastMalloc() does not properly align blocks on 64k boundaries
-    // and previous implementation was flawed/incomplete.
-    // UserHeap::ChunkHeap allows allocation of continuous memory and specification
-    // of alignment value for (symbian) cells within that heap.
-    //
-    // Clarification and mapping of terminology:
-    // RHeap (created by UserHeap::ChunkHeap below) is continuos memory chunk,
-    // which can dynamically grow up to 8 MB,
-    // that holds all CollectorBlocks of this session (static).
-    // Each symbian cell within RHeap maps to a 64kb aligned CollectorBlock.
-    // JSCell objects are maintained as usual within CollectorBlocks.
-    if (!userChunk) {
-        userChunk = UserHeap::ChunkHeap(0, 0, MAX_NUM_BLOCKS * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
-        if (!userChunk)
-            CRASH();
-    }
-#endif // OS(SYMBIAN)
-    
     memset(&m_heap, 0, sizeof(CollectorHeap));
     allocateBlock();
 }
@@ -211,7 +183,9 @@ void Heap::destroy()
         t = next;
     }
 #endif
-
+#if OS(SYMBIAN)
+    m_blockallocator.destroy();
+#endif
     m_globalData = 0;
 }
 
@@ -221,15 +195,13 @@ NEVER_INLINE CollectorBlock* Heap::allocateBlock()
     vm_address_t address = 0;
     vm_map(current_task(), &address, BLOCK_SIZE, BLOCK_OFFSET_MASK, VM_FLAGS_ANYWHERE | VM_TAG_FOR_COLLECTOR_MEMORY, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_DEFAULT);
 #elif OS(SYMBIAN)
-    // Allocate a 64 kb aligned CollectorBlock
-    unsigned char* mask = reinterpret_cast<unsigned char*>(userChunk->Alloc(BLOCK_SIZE));
-    if (!mask)
+    void* address = m_blockallocator.alloc();  
+    if (!address)
         CRASH();
-    uintptr_t address = reinterpret_cast<uintptr_t>(mask);
 #elif OS(WINCE)
     void* address = VirtualAlloc(NULL, BLOCK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 #elif OS(WINDOWS)
-#if COMPILER(MINGW)
+#if COMPILER(MINGW) && !COMPILER(MINGW64)
     void* address = __mingw_aligned_malloc(BLOCK_SIZE, BLOCK_SIZE);
 #else
     void* address = _aligned_malloc(BLOCK_SIZE, BLOCK_SIZE);
@@ -316,11 +288,11 @@ NEVER_INLINE void Heap::freeBlockPtr(CollectorBlock* block)
 #if OS(DARWIN)    
     vm_deallocate(current_task(), reinterpret_cast<vm_address_t>(block), BLOCK_SIZE);
 #elif OS(SYMBIAN)
-    userChunk->Free(reinterpret_cast<TAny*>(block));
+    m_blockallocator.free(reinterpret_cast<void*>(block));
 #elif OS(WINCE)
     VirtualFree(block, 0, MEM_RELEASE);
 #elif OS(WINDOWS)
-#if COMPILER(MINGW)
+#if COMPILER(MINGW) && !COMPILER(MINGW64)
     __mingw_aligned_free(block);
 #else
     _aligned_free(block);
@@ -477,7 +449,7 @@ void Heap::shrinkBlocks(size_t neededBlocks)
 }
 
 #if OS(WINCE)
-void* g_stackBase = 0;
+JS_EXPORTDATA void* g_stackBase = 0;
 
 inline bool isPageWritable(void* page)
 {
@@ -574,10 +546,6 @@ static inline void* currentThreadStackBase()
         MOV pTib, EAX
     }
     return static_cast<void*>(pTib->StackBase);
-#elif OS(WINDOWS) && CPU(X86_64) && COMPILER(MSVC)
-    // FIXME: why only for MSVC?
-    PNT_TIB64 pTib = reinterpret_cast<PNT_TIB64>(NtCurrentTeb());
-    return reinterpret_cast<void*>(pTib->StackBase);
 #elif OS(WINDOWS) && CPU(X86) && COMPILER(GCC)
     // offset 0x18 from the FS segment register gives a pointer to
     // the thread information block for the current thread
@@ -586,7 +554,12 @@ static inline void* currentThreadStackBase()
           : "=r" (pTib)
         );
     return static_cast<void*>(pTib->StackBase);
+#elif OS(WINDOWS) && CPU(X86_64)
+    PNT_TIB64 pTib = reinterpret_cast<PNT_TIB64>(NtCurrentTeb());
+    return reinterpret_cast<void*>(pTib->StackBase);
 #elif OS(QNX)
+    AtomicallyInitializedStatic(Mutex&, mutex = *new Mutex);
+    MutexLocker locker(mutex);
     return currentThreadStackBaseQNX();
 #elif OS(SOLARIS)
     stack_t s;
@@ -598,19 +571,17 @@ static inline void* currentThreadStackBase()
     pthread_stackseg_np(thread, &stack);
     return stack.ss_sp;
 #elif OS(SYMBIAN)
-    static void* stackBase = 0;
-    if (stackBase == 0) {
-        TThreadStackInfo info;
-        RThread thread;
-        thread.StackInfo(info);
-        stackBase = (void*)info.iBase;
-    }
-    return (void*)stackBase;
+    TThreadStackInfo info;
+    RThread thread;
+    thread.StackInfo(info);
+    return (void*)info.iBase;
 #elif OS(HAIKU)
     thread_info threadInfo;
     get_thread_info(find_thread(NULL), &threadInfo);
     return threadInfo.stack_end;
 #elif OS(UNIX)
+    AtomicallyInitializedStatic(Mutex&, mutex = *new Mutex);
+    MutexLocker locker(mutex);
     static void* stackBase = 0;
     static size_t stackSize = 0;
     static pthread_t stackThread;
@@ -633,6 +604,8 @@ static inline void* currentThreadStackBase()
     }
     return static_cast<char*>(stackBase) + stackSize;
 #elif OS(WINCE)
+    AtomicallyInitializedStatic(Mutex&, mutex = *new Mutex);
+    MutexLocker locker(mutex);
     if (g_stackBase)
         return g_stackBase;
     else {
@@ -667,7 +640,7 @@ void Heap::makeUsableFromMultipleThreads()
 
 void Heap::registerThread()
 {
-    ASSERT(!m_globalData->mainThreadOnly || isMainThread() || pthread_main_np());
+    ASSERT(!m_globalData->exclusiveThread || m_globalData->exclusiveThread == currentThread());
 
     if (!m_currentThreadRegistrar || pthread_getspecific(m_currentThreadRegistrar))
         return;
@@ -1001,7 +974,7 @@ void Heap::markStackObjectsConservatively(MarkStack& markStack)
 void Heap::protect(JSValue k)
 {
     ASSERT(k);
-    ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance);
+    ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance());
 
     if (!k.isCell())
         return;
@@ -1009,15 +982,15 @@ void Heap::protect(JSValue k)
     m_protectedValues.add(k.asCell());
 }
 
-void Heap::unprotect(JSValue k)
+bool Heap::unprotect(JSValue k)
 {
     ASSERT(k);
-    ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance);
+    ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance());
 
     if (!k.isCell())
-        return;
+        return false;
 
-    m_protectedValues.remove(k.asCell());
+    return m_protectedValues.remove(k.asCell());
 }
 
 void Heap::markProtectedObjects(MarkStack& markStack)
@@ -1093,7 +1066,7 @@ void Heap::sweep()
 void Heap::markRoots()
 {
 #ifndef NDEBUG
-    if (m_globalData->isSharedInstance) {
+    if (m_globalData->isSharedInstance()) {
         ASSERT(JSLock::lockCount() > 0);
         ASSERT(JSLock::currentThreadIsHoldingLock());
     }
@@ -1200,12 +1173,13 @@ static const char* typeName(JSCell* cell)
         return "number";
 #endif
     if (cell->isGetterSetter())
-        return "gettersetter";
+        return "Getter-Setter";
     if (cell->isAPIValueWrapper())
-        return "value wrapper";
+        return "API wrapper";
     if (cell->isPropertyNameIterator())
-        return "for-in iterator";
-    ASSERT(cell->isObject());
+        return "For-in iterator";
+    if (!cell->isObject())
+        return "[empty cell]";
     const ClassInfo* info = cell->classInfo();
     return info ? info->className : "Object";
 }
@@ -1217,6 +1191,18 @@ HashCountedSet<const char*>* Heap::protectedObjectTypeCounts()
     ProtectCountSet::iterator end = m_protectedValues.end();
     for (ProtectCountSet::iterator it = m_protectedValues.begin(); it != end; ++it)
         counts->add(typeName(it->first));
+
+    return counts;
+}
+
+HashCountedSet<const char*>* Heap::objectTypeCounts()
+{
+    HashCountedSet<const char*>* counts = new HashCountedSet<const char*>;
+
+    LiveObjectIterator it = primaryHeapBegin();
+    LiveObjectIterator heapEnd = primaryHeapEnd();
+    for ( ; it != heapEnd; ++it)
+        counts->add(typeName(*it));
 
     return counts;
 }

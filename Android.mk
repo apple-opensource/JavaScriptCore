@@ -45,6 +45,16 @@ LOCAL_SRC_FILES := \
 	interpreter/Interpreter.cpp \
 	interpreter/RegisterFile.cpp \
 	\
+	jit/ExecutableAllocator.cpp\
+	jit/ExecutableAllocatorFixedVMPool.cpp \
+	jit/ExecutableAllocatorPosix.cpp \
+	jit/JIT.cpp \
+	jit/JITArithmetic.cpp \
+	jit/JITCall.cpp \
+	jit/JITOpcodes.cpp \
+	jit/JITPropertyAccess.cpp \
+	jit/JITStubs.cpp \
+	\
 	parser/Lexer.cpp \
 	parser/Nodes.cpp \
 	parser/Parser.cpp \
@@ -142,13 +152,6 @@ LOCAL_SRC_FILES := \
 	runtime/TimeoutChecker.cpp \
 	runtime/UString.cpp \
 	\
-	wrec/CharacterClass.cpp \
-	wrec/CharacterClassConstructor.cpp \
-	wrec/WREC.cpp \
-	wrec/WRECFunctors.cpp \
-	wrec/WRECGenerator.cpp \
-	wrec/WRECParser.cpp \
-	\
 	wtf/Assertions.cpp \
 	wtf/ByteArray.cpp \
 	wtf/CurrentTime.cpp \
@@ -162,16 +165,26 @@ LOCAL_SRC_FILES := \
 	wtf/ThreadIdentifierDataPthreads.cpp \
 	wtf/Threading.cpp \
 	wtf/ThreadingPthreads.cpp \
+	wtf/WTFThreadData.cpp \
 	\
 	wtf/TypeTraits.cpp \
 	wtf/dtoa.cpp \
 	\
 	wtf/android/MainThreadAndroid.cpp \
 	\
+	wtf/text/AtomicString.cpp \
+	wtf/text/CString.cpp \
+	wtf/text/StringImpl.cpp \
+	wtf/text/WTFString.cpp \
+	\
 	wtf/unicode/CollatorDefault.cpp \
 	wtf/unicode/UTF8.cpp \
 	\
-	wtf/unicode/icu/CollatorICU.cpp
+	wtf/unicode/icu/CollatorICU.cpp \
+	\
+	yarr/RegexCompiler.cpp \
+	yarr/RegexInterpreter.cpp \
+	yarr/RegexJIT.cpp
 
 # Rule to build grammar.y with our custom bison.
 GEN := $(intermediates)/parser/Grammar.cpp

@@ -49,6 +49,8 @@
 #include "Lookup.h"
 #include "Nodes.h"
 #include "Parser.h"
+#include "RegExpCache.h"
+#include <wtf/WTFThreadData.h>
 
 #if ENABLE(JSC_MULTIPLE_THREADS)
 #include <wtf/Threading.h>
@@ -56,6 +58,7 @@
 
 #if PLATFORM(MAC)
 #include "ProfilerServer.h"
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
 using namespace WTF;
@@ -102,8 +105,8 @@ void JSGlobalData::storeVPtrs()
     jsFunction->~JSCell();
 }
 
-JSGlobalData::JSGlobalData(bool isShared)
-    : isSharedInstance(isShared)
+JSGlobalData::JSGlobalData(GlobalDataType globalDataType, ThreadStackType threadStackType)
+    : globalDataType(globalDataType)
     , clientData(0)
     , arrayTable(fastNew<HashTable>(JSC::arrayTable))
     , dateTable(fastNew<HashTable>(JSC::dateTable))
@@ -115,6 +118,7 @@ JSGlobalData::JSGlobalData(bool isShared)
     , stringTable(fastNew<HashTable>(JSC::stringTable))
     , activationStructure(JSActivation::createStructure(jsNull()))
     , interruptedExecutionErrorStructure(JSObject::createStructure(jsNull()))
+    , terminatedExecutionErrorStructure(JSObject::createStructure(jsNull()))
     , staticScopeStructure(JSStaticScopeObject::createStructure(jsNull()))
     , stringStructure(JSString::createStructure(jsNull()))
     , notAnObjectErrorStubStructure(JSNotAnObjectErrorStub::createStructure(jsNull()))
@@ -126,15 +130,12 @@ JSGlobalData::JSGlobalData(bool isShared)
 #if USE(JSVALUE32)
     , numberStructure(JSNumberCell::createStructure(jsNull()))
 #endif
-    , identifierTable(createIdentifierTable())
+    , identifierTable(globalDataType == Default ? wtfThreadData().currentIdentifierTable() : createIdentifierTable())
     , propertyNames(new CommonIdentifiers(this))
     , emptyList(new MarkedArgumentBuffer)
     , lexer(new Lexer(this))
     , parser(new Parser)
     , interpreter(new Interpreter)
-#if ENABLE(JIT)
-    , jitStubs(this)
-#endif
     , heap(this)
     , initializingLazyNumericCompareFunction(false)
     , head(0)
@@ -143,13 +144,37 @@ JSGlobalData::JSGlobalData(bool isShared)
     , firstStringifierToMark(0)
     , markStack(jsArrayVPtr)
     , cachedUTCOffset(NaN)
-    , weakRandom(static_cast<int>(currentTime()))
+    , maxReentryDepth(threadStackType == ThreadStackTypeSmall ? MaxSmallThreadReentryDepth : MaxLargeThreadReentryDepth)
+    , m_regExpCache(new RegExpCache(this))
 #ifndef NDEBUG
-    , mainThreadOnly(false)
+    , exclusiveThread(0)
 #endif
 {
 #if PLATFORM(MAC)
     startProfilerServerIfNeeded();
+#endif
+#if ENABLE(JIT) && ENABLE(INTERPRETER)
+#if PLATFORM(CF)
+    CFStringRef canUseJITKey = CFStringCreateWithCString(0 , "JavaScriptCoreUseJIT", kCFStringEncodingMacRoman);
+    CFBooleanRef canUseJIT = (CFBooleanRef)CFPreferencesCopyAppValue(canUseJITKey, kCFPreferencesCurrentApplication);
+    if (canUseJIT) {
+        m_canUseJIT = kCFBooleanTrue == canUseJIT;
+        CFRelease(canUseJIT);
+    } else
+        m_canUseJIT = !getenv("JavaScriptCoreUseJIT");
+    CFRelease(canUseJITKey);
+#elif OS(UNIX)
+    m_canUseJIT = !getenv("JavaScriptCoreUseJIT");
+#else
+    m_canUseJIT = true;
+#endif
+#endif
+#if ENABLE(JIT)
+#if ENABLE(INTERPRETER)
+    if (m_canUseJIT)
+        m_canUseJIT = executableAllocator.isValid();
+#endif
+    jitStubs.set(new JITThunks(this));
 #endif
 }
 
@@ -189,28 +214,27 @@ JSGlobalData::~JSGlobalData()
     delete emptyList;
 
     delete propertyNames;
-    deleteIdentifierTable(identifierTable);
+    if (globalDataType != Default)
+        deleteIdentifierTable(identifierTable);
 
     delete clientData;
+    delete m_regExpCache;
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::createNonDefault()
+PassRefPtr<JSGlobalData> JSGlobalData::createContextGroup(ThreadStackType type)
 {
-    return adoptRef(new JSGlobalData(false));
+    return adoptRef(new JSGlobalData(APIContextGroup, type));
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::create()
+PassRefPtr<JSGlobalData> JSGlobalData::create(ThreadStackType type)
 {
-    JSGlobalData* globalData = new JSGlobalData(false);
-    setDefaultIdentifierTable(globalData->identifierTable);
-    setCurrentIdentifierTable(globalData->identifierTable);
-    return adoptRef(globalData);
+    return adoptRef(new JSGlobalData(Default, type));
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::createLeaked()
+PassRefPtr<JSGlobalData> JSGlobalData::createLeaked(ThreadStackType type)
 {
     Structure::startIgnoringLeaks();
-    RefPtr<JSGlobalData> data = create();
+    RefPtr<JSGlobalData> data = create(type);
     Structure::stopIgnoringLeaks();
     return data.release();
 }
@@ -224,7 +248,7 @@ JSGlobalData& JSGlobalData::sharedInstance()
 {
     JSGlobalData*& instance = sharedInstanceInternal();
     if (!instance) {
-        instance = new JSGlobalData(true);
+        instance = new JSGlobalData(APIShared, ThreadStackTypeSmall);
 #if ENABLE(JSC_MULTIPLE_THREADS)
         instance->makeUsableFromMultipleThreads();
 #endif

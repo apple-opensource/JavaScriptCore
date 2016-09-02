@@ -106,7 +106,7 @@ namespace JSC {
         //
         // NB: depth does _not_ include the local scope.  eg. a depth of 0 refers
         // to the scope containing this codeblock.
-        bool findScopedProperty(const Identifier&, int& index, size_t& depth, bool forWriting, JSObject*& globalObject);
+        bool findScopedProperty(const Identifier&, int& index, size_t& depth, bool forWriting, bool& includesDynamicScopes, JSObject*& globalObject);
 
         // Returns the register storing "this"
         RegisterID* thisRegister() { return &m_thisRegister; }
@@ -301,6 +301,7 @@ namespace JSC {
 
         RegisterID* emitGetById(RegisterID* dst, RegisterID* base, const Identifier& property);
         RegisterID* emitPutById(RegisterID* base, const Identifier& property, RegisterID* value);
+        RegisterID* emitDirectPutById(RegisterID* base, const Identifier& property, RegisterID* value);
         RegisterID* emitDeleteById(RegisterID* dst, RegisterID* base, const Identifier&);
         RegisterID* emitGetByVal(RegisterID* dst, RegisterID* base, RegisterID* property);
         RegisterID* emitPutByVal(RegisterID* base, RegisterID* property, RegisterID* value);
@@ -380,8 +381,8 @@ namespace JSC {
         void emitOpcode(OpcodeID);
         void retrieveLastBinaryOp(int& dstIndex, int& src1Index, int& src2Index);
         void retrieveLastUnaryOp(int& dstIndex, int& srcIndex);
-        void rewindBinaryOp();
-        void rewindUnaryOp();
+        ALWAYS_INLINE void rewindBinaryOp();
+        ALWAYS_INLINE void rewindUnaryOp();
 
         PassRefPtr<Label> emitComplexJumpScopes(Label* target, ControlFlowContext* topScope, ControlFlowContext* bottomScope);
 

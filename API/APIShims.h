@@ -28,6 +28,7 @@
 
 #include "CallFrame.h"
 #include "JSLock.h"
+#include <wtf/WTFThreadData.h>
 
 namespace JSC {
 
@@ -35,7 +36,7 @@ class APIEntryShimWithoutLock {
 protected:
     APIEntryShimWithoutLock(JSGlobalData* globalData, bool registerThread)
         : m_globalData(globalData)
-        , m_entryIdentifierTable(setCurrentIdentifierTable(globalData->identifierTable))
+        , m_entryIdentifierTable(wtfThreadData().setCurrentIdentifierTable(globalData->identifierTable))
     {
         if (registerThread)
             globalData->heap.registerThread();
@@ -45,7 +46,7 @@ protected:
     ~APIEntryShimWithoutLock()
     {
         m_globalData->timeoutChecker.stop();
-        setCurrentIdentifierTable(m_entryIdentifierTable);
+        wtfThreadData().setCurrentIdentifierTable(m_entryIdentifierTable);
     }
 
 private:
@@ -65,7 +66,7 @@ public:
     // JSPropertyNameAccumulator only has a globalData.
     APIEntryShim(JSGlobalData* globalData, bool registerThread = true)
         : APIEntryShimWithoutLock(globalData, registerThread)
-        , m_lock(globalData->isSharedInstance ? LockForReal : SilenceAssertionsOnly)
+        , m_lock(globalData->isSharedInstance() ? LockForReal : SilenceAssertionsOnly)
     {
     }
 
@@ -79,14 +80,12 @@ public:
         : m_dropAllLocks(exec)
         , m_globalData(&exec->globalData())
     {
-        resetCurrentIdentifierTable();
-        m_globalData->timeoutChecker.start();
+        wtfThreadData().resetCurrentIdentifierTable();
     }
 
     ~APICallbackShim()
     {
-        m_globalData->timeoutChecker.stop();
-        setCurrentIdentifierTable(m_globalData->identifierTable);
+        wtfThreadData().setCurrentIdentifierTable(m_globalData->identifierTable);
     }
 
 private:

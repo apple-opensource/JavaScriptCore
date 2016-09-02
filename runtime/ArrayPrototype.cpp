@@ -24,12 +24,13 @@
 #include "config.h"
 #include "ArrayPrototype.h"
 
-#include "CodeBlock.h"
 #include "CachedCall.h"
+#include "CodeBlock.h"
 #include "Interpreter.h"
 #include "JIT.h"
-#include "ObjectPrototype.h"
+#include "JSStringBuilder.h"
 #include "Lookup.h"
+#include "ObjectPrototype.h"
 #include "Operations.h"
 #include <algorithm>
 #include <wtf/Assertions.h>
@@ -75,13 +76,21 @@ static inline bool isNumericCompareFunction(ExecState* exec, CallType callType, 
 #if ENABLE(JIT)
     // If the JIT is enabled then we need to preserve the invariant that every
     // function with a CodeBlock also has JIT code.
-    callData.js.functionExecutable->jitCode(exec, callData.js.scopeChain);
-    CodeBlock& codeBlock = callData.js.functionExecutable->generatedBytecode();
+    CodeBlock* codeBlock = 0;
+#if ENABLE(INTERPRETER)
+    if (!exec->globalData().canUseJIT())
+        codeBlock = &callData.js.functionExecutable->bytecode(exec, callData.js.scopeChain);
+    else
+#endif
+    {
+        callData.js.functionExecutable->jitCode(exec, callData.js.scopeChain);
+        codeBlock = &callData.js.functionExecutable->generatedBytecode();
+    }
 #else
-    CodeBlock& codeBlock = callData.js.functionExecutable->bytecode(exec, callData.js.scopeChain);
+    CodeBlock* codeBlock = &callData.js.functionExecutable->bytecode(exec, callData.js.scopeChain);
 #endif
 
-    return codeBlock.isNumericCompareFunction();
+    return codeBlock->isNumericCompareFunction();
 }
 
 // ------------------------------ ArrayPrototype ----------------------------
@@ -155,9 +164,9 @@ JSValue JSC_HOST_CALL arrayProtoFuncToString(ExecState* exec, JSObject*, JSValue
     JSArray* thisObj = asArray(thisValue);
     
     HashSet<JSObject*>& arrayVisitedElements = exec->globalData().arrayVisitedElements;
-    if (arrayVisitedElements.size() >= MaxSecondaryThreadReentryDepth) {
-        if (!isMainThread() || arrayVisitedElements.size() >= MaxMainThreadReentryDepth)
-            return throwError(exec, RangeError, "Maximum call stack size exceeded.");
+    if (arrayVisitedElements.size() >= MaxSmallThreadReentryDepth) {
+        if (arrayVisitedElements.size() >= exec->globalData().maxReentryDepth)
+            return throwError(exec, RangeError, "Maximum call stack size exceeded.");    
     }
 
     bool alreadyVisited = !arrayVisitedElements.add(thisObj).second;
@@ -182,8 +191,7 @@ JSValue JSC_HOST_CALL arrayProtoFuncToString(ExecState* exec, JSObject*, JSValue
         totalSize += str.size();
         
         if (!strBuffer.data()) {
-            JSObject* error = Error::create(exec, GeneralError, "Out of memory");
-            exec->setException(error);
+            throwOutOfMemoryError(exec);
         }
         
         if (exec->hadException())
@@ -195,13 +203,13 @@ JSValue JSC_HOST_CALL arrayProtoFuncToString(ExecState* exec, JSObject*, JSValue
     Vector<UChar> buffer;
     buffer.reserveCapacity(totalSize);
     if (!buffer.data())
-        return throwError(exec, GeneralError, "Out of memory");
+        return throwOutOfMemoryError(exec);
         
     for (unsigned i = 0; i < length; i++) {
         if (i)
             buffer.append(',');
         if (RefPtr<UString::Rep> rep = strBuffer[i])
-            buffer.append(rep->data(), rep->size());
+            buffer.append(rep->characters(), rep->length());
     }
     ASSERT(buffer.size() == totalSize);
     return jsString(exec, UString::adopt(buffer));
@@ -214,51 +222,37 @@ JSValue JSC_HOST_CALL arrayProtoFuncToLocaleString(ExecState* exec, JSObject*, J
     JSObject* thisObj = asArray(thisValue);
 
     HashSet<JSObject*>& arrayVisitedElements = exec->globalData().arrayVisitedElements;
-    if (arrayVisitedElements.size() >= MaxSecondaryThreadReentryDepth) {
-        if (!isMainThread() || arrayVisitedElements.size() >= MaxMainThreadReentryDepth)
-            return throwError(exec, RangeError, "Maximum call stack size exceeded.");
+    if (arrayVisitedElements.size() >= MaxSmallThreadReentryDepth) {
+        if (arrayVisitedElements.size() >= exec->globalData().maxReentryDepth)
+            return throwError(exec, RangeError, "Maximum call stack size exceeded.");    
     }
 
     bool alreadyVisited = !arrayVisitedElements.add(thisObj).second;
     if (alreadyVisited)
         return jsEmptyString(exec); // return an empty string, avoding infinite recursion.
 
-    Vector<UChar, 256> strBuffer;
+    JSStringBuilder strBuffer;
     unsigned length = thisObj->get(exec, exec->propertyNames().length).toUInt32(exec);
     for (unsigned k = 0; k < length; k++) {
         if (k >= 1)
             strBuffer.append(',');
-        if (!strBuffer.data()) {
-            JSObject* error = Error::create(exec, GeneralError, "Out of memory");
-            exec->setException(error);
-            break;
-        }
 
         JSValue element = thisObj->get(exec, k);
-        if (element.isUndefinedOrNull())
-            continue;
-
-        JSObject* o = element.toObject(exec);
-        JSValue conversionFunction = o->get(exec, exec->propertyNames().toLocaleString);
-        UString str;
-        CallData callData;
-        CallType callType = conversionFunction.getCallData(callData);
-        if (callType != CallTypeNone)
-            str = call(exec, conversionFunction, callType, callData, element, exec->emptyList()).toString(exec);
-        else
-            str = element.toString(exec);
-        strBuffer.append(str.data(), str.size());
-
-        if (!strBuffer.data()) {
-            JSObject* error = Error::create(exec, GeneralError, "Out of memory");
-            exec->setException(error);
+        if (!element.isUndefinedOrNull()) {
+            JSObject* o = element.toObject(exec);
+            JSValue conversionFunction = o->get(exec, exec->propertyNames().toLocaleString);
+            UString str;
+            CallData callData;
+            CallType callType = conversionFunction.getCallData(callData);
+            if (callType != CallTypeNone)
+                str = call(exec, conversionFunction, callType, callData, element, exec->emptyList()).toString(exec);
+            else
+                str = element.toString(exec);
+            strBuffer.append(str);
         }
-
-        if (exec->hadException())
-            break;
     }
     arrayVisitedElements.remove(thisObj);
-    return jsString(exec, UString(strBuffer.data(), strBuffer.data() ? strBuffer.size() : 0));
+    return strBuffer.build(exec);
 }
 
 JSValue JSC_HOST_CALL arrayProtoFuncJoin(ExecState* exec, JSObject*, JSValue thisValue, const ArgList& args)
@@ -266,47 +260,53 @@ JSValue JSC_HOST_CALL arrayProtoFuncJoin(ExecState* exec, JSObject*, JSValue thi
     JSObject* thisObj = thisValue.toThisObject(exec);
 
     HashSet<JSObject*>& arrayVisitedElements = exec->globalData().arrayVisitedElements;
-    if (arrayVisitedElements.size() >= MaxSecondaryThreadReentryDepth) {
-        if (!isMainThread() || arrayVisitedElements.size() >= MaxMainThreadReentryDepth)
-            return throwError(exec, RangeError, "Maximum call stack size exceeded.");
+    if (arrayVisitedElements.size() >= MaxSmallThreadReentryDepth) {
+        if (arrayVisitedElements.size() >= exec->globalData().maxReentryDepth)
+            return throwError(exec, RangeError, "Maximum call stack size exceeded.");    
     }
 
     bool alreadyVisited = !arrayVisitedElements.add(thisObj).second;
     if (alreadyVisited)
         return jsEmptyString(exec); // return an empty string, avoding infinite recursion.
 
-    Vector<UChar, 256> strBuffer;
+    JSStringBuilder strBuffer;
 
-    UChar comma = ',';
-    UString separator = args.at(0).isUndefined() ? UString(&comma, 1) : args.at(0).toString(exec);
+    UString separator;
+    if (!args.at(0).isUndefined())
+        separator = args.at(0).toString(exec);
 
     unsigned length = thisObj->get(exec, exec->propertyNames().length).toUInt32(exec);
-    for (unsigned k = 0; k < length; k++) {
-        if (k >= 1)
-            strBuffer.append(separator.data(), separator.size());
-        if (!strBuffer.data()) {
-            JSObject* error = Error::create(exec, GeneralError, "Out of memory");
-            exec->setException(error);
-            break;
+    unsigned k = 0;
+    if (isJSArray(&exec->globalData(), thisObj)) {
+        JSArray* array = asArray(thisObj);
+        for (; k < length; k++) {
+            if (!array->canGetIndex(k))
+                break;
+            if (k >= 1) {
+                if (separator.isNull())
+                    strBuffer.append(',');
+                else
+                    strBuffer.append(separator);
+            }
+            JSValue element = array->getIndex(k);
+            if (!element.isUndefinedOrNull())
+                strBuffer.append(element.toString(exec));
+        }
+    }
+    for (; k < length; k++) {
+        if (k >= 1) {
+            if (separator.isNull())
+                strBuffer.append(',');
+            else
+                strBuffer.append(separator);
         }
 
         JSValue element = thisObj->get(exec, k);
-        if (element.isUndefinedOrNull())
-            continue;
-
-        UString str = element.toString(exec);
-        strBuffer.append(str.data(), str.size());
-
-        if (!strBuffer.data()) {
-            JSObject* error = Error::create(exec, GeneralError, "Out of memory");
-            exec->setException(error);
-        }
-
-        if (exec->hadException())
-            break;
+        if (!element.isUndefinedOrNull())
+            strBuffer.append(element.toString(exec));
     }
     arrayVisitedElements.remove(thisObj);
-    return jsString(exec, UString(strBuffer.data(), strBuffer.data() ? strBuffer.size() : 0));
+    return strBuffer.build(exec);
 }
 
 JSValue JSC_HOST_CALL arrayProtoFuncConcat(ExecState* exec, JSObject*, JSValue thisValue, const ArgList& args)
@@ -531,14 +531,19 @@ JSValue JSC_HOST_CALL arrayProtoFuncSplice(ExecState* exec, JSObject*, JSValue t
     // 15.4.4.12
     JSArray* resObj = constructEmptyArray(exec);
     JSValue result = resObj;
-    unsigned length = thisObj->get(exec, exec->propertyNames().length).toUInt32(exec);
+
+    // FIXME: Firefox returns an empty array.
     if (!args.size())
         return jsUndefined();
-    int begin = args.at(0).toUInt32(exec);
-    if (begin < 0)
-        begin = std::max<int>(begin + length, 0);
-    else
-        begin = std::min<int>(begin, length);
+
+    unsigned length = thisObj->get(exec, exec->propertyNames().length).toUInt32(exec);
+    double relativeBegin = args.at(0).toInteger(exec);
+    unsigned begin;
+    if (relativeBegin < 0) {
+        relativeBegin += length;
+        begin = (relativeBegin < 0) ? 0 : static_cast<unsigned>(relativeBegin);
+    } else
+        begin = std::min<unsigned>(static_cast<unsigned>(relativeBegin), length);
 
     unsigned deleteCount;
     if (args.size() > 1)
@@ -564,7 +569,7 @@ JSValue JSC_HOST_CALL arrayProtoFuncSplice(ExecState* exec, JSObject*, JSValue t
             for (unsigned k = length; k > length - deleteCount + additionalArgs; --k)
                 thisObj->deleteProperty(exec, k - 1);
         } else {
-            for (unsigned k = length - deleteCount; (int)k > begin; --k) {
+            for (unsigned k = length - deleteCount; k > begin; --k) {
                 if (JSValue obj = getProperty(exec, thisObj, k + deleteCount - 1))
                     thisObj->put(exec, k + additionalArgs - 1, obj);
                 else

@@ -27,24 +27,34 @@
 
 #include "ExecutableAllocator.h"
 
+#if ENABLE(EXECUTABLE_ALLOCATOR_FIXED)
+
 #include <errno.h>
 
-#if ENABLE(ASSEMBLER) && OS(DARWIN) && CPU(X86_64)
-
 #include "TCSpinLock.h"
-#include <mach/mach_init.h>
-#include <mach/vm_map.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wtf/AVLTree.h>
 #include <wtf/VMTags.h>
 
+    #define MMAP_FLAGS (MAP_PRIVATE | MAP_ANON | MAP_JIT)
+
 using namespace WTF;
 
 namespace JSC {
 
-#define TWO_GB (2u * 1024u * 1024u * 1024u)
-#define SIXTEEN_MB (16u * 1024u * 1024u)
+#if CPU(X86_64)
+    // These limits suitable on 64-bit platforms (particularly x86-64, where we require all jumps to have a 2Gb max range).
+    #define VM_POOL_SIZE (2u * 1024u * 1024u * 1024u) // 2Gb
+    #define COALESCE_LIMIT (16u * 1024u * 1024u) // 16Mb
+#else
+    // These limits are hopefully sensible on embedded platforms.
+    #define VM_POOL_SIZE (32u * 1024u * 1024u) // 32Mb
+    #define COALESCE_LIMIT (4u * 1024u * 1024u) // 4Mb
+#endif
+
+// ASLR currently only works on darwin (due to arc4random) & 64-bit (due to address space size).
+#define VM_POOL_ASLR (OS(DARWIN) && CPU(X86_64))
 
 // FreeListEntry describes a free chunk of memory, stored in the freeList.
 struct FreeListEntry {
@@ -128,6 +138,13 @@ class FixedVMPoolAllocator
     {
         while (madvise(position, size, MADV_FREE_REUSE) == -1 && errno == EAGAIN) { }
     }
+#elif HAVE(MADV_FREE)
+    void release(void* position, size_t size)
+    {
+        while (madvise(position, size, MADV_FREE) == -1 && errno == EAGAIN) { }
+    }
+    
+    void reuse(void*, size_t) {}
 #elif HAVE(MADV_DONTNEED)
     void release(void* position, size_t size)
     {
@@ -291,24 +308,39 @@ public:
         // for now instead of 2^26 bits of ASLR lets stick with 25 bits of randomization plus
         // 2^24, which should put up somewhere in the middle of usespace (in the address range
         // 0x200000000000 .. 0x5fffffffffff).
-        intptr_t randomLocation = arc4random() & ((1 << 25) - 1);
+        intptr_t randomLocation = 0;
+#if VM_POOL_ASLR
+        randomLocation = arc4random() & ((1 << 25) - 1);
         randomLocation += (1 << 24);
         randomLocation <<= 21;
-        m_base = mmap(reinterpret_cast<void*>(randomLocation), m_totalHeapSize, INITIAL_PROTECTION_FLAGS, MAP_PRIVATE | MAP_ANON, VM_TAG_FOR_EXECUTABLEALLOCATOR_MEMORY, 0);
-        if (!m_base)
-            CRASH();
+#endif
+        m_base = mmap(reinterpret_cast<void*>(randomLocation), m_totalHeapSize, INITIAL_PROTECTION_FLAGS, MMAP_FLAGS, VM_TAG_FOR_EXECUTABLEALLOCATOR_MEMORY, 0);
 
-        // For simplicity, we keep all memory in m_freeList in a 'released' state.
-        // This means that we can simply reuse all memory when allocating, without
-        // worrying about it's previous state, and also makes coalescing m_freeList
-        // simpler since we need not worry about the possibility of coalescing released
-        // chunks with non-released ones.
-        release(m_base, m_totalHeapSize);
-        m_freeList.insert(new FreeListEntry(m_base, m_totalHeapSize));
+        if (m_base == MAP_FAILED) {
+#if ENABLE(INTERPRETER)
+            m_base = 0;
+#else
+            CRASH();
+#endif
+        } else {
+            // For simplicity, we keep all memory in m_freeList in a 'released' state.
+            // This means that we can simply reuse all memory when allocating, without
+            // worrying about it's previous state, and also makes coalescing m_freeList
+            // simpler since we need not worry about the possibility of coalescing released
+            // chunks with non-released ones.
+            release(m_base, m_totalHeapSize);
+            m_freeList.insert(new FreeListEntry(m_base, m_totalHeapSize));
+        }
     }
 
     void* alloc(size_t size)
     {
+#if ENABLE(INTERPRETER)
+        if (!m_base)
+            return 0;
+#else
+        ASSERT(m_base);
+#endif
         void* result;
 
         // Freed allocations of the common size are not stored back into the main
@@ -371,6 +403,7 @@ public:
 
     void free(void* pointer, size_t size)
     {
+        ASSERT(m_base);
         // Call release to report to the operating system that this
         // memory is no longer in use, and need not be paged out.
         ASSERT(isWithinVMPool(pointer, size));
@@ -387,11 +420,13 @@ public:
         // 16MB of allocations have been freed, sweep m_freeList
         // coalescing any neighboring fragments.
         m_countFreedSinceLastCoalesce += size;
-        if (m_countFreedSinceLastCoalesce >= SIXTEEN_MB) {
+        if (m_countFreedSinceLastCoalesce >= COALESCE_LIMIT) {
             m_countFreedSinceLastCoalesce = 0;
             coalesceFreeSpace();
         }
     }
+
+    bool isValid() const { return !!m_base; }
 
 private:
 
@@ -424,19 +459,27 @@ void ExecutableAllocator::intializePageSize()
 static FixedVMPoolAllocator* allocator = 0;
 static SpinLock spinlock = SPINLOCK_INITIALIZER;
 
+bool ExecutableAllocator::isValid() const
+{
+    SpinLockHolder lock_holder(&spinlock);
+    if (!allocator)
+        allocator = new FixedVMPoolAllocator(JIT_ALLOCATOR_LARGE_ALLOC_SIZE, VM_POOL_SIZE);
+    return allocator->isValid();
+}
+
 ExecutablePool::Allocation ExecutablePool::systemAlloc(size_t size)
 {
-  SpinLockHolder lock_holder(&spinlock);
+    SpinLockHolder lock_holder(&spinlock);
 
     if (!allocator)
-        allocator = new FixedVMPoolAllocator(JIT_ALLOCATOR_LARGE_ALLOC_SIZE, TWO_GB);
+        allocator = new FixedVMPoolAllocator(JIT_ALLOCATOR_LARGE_ALLOC_SIZE, VM_POOL_SIZE);
     ExecutablePool::Allocation alloc = {reinterpret_cast<char*>(allocator->alloc(size)), size};
     return alloc;
 }
 
 void ExecutablePool::systemRelease(const ExecutablePool::Allocation& allocation) 
 {
-  SpinLockHolder lock_holder(&spinlock);
+    SpinLockHolder lock_holder(&spinlock);
 
     ASSERT(allocator);
     allocator->free(allocation.pages, allocation.size);

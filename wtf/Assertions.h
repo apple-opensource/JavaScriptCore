@@ -58,12 +58,13 @@
 #endif
 
 #ifdef NDEBUG
+/* Disable ASSERT* macros in release mode. */
 #define ASSERTIONS_DISABLED_DEFAULT 1
 #else
 #define ASSERTIONS_DISABLED_DEFAULT 0
 #endif
 
-#if COMPILER(MSVC7) || COMPILER(WINSCW)
+#if COMPILER(MSVC7_OR_LOWER) || COMPILER(WINSCW)
 #define HAVE_VARIADIC_MACRO 0
 #else
 #define HAVE_VARIADIC_MACRO 1
@@ -157,8 +158,14 @@ void WTFLogVerbose(const char* file, int line, const char* function, WTFLogChann
 }
 #endif
 
-/* CRASH -- gets us into the debugger or the crash reporter -- signals are ignored by the crash reporter so we must do better */
+/* CRASH() - Raises a fatal error resulting in program termination and triggering either the debugger or the crash reporter.
 
+   Use CRASH() in response to known, unrecoverable errors like out-of-memory.
+   Macro is enabled in both debug and release mode.
+   To test for unknown errors and verify assumptions, use ASSERT instead, to avoid impacting performance in release builds.
+
+   Signals are ignored by the crash reporter on OS X so we must do better.
+*/
 #ifndef CRASH
 #if OS(SYMBIAN)
 #define CRASH() do { \
@@ -173,7 +180,11 @@ void WTFLogVerbose(const char* file, int line, const char* function, WTFLogChann
 #endif
 #endif
 
-/* ASSERT, ASSERT_NOT_REACHED, ASSERT_UNUSED */
+/* ASSERT, ASSERT_NOT_REACHED, ASSERT_UNUSED
+
+  These macros are compiled out of release builds.
+  Expressions inside them are evaluated in debug builds only.
+*/
 
 #if OS(WINCE) && !PLATFORM(TORCHMOBILE)
 /* FIXME: We include this here only to avoid a conflict with the ASSERT macro. */
@@ -186,6 +197,14 @@ void WTFLogVerbose(const char* file, int line, const char* function, WTFLogChann
 #if OS(WINDOWS) || OS(SYMBIAN)
 /* FIXME: Change to use something other than ASSERT to avoid this conflict with the underlying platform */
 #undef ASSERT
+#endif
+
+#if PLATFORM(BREWMP)
+/* FIXME: We include this here only to avoid a conflict with the COMPILE_ASSERT macro. */
+#include <AEEClassIDs.h>
+
+/* FIXME: Change to use something other than COMPILE_ASSERT to avoid this conflict with the underlying platform */
+#undef COMPILE_ASSERT
 #endif
 
 #if ASSERT_DISABLED
@@ -214,7 +233,7 @@ while (0)
 
 /* ASSERT_WITH_MESSAGE */
 
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
 #define ASSERT_WITH_MESSAGE(assertion) ((void)0)
 #elif COMPILER(WINSCW)
 #define ASSERT_WITH_MESSAGE(assertion, arg...) ((void)0)
@@ -254,7 +273,7 @@ while (0)
 
 /* FATAL */
 
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
 #define FATAL() ((void)0)
 #elif COMPILER(WINSCW)
 #define FATAL(arg...) ((void)0)
@@ -269,7 +288,7 @@ while (0)
 
 /* LOG_ERROR */
 
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
 #define LOG_ERROR() ((void)0)
 #elif COMPILER(WINSCW)
 #define LOG_ERROR(arg...)  ((void)0)
@@ -281,7 +300,7 @@ while (0)
 
 /* LOG */
 
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
 #define LOG() ((void)0)
 #elif COMPILER(WINSCW)
 #define LOG(arg...) ((void)0)
@@ -295,7 +314,7 @@ while (0)
 
 /* LOG_VERBOSE */
 
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
 #define LOG_VERBOSE(channel) ((void)0)
 #elif COMPILER(WINSCW)
 #define LOG_VERBOSE(channel, arg...) ((void)0)

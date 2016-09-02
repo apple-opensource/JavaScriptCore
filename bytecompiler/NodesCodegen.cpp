@@ -39,6 +39,7 @@
 #include "Operations.h"
 #include "Parser.h"
 #include "PropertyNameArray.h"
+#include "RegExpCache.h"
 #include "RegExpObject.h"
 #include "SamplingTool.h"
 #include <wtf/Assertions.h>
@@ -76,8 +77,8 @@ namespace JSC {
 
 static void substitute(UString& string, const UString& substring)
 {
-    int position = string.find("%s");
-    ASSERT(position != -1);
+    unsigned position = string.find("%s");
+    ASSERT(position != UString::NotFound);
     string = makeString(string.substr(0, position), substring, string.substr(position + 2));
 }
 
@@ -144,7 +145,7 @@ RegisterID* StringNode::emitBytecode(BytecodeGenerator& generator, RegisterID* d
 
 RegisterID* RegExpNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
 {
-    RefPtr<RegExp> regExp = RegExp::create(generator.globalData(), m_pattern.ustring(), m_flags.ustring());
+    RefPtr<RegExp> regExp = generator.globalData()->regExpCache()->lookupOrCreate(m_pattern.ustring(), m_flags.ustring());
     if (!regExp->isValid())
         return emitThrowError(generator, SyntaxError, "Invalid regular expression: %s", regExp->errorMessage());
     if (dst == generator.ignoredResult())
@@ -265,7 +266,7 @@ RegisterID* PropertyListNode::emitBytecode(BytecodeGenerator& generator, Registe
         
         switch (p->m_node->m_type) {
             case PropertyNode::Constant: {
-                generator.emitPutById(newObj.get(), p->m_node->name(), value);
+                generator.emitDirectPutById(newObj.get(), p->m_node->name(), value);
                 break;
             }
             case PropertyNode::Getter: {
@@ -351,7 +352,8 @@ RegisterID* FunctionCallResolveNode::emitBytecode(BytecodeGenerator& generator, 
     int index = 0;
     size_t depth = 0;
     JSObject* globalObject = 0;
-    if (generator.findScopedProperty(m_ident, index, depth, false, globalObject) && index != missingSymbolMarker()) {
+    bool requiresDynamicChecks = false;
+    if (generator.findScopedProperty(m_ident, index, depth, false, requiresDynamicChecks, globalObject) && index != missingSymbolMarker() && !requiresDynamicChecks) {
         RefPtr<RegisterID> func = generator.emitGetScopedVar(generator.newTemporary(), depth, index, globalObject);
         RefPtr<RegisterID> thisRegister = generator.emitLoad(generator.newTemporary(), jsNull());
         return generator.emitCall(generator.finalDestination(dst, func.get()), func.get(), thisRegister.get(), m_args, divot(), startOffset(), endOffset());
@@ -524,7 +526,8 @@ RegisterID* PostfixResolveNode::emitBytecode(BytecodeGenerator& generator, Regis
     int index = 0;
     size_t depth = 0;
     JSObject* globalObject = 0;
-    if (generator.findScopedProperty(m_ident, index, depth, true, globalObject) && index != missingSymbolMarker()) {
+    bool requiresDynamicChecks = false;
+    if (generator.findScopedProperty(m_ident, index, depth, true, requiresDynamicChecks, globalObject) && index != missingSymbolMarker() && !requiresDynamicChecks) {
         RefPtr<RegisterID> value = generator.emitGetScopedVar(generator.newTemporary(), depth, index, globalObject);
         RegisterID* oldValue;
         if (dst == generator.ignoredResult()) {
@@ -710,7 +713,8 @@ RegisterID* PrefixResolveNode::emitBytecode(BytecodeGenerator& generator, Regist
     int index = 0;
     size_t depth = 0;
     JSObject* globalObject = 0;
-    if (generator.findScopedProperty(m_ident, index, depth, false, globalObject) && index != missingSymbolMarker()) {
+    bool requiresDynamicChecks = false;
+    if (generator.findScopedProperty(m_ident, index, depth, false, requiresDynamicChecks, globalObject) && index != missingSymbolMarker() && !requiresDynamicChecks) {
         RefPtr<RegisterID> propDst = generator.emitGetScopedVar(generator.tempDestination(dst), depth, index, globalObject);
         emitPreIncOrDec(generator, propDst.get(), m_operator);
         generator.emitPutScopedVar(depth, index, propDst.get(), globalObject);
@@ -1132,7 +1136,8 @@ RegisterID* ReadModifyResolveNode::emitBytecode(BytecodeGenerator& generator, Re
     int index = 0;
     size_t depth = 0;
     JSObject* globalObject = 0;
-    if (generator.findScopedProperty(m_ident, index, depth, true, globalObject) && index != missingSymbolMarker()) {
+    bool requiresDynamicChecks = false;
+    if (generator.findScopedProperty(m_ident, index, depth, true, requiresDynamicChecks, globalObject) && index != missingSymbolMarker() && !requiresDynamicChecks) {
         RefPtr<RegisterID> src1 = generator.emitGetScopedVar(generator.tempDestination(dst), depth, index, globalObject);
         RegisterID* result = emitReadModifyAssignment(generator, generator.finalDestination(dst, src1.get()), src1.get(), m_right, m_operator, OperandTypes(ResultType::unknownType(), m_right->resultDescriptor()));
         generator.emitPutScopedVar(depth, index, result, globalObject);
@@ -1161,7 +1166,8 @@ RegisterID* AssignResolveNode::emitBytecode(BytecodeGenerator& generator, Regist
     int index = 0;
     size_t depth = 0;
     JSObject* globalObject = 0;
-    if (generator.findScopedProperty(m_ident, index, depth, true, globalObject) && index != missingSymbolMarker()) {
+    bool requiresDynamicChecks = false;
+    if (generator.findScopedProperty(m_ident, index, depth, true, requiresDynamicChecks, globalObject) && index != missingSymbolMarker() && !requiresDynamicChecks) {
         if (dst == generator.ignoredResult())
             dst = 0;
         RegisterID* value = generator.emitNode(dst, m_right);
@@ -1699,7 +1705,7 @@ static void processClauseList(ClauseListNode* list, Vector<ExpressionNode*, 8>& 
             }
             const UString& value = static_cast<StringNode*>(clauseExpression)->value().ustring();
             if (singleCharacterSwitch &= value.size() == 1) {
-                int32_t intVal = value.rep()->data()[0];
+                int32_t intVal = value.rep()->characters()[0];
                 if (intVal < min_num)
                     min_num = intVal;
                 if (intVal > max_num)

@@ -286,6 +286,20 @@ namespace WTF {
             m_buffer = static_cast<T*>(fastMalloc(newCapacity * sizeof(T)));
         }
 
+        bool tryAllocateBuffer(size_t newCapacity)
+        {
+            if (newCapacity > std::numeric_limits<size_t>::max() / sizeof(T))
+                return false;
+
+            T* newBuffer;
+            if (tryFastMalloc(newCapacity * sizeof(T)).getValue(newBuffer)) {
+                m_capacity = newCapacity;
+                m_buffer = newBuffer;
+                return true;
+            }
+            return false;
+        }
+
         void deallocateBuffer(T* bufferToDeallocate)
         {
             if (m_buffer == bufferToDeallocate) {
@@ -361,6 +375,7 @@ namespace WTF {
         void restoreInlineBufferIfNeeded() { }
 
         using Base::allocateBuffer;
+        using Base::tryAllocateBuffer;
         using Base::deallocateBuffer;
 
         using Base::buffer;
@@ -403,6 +418,15 @@ namespace WTF {
                 m_buffer = inlineBuffer();
                 m_capacity = inlineCapacity;
             }
+        }
+
+        bool tryAllocateBuffer(size_t newCapacity)
+        {
+            if (newCapacity > inlineCapacity)
+                return Base::tryAllocateBuffer(newCapacity);
+            m_buffer = inlineBuffer();
+            m_capacity = inlineCapacity;
+            return true;
         }
 
         void deallocateBuffer(T* bufferToDeallocate)
@@ -543,6 +567,7 @@ namespace WTF {
         void grow(size_t size);
         void resize(size_t size);
         void reserveCapacity(size_t newCapacity);
+        bool tryReserveCapacity(size_t newCapacity);
         void reserveInitialCapacity(size_t initialCapacity);
         void shrinkCapacity(size_t newCapacity);
         void shrinkToFit() { shrinkCapacity(size()); }
@@ -553,6 +578,7 @@ namespace WTF {
         template<typename U> void append(const U&);
         template<typename U> void uncheckedAppend(const U& val);
         template<size_t otherCapacity> void append(const Vector<T, otherCapacity>&);
+        template<typename U> bool tryAppend(const U*, size_t);
 
         template<typename U> void insert(size_t position, const U*, size_t);
         template<typename U> void insert(size_t position, const U&);
@@ -597,6 +623,8 @@ namespace WTF {
     private:
         void expandCapacity(size_t newMinCapacity);
         const T* expandCapacity(size_t newMinCapacity, const T*);
+        bool tryExpandCapacity(size_t newMinCapacity);
+        const T* tryExpandCapacity(size_t newMinCapacity, const T*);
         template<typename U> U* expandCapacity(size_t newMinCapacity, U*); 
 
         size_t m_size;
@@ -747,6 +775,26 @@ namespace WTF {
         return begin() + index;
     }
 
+    template<typename T, size_t inlineCapacity>
+    bool Vector<T, inlineCapacity>::tryExpandCapacity(size_t newMinCapacity)
+    {
+        return tryReserveCapacity(max(newMinCapacity, max(static_cast<size_t>(16), capacity() + capacity() / 4 + 1)));
+    }
+    
+    template<typename T, size_t inlineCapacity>
+    const T* Vector<T, inlineCapacity>::tryExpandCapacity(size_t newMinCapacity, const T* ptr)
+    {
+        if (ptr < begin() || ptr >= end()) {
+            if (!tryExpandCapacity(newMinCapacity))
+                return 0;
+            return ptr;
+        }
+        size_t index = ptr - begin();
+        if (!tryExpandCapacity(newMinCapacity))
+            return 0;
+        return begin() + index;
+    }
+
     template<typename T, size_t inlineCapacity> template<typename U>
     inline U* Vector<T, inlineCapacity>::expandCapacity(size_t newMinCapacity, U* ptr)
     {
@@ -802,6 +850,21 @@ namespace WTF {
     }
     
     template<typename T, size_t inlineCapacity>
+    bool Vector<T, inlineCapacity>::tryReserveCapacity(size_t newCapacity)
+    {
+        if (newCapacity <= capacity())
+            return true;
+        T* oldBuffer = begin();
+        T* oldEnd = end();
+        if (!m_buffer.tryAllocateBuffer(newCapacity))
+            return false;
+        ASSERT(begin());
+        TypeOperations::move(oldBuffer, oldEnd, begin());
+        m_buffer.deallocateBuffer(oldBuffer);
+        return true;
+    }
+    
+    template<typename T, size_t inlineCapacity>
     inline void Vector<T, inlineCapacity>::reserveInitialCapacity(size_t initialCapacity)
     {
         ASSERT(!m_size);
@@ -853,6 +916,25 @@ namespace WTF {
     }
 
     template<typename T, size_t inlineCapacity> template<typename U>
+    bool Vector<T, inlineCapacity>::tryAppend(const U* data, size_t dataSize)
+    {
+        size_t newSize = m_size + dataSize;
+        if (newSize > capacity()) {
+            data = tryExpandCapacity(newSize, data);
+            if (!data)
+                return false;
+            ASSERT(begin());
+        }
+        if (newSize < m_size)
+            return false;
+        T* dest = end();
+        for (size_t i = 0; i < dataSize; ++i)
+            new (&dest[i]) T(data[i]);
+        m_size = newSize;
+        return true;
+    }
+
+    template<typename T, size_t inlineCapacity> template<typename U>
     ALWAYS_INLINE void Vector<T, inlineCapacity>::append(const U& val)
     {
         const U* ptr = &val;
@@ -862,7 +944,7 @@ namespace WTF {
                 return;
         }
             
-#if COMPILER(MSVC7)
+#if COMPILER(MSVC7_OR_LOWER)
         // FIXME: MSVC7 generates compilation errors when trying to assign
         // a pointer to a Vector of its base class (i.e. can't downcast). So far
         // I've been unable to determine any logical reason for this, so I can

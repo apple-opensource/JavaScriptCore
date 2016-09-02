@@ -18,12 +18,15 @@
  *
  */
 
+// RefPtr and PassRefPtr are documented at http://webkit.org/coding/RefPtr.html
+
 #ifndef WTF_RefPtr_h
 #define WTF_RefPtr_h
 
 #include <algorithm>
 #include "AlwaysInline.h"
 #include "FastAllocBase.h"
+#include "PassRefPtr.h"
 
 namespace WTF {
 
@@ -37,8 +40,8 @@ namespace WTF {
     template <typename T> class RefPtr : public FastAllocBase {
     public:
         RefPtr() : m_ptr(0) { }
-        RefPtr(T* ptr) : m_ptr(ptr) { if (ptr) ptr->ref(); }
-        RefPtr(const RefPtr& o) : m_ptr(o.m_ptr) { if (T* ptr = m_ptr) ptr->ref(); }
+        RefPtr(T* ptr) : m_ptr(ptr) { refIfNotNull(ptr); }
+        RefPtr(const RefPtr& o) : m_ptr(o.m_ptr) { T* ptr = m_ptr; refIfNotNull(ptr); }
         // see comment in PassRefPtr.h for why this takes const reference
         template <typename U> RefPtr(const PassRefPtr<U>&);
         template <typename U> RefPtr(const NonNullPassRefPtr<U>&);
@@ -50,13 +53,13 @@ namespace WTF {
         RefPtr(HashTableDeletedValueType) : m_ptr(hashTableDeletedValue()) { }
         bool isHashTableDeletedValue() const { return m_ptr == hashTableDeletedValue(); }
 
-        ~RefPtr() { if (T* ptr = m_ptr) ptr->deref(); }
+        ~RefPtr() { derefIfNotNull(m_ptr); }
         
-        template <typename U> RefPtr(const RefPtr<U>& o) : m_ptr(o.get()) { if (T* ptr = m_ptr) ptr->ref(); }
+        template <typename U> RefPtr(const RefPtr<U>& o) : m_ptr(o.get()) { T* ptr = m_ptr; refIfNotNull(ptr); }
         
         T* get() const { return m_ptr; }
         
-        void clear() { if (T* ptr = m_ptr) ptr->deref(); m_ptr = 0; }
+        void clear() { derefIfNotNull(m_ptr); m_ptr = 0; }
         PassRefPtr<T> release() { PassRefPtr<T> tmp = adoptRef(m_ptr); m_ptr = 0; return tmp; }
 
         T& operator*() const { return *m_ptr; }
@@ -65,12 +68,8 @@ namespace WTF {
         bool operator!() const { return !m_ptr; }
     
         // This conversion operator allows implicit conversion to bool but not to other integer types.
-#if COMPILER(WINSCW)
-        operator bool() const { return m_ptr; }
-#else
-        typedef T* RefPtr::*UnspecifiedBoolType;
+        typedef T* (RefPtr::*UnspecifiedBoolType);
         operator UnspecifiedBoolType() const { return m_ptr ? &RefPtr::m_ptr : 0; }
-#endif
         
         RefPtr& operator=(const RefPtr&);
         RefPtr& operator=(T*);
@@ -82,9 +81,9 @@ namespace WTF {
 
         void swap(RefPtr&);
 
-    private:
         static T* hashTableDeletedValue() { return reinterpret_cast<T*>(-1); }
 
+    private:
         T* m_ptr;
     };
     
@@ -101,35 +100,29 @@ namespace WTF {
     template <typename T> inline RefPtr<T>& RefPtr<T>::operator=(const RefPtr<T>& o)
     {
         T* optr = o.get();
-        if (optr)
-            optr->ref();
+        refIfNotNull(optr);
         T* ptr = m_ptr;
         m_ptr = optr;
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
     
     template <typename T> template <typename U> inline RefPtr<T>& RefPtr<T>::operator=(const RefPtr<U>& o)
     {
         T* optr = o.get();
-        if (optr)
-            optr->ref();
+        refIfNotNull(optr);
         T* ptr = m_ptr;
         m_ptr = optr;
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
     
     template <typename T> inline RefPtr<T>& RefPtr<T>::operator=(T* optr)
     {
-        if (optr)
-            optr->ref();
+        refIfNotNull(optr);
         T* ptr = m_ptr;
         m_ptr = optr;
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
 
@@ -137,8 +130,7 @@ namespace WTF {
     {
         T* ptr = m_ptr;
         m_ptr = o.releaseRef();
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
 
@@ -146,8 +138,7 @@ namespace WTF {
     {
         T* ptr = m_ptr;
         m_ptr = o.releaseRef();
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
 
@@ -155,8 +146,7 @@ namespace WTF {
     {
         T* ptr = m_ptr;
         m_ptr = o.releaseRef();
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
 
@@ -164,8 +154,7 @@ namespace WTF {
     {
         T* ptr = m_ptr;
         m_ptr = o.releaseRef();
-        if (ptr)
-            ptr->deref();
+        derefIfNotNull(ptr);
         return *this;
     }
 

@@ -25,6 +25,7 @@
 #include "Error.h"
 #include "JSFunction.h"
 #include "JSString.h"
+#include "JSStringBuilder.h"
 #include "Operations.h"
 #include "PrototypeFunction.h"
 #include "StringBuilder.h"
@@ -95,7 +96,7 @@ static UString integerPartNoExp(double d)
         builder.append((const char*)(buf.data()));
     }
 
-    return builder.release();
+    return builder.build();
 }
 
 static UString charSequence(char c, int count)
@@ -143,15 +144,34 @@ JSValue JSC_HOST_CALL numberProtoFuncToString(ExecState* exec, JSObject*, JSValu
     if (!v)
         return throwError(exec, TypeError);
 
-    double radixAsDouble = args.at(0).toInteger(exec); // nan -> 0
-    if (radixAsDouble == 10 || args.at(0).isUndefined())
+    JSValue radixValue = args.at(0);
+    int radix;
+    if (radixValue.isInt32())
+        radix = radixValue.asInt32();
+    else if (radixValue.isUndefined())
+        radix = 10;
+    else
+        radix = static_cast<int>(radixValue.toInteger(exec)); // nan -> 0
+
+    if (radix == 10)
         return jsString(exec, v.toString(exec));
 
-    if (radixAsDouble < 2 || radixAsDouble > 36)
+    static const char* const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+    // Fast path for number to character conversion.
+    if (radix == 36) {
+        if (v.isInt32()) {
+            int x = v.asInt32();
+            if (static_cast<unsigned>(x) < 36) { // Exclude negatives
+                JSGlobalData* globalData = &exec->globalData();
+                return globalData->smallStrings.singleCharacterString(globalData, digits[x]);
+            }
+        }
+    }
+
+    if (radix < 2 || radix > 36)
         return throwError(exec, RangeError, "toString() radix argument must be between 2 and 36");
 
-    int radix = static_cast<int>(radixAsDouble);
-    const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     // INT_MAX results in 1024 characters left of the dot with radix 2
     // give the same space on the right side. safety checks are in place
     // unless someone finds a precise rule.
@@ -263,13 +283,13 @@ JSValue JSC_HOST_CALL numberProtoFuncToFixed(ExecState* exec, JSObject*, JSValue
         for (int i = 0; i < f + 1 - k; i++)
             z.append('0');
         z.append(m);
-        m = z.release();
+        m = z.build();
         k = f + 1;
-        ASSERT(k == m.size());
+        ASSERT(k == static_cast<int>(m.size()));
     }
     int kMinusf = k - f;
 
-    if (kMinusf < m.size())
+    if (kMinusf < static_cast<int>(m.size()))
         return jsString(exec, makeString(s, m.substr(0, kMinusf), ".", m.substr(kMinusf)));
     return jsString(exec, makeString(s, m.substr(0, kMinusf)));
 }
@@ -433,8 +453,8 @@ JSValue JSC_HOST_CALL numberProtoFuncToPrecision(ExecState* exec, JSObject*, JSV
             if (m.size() > 1)
                 m = makeString(m.substr(0, 1), ".", m.substr(1));
             if (e >= 0)
-                return jsNontrivialString(exec, makeString(s, m, "e+", UString::from(e)));
-            return jsNontrivialString(exec, makeString(s, m, "e-", UString::from(-e)));
+                return jsMakeNontrivialString(exec, s, m, "e+", UString::from(e));
+            return jsMakeNontrivialString(exec, s, m, "e-", UString::from(-e));
         }
     } else {
         m = charSequence('0', precision);
@@ -444,11 +464,11 @@ JSValue JSC_HOST_CALL numberProtoFuncToPrecision(ExecState* exec, JSObject*, JSV
     if (e == precision - 1)
         return jsString(exec, makeString(s, m));
     if (e >= 0) {
-        if (e + 1 < m.size())
+        if (e + 1 < static_cast<int>(m.size()))
             return jsString(exec, makeString(s, m.substr(0, e + 1), ".", m.substr(e + 1)));
         return jsString(exec, makeString(s, m));
     }
-    return jsNontrivialString(exec, makeString(s, "0.", charSequence('0', -(e + 1)), m));
+    return jsMakeNontrivialString(exec, s, "0.", charSequence('0', -(e + 1)), m);
 }
 
 } // namespace JSC

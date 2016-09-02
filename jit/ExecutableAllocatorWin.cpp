@@ -27,7 +27,7 @@
 
 #include "ExecutableAllocator.h"
 
-#if ENABLE(ASSEMBLER) && OS(WINDOWS)
+#if ENABLE(EXECUTABLE_ALLOCATOR_DEMAND) && OS(WINDOWS)
 
 #include "windows.h"
 
@@ -52,6 +52,11 @@ ExecutablePool::Allocation ExecutablePool::systemAlloc(size_t n)
 void ExecutablePool::systemRelease(const ExecutablePool::Allocation& alloc)
 { 
     VirtualFree(alloc.pages, 0, MEM_RELEASE); 
+}
+
+bool ExecutableAllocator::isValid() const
+{
+    return true;
 }
 
 #if ENABLE(ASSEMBLER_WX_EXCLUSIVE)

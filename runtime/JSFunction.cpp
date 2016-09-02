@@ -56,10 +56,27 @@ JSFunction::JSFunction(NonNullPassRefPtr<Structure> structure)
 {
 }
 
+JSFunction::JSFunction(ExecState* exec, NonNullPassRefPtr<Structure> structure, int length, const Identifier& name, NativeExecutable* thunk, NativeFunction func)
+    : Base(&exec->globalData(), structure, name)
+#if ENABLE(JIT)
+    , m_executable(thunk)
+#endif
+{
+#if ENABLE(JIT)
+    setNativeFunction(func);
+    putDirect(exec->propertyNames().length, jsNumber(exec, length), DontDelete | ReadOnly | DontEnum);
+#else
+    UNUSED_PARAM(thunk);
+    UNUSED_PARAM(length);
+    UNUSED_PARAM(func);
+    ASSERT_NOT_REACHED();
+#endif
+}
+
 JSFunction::JSFunction(ExecState* exec, NonNullPassRefPtr<Structure> structure, int length, const Identifier& name, NativeFunction func)
     : Base(&exec->globalData(), structure, name)
 #if ENABLE(JIT)
-    , m_executable(adoptRef(new NativeExecutable(exec)))
+    , m_executable(exec->globalData().jitStubs->ctiNativeCallThunk())
 #endif
 {
 #if ENABLE(JIT)
@@ -122,23 +139,23 @@ JSValue JSFunction::call(ExecState* exec, JSValue thisValue, const ArgList& args
     return exec->interpreter()->execute(jsExecutable(), exec, this, thisValue.toThisObject(exec), args, scopeChain().node(), exec->exceptionSlot());
 }
 
-JSValue JSFunction::argumentsGetter(ExecState* exec, const Identifier&, const PropertySlot& slot)
+JSValue JSFunction::argumentsGetter(ExecState* exec, JSValue slotBase, const Identifier&)
 {
-    JSFunction* thisObj = asFunction(slot.slotBase());
+    JSFunction* thisObj = asFunction(slotBase);
     ASSERT(!thisObj->isHostFunction());
     return exec->interpreter()->retrieveArguments(exec, thisObj);
 }
 
-JSValue JSFunction::callerGetter(ExecState* exec, const Identifier&, const PropertySlot& slot)
+JSValue JSFunction::callerGetter(ExecState* exec, JSValue slotBase, const Identifier&)
 {
-    JSFunction* thisObj = asFunction(slot.slotBase());
+    JSFunction* thisObj = asFunction(slotBase);
     ASSERT(!thisObj->isHostFunction());
     return exec->interpreter()->retrieveCaller(exec, thisObj);
 }
 
-JSValue JSFunction::lengthGetter(ExecState* exec, const Identifier&, const PropertySlot& slot)
+JSValue JSFunction::lengthGetter(ExecState* exec, JSValue slotBase, const Identifier&)
 {
-    JSFunction* thisObj = asFunction(slot.slotBase());
+    JSFunction* thisObj = asFunction(slotBase);
     ASSERT(!thisObj->isHostFunction());
     return jsNumber(exec, thisObj->jsExecutable()->parameterCount());
 }
@@ -162,17 +179,17 @@ bool JSFunction::getOwnPropertySlot(ExecState* exec, const Identifier& propertyN
     }
 
     if (propertyName == exec->propertyNames().arguments) {
-        slot.setCustom(this, argumentsGetter);
+        slot.setCacheableCustom(this, argumentsGetter);
         return true;
     }
 
     if (propertyName == exec->propertyNames().length) {
-        slot.setCustom(this, lengthGetter);
+        slot.setCacheableCustom(this, lengthGetter);
         return true;
     }
 
     if (propertyName == exec->propertyNames().caller) {
-        slot.setCustom(this, callerGetter);
+        slot.setCacheableCustom(this, callerGetter);
         return true;
     }
 

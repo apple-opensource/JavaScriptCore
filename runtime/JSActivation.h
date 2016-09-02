@@ -31,7 +31,6 @@
 
 #include "CodeBlock.h"
 #include "JSVariableObject.h"
-#include "RegisterFile.h"
 #include "SymbolTable.h"
 #include "Nodes.h"
 
@@ -48,7 +47,7 @@ namespace JSC {
 
         virtual void markChildren(MarkStack&);
 
-        virtual bool isDynamicScope() const;
+        virtual bool isDynamicScope(bool& requiresDynamicChecks) const;
 
         virtual bool isActivationObject() const { return true; }
 
@@ -89,7 +88,7 @@ namespace JSC {
             RefPtr<FunctionExecutable> functionExecutable;
         };
         
-        static JSValue argumentsGetter(ExecState*, const Identifier&, const PropertySlot&);
+        static JSValue argumentsGetter(ExecState*, JSValue, const Identifier&);
         NEVER_INLINE PropertySlot::GetValueFunc getArgumentsGetter();
 
         JSActivationData* d() const { return static_cast<JSActivationData*>(JSVariableObject::d); }

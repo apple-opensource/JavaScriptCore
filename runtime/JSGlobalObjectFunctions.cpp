@@ -30,6 +30,7 @@
 #include "Interpreter.h"
 #include "JSGlobalObject.h"
 #include "JSString.h"
+#include "JSStringBuilder.h"
 #include "Lexer.h"
 #include "LiteralParser.h"
 #include "Nodes.h"
@@ -54,27 +55,27 @@ static JSValue encode(ExecState* exec, const ArgList& args, const char* doNotEsc
 {
     UString str = args.at(0).toString(exec);
     CString cstr = str.UTF8String(true);
-    if (!cstr.c_str())
+    if (!cstr.data())
         return throwError(exec, URIError, "String contained an illegal UTF-16 sequence.");
 
-    StringBuilder builder;
-    const char* p = cstr.c_str();
-    for (size_t k = 0; k < cstr.size(); k++, p++) {
+    JSStringBuilder builder;
+    const char* p = cstr.data();
+    for (size_t k = 0; k < cstr.length(); k++, p++) {
         char c = *p;
         if (c && strchr(doNotEscape, c))
             builder.append(c);
         else {
             char tmp[4];
             snprintf(tmp, sizeof(tmp), "%%%02X", static_cast<unsigned char>(c));
-            builder.append((const char*)tmp);
+            builder.append(tmp);
         }
     }
-    return jsString(exec, builder.release());
+    return builder.build(exec);
 }
 
 static JSValue decode(ExecState* exec, const ArgList& args, const char* doNotUnescape, bool strict)
 {
-    StringBuilder builder;
+    JSStringBuilder builder;
     UString str = args.at(0).toString(exec);
     int k = 0;
     int len = str.size();
@@ -135,7 +136,7 @@ static JSValue decode(ExecState* exec, const ArgList& args, const char* doNotUne
         k++;
         builder.append(c);
     }
-    return jsString(exec, builder.release());
+    return builder.build(exec);
 }
 
 bool isStrWhiteSpace(UChar c)
@@ -240,6 +241,7 @@ static double parseInt(const UString& s, int radix)
     }
 
     if (number >= mantissaOverflowLowerBound) {
+        // FIXME: It is incorrect to use UString::ascii() here because it's not thread-safe.
         if (radix == 10)
             number = WTF::strtod(s.substr(firstDigitPosition, p - firstDigitPosition).ascii(), 0);
         else if (radix == 2 || radix == 4 || radix == 8 || radix == 16 || radix == 32)
@@ -268,6 +270,8 @@ static double parseFloat(const UString& s)
     if (length - p >= 2 && data[p] == '0' && (data[p + 1] == 'x' || data[p + 1] == 'X'))
         return 0;
 
+    // FIXME: UString::toDouble will ignore leading ASCII spaces, but we need to ignore
+    // other StrWhiteSpaceChar values as well.
     return s.toDouble(true /*tolerant*/, false /* NaN for empty string */);
 }
 
@@ -378,27 +382,25 @@ JSValue JSC_HOST_CALL globalFuncEscape(ExecState* exec, JSObject*, JSValue, cons
         "0123456789"
         "*+-./@_";
 
-    StringBuilder builder;
-    UString s;
+    JSStringBuilder builder;
     UString str = args.at(0).toString(exec);
     const UChar* c = str.data();
-    for (int k = 0; k < str.size(); k++, c++) {
+    for (unsigned k = 0; k < str.size(); k++, c++) {
         int u = c[0];
         if (u > 255) {
             char tmp[7];
             snprintf(tmp, sizeof(tmp), "%%u%04X", u);
-            s = UString(tmp);
+            builder.append(tmp);
         } else if (u != 0 && strchr(do_not_escape, static_cast<char>(u)))
-            s = UString(c, 1);
+            builder.append(c, 1);
         else {
             char tmp[4];
             snprintf(tmp, sizeof(tmp), "%%%02X", u);
-            s = UString(tmp);
+            builder.append(tmp);
         }
-        builder.append(s);
     }
 
-    return jsString(exec, builder.release());
+    return builder.build(exec);
 }
 
 JSValue JSC_HOST_CALL globalFuncUnescape(ExecState* exec, JSObject*, JSValue, const ArgList& args)
@@ -425,14 +427,13 @@ JSValue JSC_HOST_CALL globalFuncUnescape(ExecState* exec, JSObject*, JSValue, co
         builder.append(*c);
     }
 
-    return jsString(exec, builder.release());
+    return jsString(exec, builder.build());
 }
 
 #ifndef NDEBUG
 JSValue JSC_HOST_CALL globalFuncJSCPrint(ExecState* exec, JSObject*, JSValue, const ArgList& args)
 {
-    CStringBuffer string;
-    args.at(0).toString(exec).getCString(string);
+    CString string = args.at(0).toString(exec).UTF8String();
     puts(string.data());
     return jsUndefined();
 }

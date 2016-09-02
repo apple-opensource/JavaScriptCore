@@ -24,10 +24,12 @@
 #include "DatePrototype.h"
 
 #include "DateConversion.h"
+#include "DateInstance.h"
 #include "Error.h"
 #include "JSString.h"
+#include "JSStringBuilder.h"
+#include "Lookup.h"
 #include "ObjectPrototype.h"
-#include "DateInstance.h"
 
 #if !PLATFORM(MAC) && HAVE(LANGINFO_H)
 #include <langinfo.h>
@@ -356,7 +358,7 @@ JSValue JSC_HOST_CALL dateProtoFuncToString(ExecState* exec, JSObject*, JSValue 
     DateConversionBuffer time;
     formatDate(*gregorianDateTime, date);
     formatTime(*gregorianDateTime, time);
-    return jsNontrivialString(exec, makeString(date, " ", time));
+    return jsMakeNontrivialString(exec, date, " ", time);
 }
 
 JSValue JSC_HOST_CALL dateProtoFuncToUTCString(ExecState* exec, JSObject*, JSValue thisValue, const ArgList&)
@@ -373,7 +375,7 @@ JSValue JSC_HOST_CALL dateProtoFuncToUTCString(ExecState* exec, JSObject*, JSVal
     DateConversionBuffer time;
     formatDateUTCVariant(*gregorianDateTime, date);
     formatTimeUTC(*gregorianDateTime, time);
-    return jsNontrivialString(exec, makeString(date, " ", time));
+    return jsMakeNontrivialString(exec, date, " ", time);
 }
 
 JSValue JSC_HOST_CALL dateProtoFuncToISOString(ExecState* exec, JSObject*, JSValue thisValue, const ArgList&)
@@ -499,7 +501,7 @@ JSValue JSC_HOST_CALL dateProtoFuncToGMTString(ExecState* exec, JSObject*, JSVal
     DateConversionBuffer time;
     formatDateUTCVariant(*gregorianDateTime, date);
     formatTimeUTC(*gregorianDateTime, time);
-    return jsNontrivialString(exec, makeString(date, " ", time));
+    return jsMakeNontrivialString(exec, date, " ", time);
 }
 
 JSValue JSC_HOST_CALL dateProtoFuncGetMonth(ExecState* exec, JSObject*, JSValue thisValue, const ArgList&)

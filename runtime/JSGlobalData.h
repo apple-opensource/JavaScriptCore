@@ -29,6 +29,7 @@
 #ifndef JSGlobalData_h
 #define JSGlobalData_h
 
+#include "CachedTranscendentalFunction.h"
 #include "Collector.h"
 #include "DateInstanceCache.h"
 #include "ExecutableAllocator.h"
@@ -37,6 +38,7 @@
 #include "MarkStack.h"
 #include "NumericStrings.h"
 #include "SmallStrings.h"
+#include "Terminator.h"
 #include "TimeoutChecker.h"
 #include "WeakRandom.h"
 #include <wtf/Forward.h>
@@ -56,6 +58,7 @@ namespace JSC {
     class JSObject;
     class Lexer;
     class Parser;
+    class RegExpCache;
     class Stringifier;
     class Structure;
     class UString;
@@ -83,18 +86,34 @@ namespace JSC {
         double increment;
     };
 
+    enum ThreadStackType {
+        ThreadStackTypeLarge,
+        ThreadStackTypeSmall
+    };
+
     class JSGlobalData : public RefCounted<JSGlobalData> {
     public:
+        // WebCore has a one-to-one mapping of threads to JSGlobalDatas;
+        // either create() or createLeaked() should only be called once
+        // on a thread, this is the 'default' JSGlobalData (it uses the
+        // thread's default string uniquing table from wtfThreadData).
+        // API contexts created using the new context group aware interface
+        // create APIContextGroup objects which require less locking of JSC
+        // than the old singleton APIShared JSGlobalData created for use by
+        // the original API.
+        enum GlobalDataType { Default, APIContextGroup, APIShared };
+
         struct ClientData {
             virtual ~ClientData() = 0;
         };
 
+        bool isSharedInstance() { return globalDataType == APIShared; }
         static bool sharedInstanceExists();
         static JSGlobalData& sharedInstance();
 
-        static PassRefPtr<JSGlobalData> create();
-        static PassRefPtr<JSGlobalData> createLeaked();
-        static PassRefPtr<JSGlobalData> createNonDefault();
+        static PassRefPtr<JSGlobalData> create(ThreadStackType);
+        static PassRefPtr<JSGlobalData> createLeaked(ThreadStackType);
+        static PassRefPtr<JSGlobalData> createContextGroup(ThreadStackType);
         ~JSGlobalData();
 
 #if ENABLE(JSC_MULTIPLE_THREADS)
@@ -102,7 +121,7 @@ namespace JSC {
         void makeUsableFromMultipleThreads() { heap.makeUsableFromMultipleThreads(); }
 #endif
 
-        bool isSharedInstance;
+        GlobalDataType globalDataType;
         ClientData* clientData;
 
         const HashTable* arrayTable;
@@ -116,6 +135,7 @@ namespace JSC {
         
         RefPtr<Structure> activationStructure;
         RefPtr<Structure> interruptedExecutionErrorStructure;
+        RefPtr<Structure> terminatedExecutionErrorStructure;
         RefPtr<Structure> staticScopeStructure;
         RefPtr<Structure> stringStructure;
         RefPtr<Structure> notAnObjectErrorStubStructure;
@@ -146,13 +166,25 @@ namespace JSC {
         ExecutableAllocator executableAllocator;
 #endif
 
+#if ENABLE(JIT)
+#if ENABLE(INTERPRETER)
+        bool canUseJIT() { return m_canUseJIT; }
+#endif
+#else
+        bool canUseJIT() { return false; }
+#endif
         Lexer* lexer;
         Parser* parser;
         Interpreter* interpreter;
 #if ENABLE(JIT)
-        JITThunks jitStubs;
+        OwnPtr<JITThunks> jitStubs;
+        NativeExecutable* getThunk(ThunkGenerator generator)
+        {
+            return jitStubs->specializedThunk(this, generator);
+        }
 #endif
         TimeoutChecker timeoutChecker;
+        Terminator terminator;
         Heap heap;
 
         JSValue exception;
@@ -181,24 +213,32 @@ namespace JSC {
         
         UString cachedDateString;
         double cachedDateStringValue;
-        
-        WeakRandom weakRandom;
+
+        int maxReentryDepth;
+
+        RegExpCache* m_regExpCache;
 
 #ifndef NDEBUG
-        bool mainThreadOnly;
+        ThreadIdentifier exclusiveThread;
 #endif
+
+        CachedTranscendentalFunction<sin> cachedSin;
 
         void resetDateCache();
 
         void startSampling();
         void stopSampling();
         void dumpSampleData(ExecState* exec);
+        RegExpCache* regExpCache() { return m_regExpCache; }
     private:
-        JSGlobalData(bool isShared);
+        JSGlobalData(GlobalDataType, ThreadStackType);
         static JSGlobalData*& sharedInstanceInternal();
         void createNativeThunk();
+#if ENABLE(JIT) && ENABLE(INTERPRETER)
+        bool m_canUseJIT;
+#endif
     };
-    
+
 } // namespace JSC
 
 #endif // JSGlobalData_h

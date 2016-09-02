@@ -30,7 +30,7 @@ import commands
 from settings import *
 
 jscore_excludes = ['jsc.cpp', 'ucptable.cpp']
-jscore_excludes.extend(get_excludes(jscore_dir, ['*CF.cpp', '*Symbian.cpp']))
+jscore_excludes.extend(get_excludes(jscore_dir, ['*Brew.cpp', '*CF.cpp', '*Symbian.cpp']))
 
 sources = []
 
@@ -72,11 +72,13 @@ def build(bld):
     full_dirs = get_dirs_for_features(jscore_dir, features=[build_port], dirs=jscore_dirs)
 
     includes = common_includes + full_dirs
+    if sys.platform.startswith('darwin'):
+        includes.append(os.path.join(jscore_dir, 'icu'))
 
     # 1. A simple program
     jscore = bld.new_task_gen(
         features = 'cxx cstaticlib',
-        includes = '. .. assembler wrec DerivedSources ForwardingHeaders ' + ' '.join(includes),
+        includes = '. .. assembler DerivedSources ForwardingHeaders ' + ' '.join(includes),
         source = sources,
         target = 'jscore',
         uselib = 'WX ICU ' + get_config(),
@@ -87,7 +89,7 @@ def build(bld):
         
     obj = bld.new_task_gen(
         features = 'cxx cprogram',
-        includes = '. .. assembler wrec DerivedSources ForwardingHeaders ' + ' '.join(includes),
+        includes = '. .. assembler DerivedSources ForwardingHeaders ' + ' '.join(includes),
         source = 'jsc.cpp',
         target = 'jsc',
         uselib = 'WX ICU ' + get_config(),

@@ -37,6 +37,7 @@
 #include "UString.h"
 #include <wtf/HashMap.h>
 #include <wtf/RefPtr.h>
+#include <wtf/text/StringHash.h>
 
 namespace JSC {
 
@@ -65,7 +66,7 @@ namespace JSC {
         bool isEmpty() const { return m_cacheMap.isEmpty(); }
 
     private:
-        static const int maxCacheableSourceLength = 256;
+        static const unsigned maxCacheableSourceLength = 256;
         static const int maxCacheEntries = 64;
 
         typedef HashMap<RefPtr<UString::Rep>, RefPtr<EvalExecutable> > EvalCacheMap;

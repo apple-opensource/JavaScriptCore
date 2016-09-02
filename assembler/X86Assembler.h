@@ -26,8 +26,6 @@
 #ifndef X86Assembler_h
 #define X86Assembler_h
 
-#include <wtf/Platform.h>
-
 #if ENABLE(ASSEMBLER) && (CPU(X86) || CPU(X86_64))
 
 #include "AssemblerBuffer.h"
@@ -130,6 +128,7 @@ private:
         PRE_SSE_66                      = 0x66,
         OP_PUSH_Iz                      = 0x68,
         OP_IMUL_GvEvIz                  = 0x69,
+        OP_GROUP1_EbIb                  = 0x80,
         OP_GROUP1_EvIz                  = 0x81,
         OP_GROUP1_EvIb                  = 0x83,
         OP_TEST_EvGv                    = 0x85,
@@ -168,6 +167,7 @@ private:
         OP2_MULSD_VsdWsd    = 0x59,
         OP2_SUBSD_VsdWsd    = 0x5C,
         OP2_DIVSD_VsdWsd    = 0x5E,
+        OP2_SQRTSD_VsdWsd   = 0x51,
         OP2_XORPD_VpdWpd    = 0x57,
         OP2_MOVD_VdEd       = 0x6E,
         OP2_MOVD_EdVd       = 0x7E,
@@ -201,6 +201,7 @@ private:
         GROUP1A_OP_POP = 0,
 
         GROUP2_OP_SHL = 4,
+        GROUP2_OP_SHR = 5,
         GROUP2_OP_SAR = 7,
 
         GROUP3_OP_TEST = 0,
@@ -673,6 +674,21 @@ public:
     {
         m_formatter.oneByteOp(OP_GROUP2_EvCL, GROUP2_OP_SAR, dst);
     }
+    
+    void shrl_i8r(int imm, RegisterID dst)
+    {
+        if (imm == 1)
+            m_formatter.oneByteOp(OP_GROUP2_Ev1, GROUP2_OP_SHR, dst);
+        else {
+            m_formatter.oneByteOp(OP_GROUP2_EvIb, GROUP2_OP_SHR, dst);
+            m_formatter.immediate8(imm);
+        }
+    }
+    
+    void shrl_CLr(RegisterID dst)
+    {
+        m_formatter.oneByteOp(OP_GROUP2_EvCL, GROUP2_OP_SHR, dst);
+    }
 
     void shll_i8r(int imm, RegisterID dst)
     {
@@ -760,7 +776,7 @@ public:
         m_formatter.oneByteOp(OP_GROUP1_EvIz, GROUP1_OP_CMP, dst);
         m_formatter.immediate32(imm);
     }
-
+    
     void cmpl_im(int imm, int offset, RegisterID base)
     {
         if (CAN_SIGN_EXTEND_8_32(imm)) {
@@ -770,6 +786,18 @@ public:
             m_formatter.oneByteOp(OP_GROUP1_EvIz, GROUP1_OP_CMP, base, offset);
             m_formatter.immediate32(imm);
         }
+    }
+    
+    void cmpb_im(int imm, int offset, RegisterID base)
+    {
+        m_formatter.oneByteOp(OP_GROUP1_EbIb, GROUP1_OP_CMP, base, offset);
+        m_formatter.immediate8(imm);
+    }
+    
+    void cmpb_im(int imm, int offset, RegisterID base, RegisterID index, int scale)
+    {
+        m_formatter.oneByteOp(OP_GROUP1_EbIb, GROUP1_OP_CMP, base, index, scale, offset);
+        m_formatter.immediate8(imm);
     }
 
     void cmpl_im(int imm, int offset, RegisterID base, RegisterID index, int scale)
@@ -889,6 +917,18 @@ public:
     {
         m_formatter.oneByteOp(OP_GROUP3_EvIz, GROUP3_OP_TEST, base, offset);
         m_formatter.immediate32(imm);
+    }
+    
+    void testb_im(int imm, int offset, RegisterID base)
+    {
+        m_formatter.oneByteOp(OP_GROUP3_EbIb, GROUP3_OP_TEST, base, offset);
+        m_formatter.immediate8(imm);
+    }
+    
+    void testb_im(int imm, int offset, RegisterID base, RegisterID index, int scale)
+    {
+        m_formatter.oneByteOp(OP_GROUP3_EbIb, GROUP3_OP_TEST, base, index, scale, offset);
+        m_formatter.immediate8(imm);
     }
 
     void testl_i32m(int imm, int offset, RegisterID base, RegisterID index, int scale)
@@ -1370,7 +1410,7 @@ public:
     }
 
 #if !CPU(X86_64)
-    void movsd_mr(void* address, XMMRegisterID dst)
+    void movsd_mr(const void* address, XMMRegisterID dst)
     {
         m_formatter.prefix(PRE_SSE_F2);
         m_formatter.twoByteOp(OP2_MOVSD_VsdWsd, (RegisterID)dst, address);
@@ -1436,6 +1476,12 @@ public:
     {
         m_formatter.prefix(PRE_SSE_66);
         m_formatter.twoByteOp(OP2_XORPD_VpdWpd, (RegisterID)dst, (RegisterID)src);
+    }
+
+    void sqrtsd_rr(XMMRegisterID src, XMMRegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F2);
+        m_formatter.twoByteOp(OP2_SQRTSD_VsdWsd, (RegisterID)dst, (RegisterID)src);
     }
 
     // Misc instructions:
@@ -1723,7 +1769,7 @@ private:
         }
 
 #if !CPU(X86_64)
-        void twoByteOp(TwoByteOpcodeID opcode, int reg, void* address)
+        void twoByteOp(TwoByteOpcodeID opcode, int reg, const void* address)
         {
             m_buffer.ensureSpace(maxInstructionSize);
             m_buffer.putByteUnchecked(OP_2BYTE_ESCAPE);
@@ -2034,7 +2080,7 @@ private:
         }
 
 #if !CPU(X86_64)
-        void memoryModRM(int reg, void* address)
+        void memoryModRM(int reg, const void* address)
         {
             // noBase + ModRmMemoryNoDisp means noBase + ModRmMemoryDisp32!
             putModRm(ModRmMemoryNoDisp, reg, noBase);

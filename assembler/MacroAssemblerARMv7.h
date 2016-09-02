@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2010 University of Szeged
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,8 +27,6 @@
 #ifndef MacroAssemblerARMv7_h
 #define MacroAssemblerARMv7_h
 
-#include <wtf/Platform.h>
-
 #if ENABLE(ASSEMBLER)
 
 #include "ARMv7Assembler.h"
@@ -39,10 +38,13 @@ class MacroAssemblerARMv7 : public AbstractMacroAssembler<ARMv7Assembler> {
     // FIXME: switch dataTempRegister & addressTempRegister, or possibly use r7?
     //        - dTR is likely used more than aTR, and we'll get better instruction
     //        encoding if it's in the low 8 registers.
-    static const ARMRegisters::RegisterID dataTempRegister = ARMRegisters::ip;
+    static const RegisterID dataTempRegister = ARMRegisters::ip;
     static const RegisterID addressTempRegister = ARMRegisters::r3;
-    static const FPRegisterID fpTempRegister = ARMRegisters::d7;
 
+    static const ARMRegisters::FPDoubleRegisterID fpTempRegister = ARMRegisters::d7;
+    inline ARMRegisters::FPSingleRegisterID fpTempRegisterAsSingle() { return ARMRegisters::asSingle(fpTempRegister); }
+
+public:
     struct ArmAddress {
         enum AddressType {
             HasOffset,
@@ -74,6 +76,7 @@ class MacroAssemblerARMv7 : public AbstractMacroAssembler<ARMv7Assembler> {
     };
     
 public:
+    typedef ARMRegisters::FPDoubleRegisterID FPRegisterID;
 
     static const Scale ScalePtr = TimesFour;
 
@@ -223,6 +226,11 @@ public:
         m_assembler.smull(dest, dataTempRegister, src, dataTempRegister);
     }
 
+    void neg32(RegisterID srcDest)
+    {
+        m_assembler.neg(srcDest, srcDest);
+    }
+
     void not32(RegisterID srcDest)
     {
         m_assembler.mvn(srcDest, srcDest);
@@ -257,6 +265,21 @@ public:
     void rshift32(Imm32 imm, RegisterID dest)
     {
         m_assembler.asr(dest, dest, imm.m_value & 0x1f);
+    }
+    
+    void urshift32(RegisterID shift_amount, RegisterID dest)
+    {
+        // Clamp the shift to the range 0..31
+        ARMThumbImmediate armImm = ARMThumbImmediate::makeEncodedImm(0x1f);
+        ASSERT(armImm.isValid());
+        m_assembler.ARM_and(dataTempRegister, shift_amount, armImm);
+        
+        m_assembler.lsr(dest, dest, dataTempRegister);
+    }
+    
+    void urshift32(Imm32 imm, RegisterID dest)
+    {
+        m_assembler.lsr(dest, dest, imm.m_value & 0x1f);
     }
 
     void sub32(RegisterID src, RegisterID dest)
@@ -368,6 +391,20 @@ private:
         }
     }
 
+    void load8(ArmAddress address, RegisterID dest)
+    {
+        if (address.type == ArmAddress::HasIndex)
+            m_assembler.ldrb(dest, address.base, address.u.index, address.u.scale);
+        else if (address.u.offset >= 0) {
+            ARMThumbImmediate armImm = ARMThumbImmediate::makeUInt12(address.u.offset);
+            ASSERT(armImm.isValid());
+            m_assembler.ldrb(dest, address.base, armImm);
+        } else {
+            ASSERT(address.u.offset >= -255);
+            m_assembler.ldrb(dest, address.base, address.u.offset, true, false);
+        }
+    }
+
     void store32(RegisterID src, ArmAddress address)
     {
         if (address.type == ArmAddress::HasIndex)
@@ -404,6 +441,11 @@ public:
         m_assembler.ldr(dest, addressTempRegister, ARMThumbImmediate::makeUInt16(0));
     }
 
+    void load8(ImplicitAddress address, RegisterID dest)
+    {
+        load8(setupArmAddress(address), dest);
+    }
+
     DataLabel32 load32WithAddressOffsetPatch(Address address, RegisterID dest)
     {
         DataLabel32 label = moveWithPatch(Imm32(address.offset), dataTempRegister);
@@ -422,6 +464,17 @@ public:
     void load16(BaseIndex address, RegisterID dest)
     {
         m_assembler.ldrh(dest, makeBaseIndexBase(address), address.index, address.scale);
+    }
+    
+    void load16(ImplicitAddress address, RegisterID dest)
+    {
+        ARMThumbImmediate armImm = ARMThumbImmediate::makeUInt12(address.offset);
+        if (armImm.isValid())
+            m_assembler.ldrh(dest, address.base, armImm);
+        else {
+            move(Imm32(address.offset), dataTempRegister);
+            m_assembler.ldrh(dest, address.base, dataTempRegister);
+        }
     }
 
     DataLabel32 store32WithAddressOffsetPatch(RegisterID src, Address address)
@@ -476,6 +529,11 @@ public:
     // In short, FIXME:.
     bool supportsFloatingPointTruncate() const { return false; }
 
+    bool supportsFloatingPointSqrt() const
+    {
+        return false;
+    }
+
     void loadDouble(ImplicitAddress address, FPRegisterID dest)
     {
         RegisterID base = address.base;
@@ -489,6 +547,12 @@ public:
         }
         
         m_assembler.vldr(dest, base, offset);
+    }
+
+    void loadDouble(const void* address, FPRegisterID dest)
+    {
+        move(ImmPtr(address), addressTempRegister);
+        m_assembler.vldr(dest, addressTempRegister, 0);
     }
 
     void storeDouble(FPRegisterID src, ImplicitAddress address)
@@ -517,6 +581,11 @@ public:
         addDouble(fpTempRegister, dest);
     }
 
+    void divDouble(FPRegisterID src, FPRegisterID dest)
+    {
+        m_assembler.vdiv_F64(dest, dest, src);
+    }
+
     void subDouble(FPRegisterID src, FPRegisterID dest)
     {
         m_assembler.vsub_F64(dest, dest, src);
@@ -539,16 +608,37 @@ public:
         mulDouble(fpTempRegister, dest);
     }
 
+    void sqrtDouble(FPRegisterID, FPRegisterID)
+    {
+        ASSERT_NOT_REACHED();
+    }
+
     void convertInt32ToDouble(RegisterID src, FPRegisterID dest)
     {
-        m_assembler.vmov(fpTempRegister, src);
-        m_assembler.vcvt_F64_S32(dest, fpTempRegister);
+        m_assembler.vmov(fpTempRegisterAsSingle(), src);
+        m_assembler.vcvt_F64_S32(dest, fpTempRegisterAsSingle());
+    }
+
+    void convertInt32ToDouble(Address address, FPRegisterID dest)
+    {
+        // Fixme: load directly into the fpr!
+        load32(address, dataTempRegister);
+        m_assembler.vmov(fpTempRegisterAsSingle(), dataTempRegister);
+        m_assembler.vcvt_F64_S32(dest, fpTempRegisterAsSingle());
+    }
+
+    void convertInt32ToDouble(AbsoluteAddress address, FPRegisterID dest)
+    {
+        // Fixme: load directly into the fpr!
+        load32(address.m_ptr, dataTempRegister);
+        m_assembler.vmov(fpTempRegisterAsSingle(), dataTempRegister);
+        m_assembler.vcvt_F64_S32(dest, fpTempRegisterAsSingle());
     }
 
     Jump branchDouble(DoubleCondition cond, FPRegisterID left, FPRegisterID right)
     {
         m_assembler.vcmp_F64(left, right);
-        m_assembler.vmrs_APSR_nzcv_FPSCR();
+        m_assembler.vmrs();
 
         if (cond == DoubleNotEqual) {
             // ConditionNE jumps if NotEqual *or* unordered - force the unordered cases not to jump.
@@ -575,6 +665,27 @@ public:
         return jump();
     }
 
+    // Convert 'src' to an integer, and places the resulting 'dest'.
+    // If the result is not representable as a 32 bit value, branch.
+    // May also branch for some values that are representable in 32 bits
+    // (specifically, in this case, 0).
+    void branchConvertDoubleToInt32(FPRegisterID src, RegisterID dest, JumpList& failureCases, FPRegisterID)
+    {
+        m_assembler.vcvtr_S32_F64(fpTempRegisterAsSingle(), src);
+        m_assembler.vmov(dest, fpTempRegisterAsSingle());
+
+        // Convert the integer result back to float & compare to the original value - if not equal or unordered (NaN) then jump.
+        m_assembler.vcvt_F64_S32(fpTempRegister, fpTempRegisterAsSingle());
+        failureCases.append(branchDouble(DoubleNotEqualOrUnordered, src, fpTempRegister));
+
+        // If the result is zero, it might have been -0.0, and the double comparison won't catch this!
+        failureCases.append(branchTest32(Zero, dest));
+    }
+
+    void zeroDouble(FPRegisterID dest)
+    {
+        m_assembler.vmov_F64_0(dest);
+    }
 
     // Stack manipulation operations:
     //
@@ -793,6 +904,19 @@ public:
         return branch32(cond, addressTempRegister, Imm32(right.m_value << 16));
     }
 
+    Jump branch8(Condition cond, RegisterID left, Imm32 right)
+    {
+        compare32(left, right);
+        return Jump(makeBranch(cond));
+    }
+
+    Jump branch8(Condition cond, Address left, Imm32 right)
+    {
+        // use addressTempRegister incase the branch8 we call uses dataTempRegister. :-/
+        load8(left, addressTempRegister);
+        return branch8(cond, addressTempRegister, right);
+    }
+
     Jump branchTest32(Condition cond, RegisterID reg, RegisterID mask)
     {
         ASSERT((cond == Zero) || (cond == NonZero));
@@ -821,6 +945,21 @@ public:
         // use addressTempRegister incase the branchTest32 we call uses dataTempRegister. :-/
         load32(address, addressTempRegister);
         return branchTest32(cond, addressTempRegister, mask);
+    }
+
+    Jump branchTest8(Condition cond, RegisterID reg, Imm32 mask = Imm32(-1))
+    {
+        ASSERT((cond == Zero) || (cond == NonZero));
+        test32(reg, mask);
+        return Jump(makeBranch(cond));
+    }
+
+    Jump branchTest8(Condition cond, Address address, Imm32 mask = Imm32(-1))
+    {
+        ASSERT((cond == Zero) || (cond == NonZero));
+        // use addressTempRegister incase the branchTest8 we call uses dataTempRegister. :-/
+        load8(address, addressTempRegister);
+        return branchTest8(cond, addressTempRegister, mask);
     }
 
     Jump jump()
@@ -888,6 +1027,13 @@ public:
         return branch32(NotEqual, addressTempRegister, dataTempRegister);
     }
 
+    Jump branchOr32(Condition cond, RegisterID src, RegisterID dest)
+    {
+        ASSERT((cond == Signed) || (cond == Zero) || (cond == NonZero));
+        m_assembler.orr_S(dest, dest, src);
+        return Jump(makeBranch(cond));
+    }
+
     Jump branchSub32(Condition cond, RegisterID src, RegisterID dest)
     {
         ASSERT((cond == Overflow) || (cond == Signed) || (cond == Zero) || (cond == NonZero));
@@ -952,12 +1098,33 @@ public:
         m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(0));
     }
 
+    void set32(Condition cond, Address left, RegisterID right, RegisterID dest)
+    {
+        load32(left, dataTempRegister);
+        set32(cond, dataTempRegister, right, dest);
+    }
+
     void set32(Condition cond, RegisterID left, Imm32 right, RegisterID dest)
     {
         compare32(left, right);
         m_assembler.it(armV7Condition(cond), false);
         m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(1));
         m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(0));
+    }
+
+    void set8(Condition cond, RegisterID left, RegisterID right, RegisterID dest)
+    {
+        set32(cond, left, right, dest);
+    }
+
+    void set8(Condition cond, Address left, RegisterID right, RegisterID dest)
+    {
+        set32(cond, left, right, dest);
+    }
+
+    void set8(Condition cond, RegisterID left, Imm32 right, RegisterID dest)
+    {
+        set32(cond, left, right, dest);
     }
 
     // FIXME:
@@ -973,6 +1140,14 @@ public:
         m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(0));
     }
 
+    void setTest8(Condition cond, Address address, Imm32 mask, RegisterID dest)
+    {
+        load8(address, dataTempRegister);
+        test32(dataTempRegister, mask);
+        m_assembler.it(armV7Condition(cond), false);
+        m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(1));
+        m_assembler.mov(dest, ARMThumbImmediate::makeUInt16(0));
+    }
 
     DataLabel32 moveWithPatch(Imm32 imm, RegisterID dst)
     {

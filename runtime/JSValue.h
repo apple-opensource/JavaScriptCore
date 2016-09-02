@@ -66,6 +66,8 @@ namespace JSC {
         friend class JIT;
         friend class JITStubs;
         friend class JITStubCall;
+        friend class JSInterfaceJIT;
+        friend class SpecializedThunkJIT;
 
     public:
         static EncodedJSValue encode(JSValue value);
@@ -183,12 +185,13 @@ namespace JSC {
         JSValue get(ExecState*, unsigned propertyName) const;
         JSValue get(ExecState*, unsigned propertyName, PropertySlot&) const;
         void put(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        void putDirect(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
         void put(ExecState*, unsigned propertyName, JSValue);
 
         bool needsThisConversion() const;
         JSObject* toThisObject(ExecState*) const;
         UString toThisString(ExecState*) const;
-        JSString* toThisJSString(ExecState*);
+        JSString* toThisJSString(ExecState*) const;
 
         static bool equal(ExecState* exec, JSValue v1, JSValue v2);
         static bool equalSlowCase(ExecState* exec, JSValue v1, JSValue v2);
@@ -214,6 +217,10 @@ namespace JSC {
         JSObject* toObjectSlowCase(ExecState*) const;
         JSObject* toThisObjectSlowCase(ExecState*) const;
 
+        JSObject* synthesizePrototype(ExecState*) const;
+        JSObject* synthesizeObject(ExecState*) const;
+
+#if USE(JSVALUE32_64)
         enum { Int32Tag =        0xffffffff };
         enum { CellTag =         0xfffffffe };
         enum { TrueTag =         0xfffffffd };
@@ -222,16 +229,12 @@ namespace JSC {
         enum { UndefinedTag =    0xfffffffa };
         enum { EmptyValueTag =   0xfffffff9 };
         enum { DeletedValueTag = 0xfffffff8 };
-
+        
         enum { LowestTag =  DeletedValueTag };
-
+        
         uint32_t tag() const;
         int32_t payload() const;
 
-        JSObject* synthesizePrototype(ExecState*) const;
-        JSObject* synthesizeObject(ExecState*) const;
-
-#if USE(JSVALUE32_64)
         union {
             EncodedJSValue asEncodedJSValue;
             double asDouble;

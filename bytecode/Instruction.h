@@ -31,6 +31,7 @@
 
 #include "MacroAssembler.h"
 #include "Opcode.h"
+#include "PropertySlot.h"
 #include "Structure.h"
 #include <wtf/VectorTraits.h>
 
@@ -124,7 +125,7 @@ namespace JSC {
     struct Instruction {
         Instruction(Opcode opcode)
         {
-#if !HAVE(COMPUTED_GOTO)
+#if !ENABLE(COMPUTED_GOTO_INTERPRETER)
             // We have to initialize one of the pointer members to ensure that
             // the entire struct is initialized, when opcode is not a pointer.
             u.jsCell = 0;
@@ -144,6 +145,7 @@ namespace JSC {
         Instruction(StructureChain* structureChain) { u.structureChain = structureChain; }
         Instruction(JSCell* jsCell) { u.jsCell = jsCell; }
         Instruction(PolymorphicAccessStructureList* polymorphicStructures) { u.polymorphicStructures = polymorphicStructures; }
+        Instruction(PropertySlot::GetValueFunc getterFunc) { u.getterFunc = getterFunc; }
 
         union {
             Opcode opcode;
@@ -152,6 +154,7 @@ namespace JSC {
             StructureChain* structureChain;
             JSCell* jsCell;
             PolymorphicAccessStructureList* polymorphicStructures;
+            PropertySlot::GetValueFunc getterFunc;
         } u;
     };
 

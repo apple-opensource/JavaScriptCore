@@ -107,18 +107,21 @@ namespace JSC {
         virtual bool deleteProperty(ExecState*, unsigned propertyName);
 
         virtual JSObject* toThisObject(ExecState*) const;
-        virtual UString toThisString(ExecState*) const;
-        virtual JSString* toThisJSString(ExecState*);
         virtual JSValue getJSNumber();
         void* vptr() { return *reinterpret_cast<void**>(this); }
         void setVPtr(void* vptr) { *reinterpret_cast<void**>(this) = vptr; }
+
+        // FIXME: Rename getOwnPropertySlot to virtualGetOwnPropertySlot, and
+        // fastGetOwnPropertySlot to getOwnPropertySlot. Callers should always
+        // call this function, not its slower virtual counterpart. (For integer
+        // property names, we want a similar interface with appropriate optimizations.)
+        bool fastGetOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
 
     protected:
         static const unsigned AnonymousSlotCount = 0;
 
     private:
         // Base implementation; for non-object classes implements getPropertySlot.
-        bool fastGetOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
         virtual bool getOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
         virtual bool getOwnPropertySlot(ExecState*, unsigned propertyName, PropertySlot&);
         
@@ -299,11 +302,6 @@ namespace JSC {
         if (UNLIKELY(!isCell()))
             return true;
         return asCell()->structure()->typeInfo().needsThisConversion();
-    }
-
-    inline UString JSValue::toThisString(ExecState* exec) const
-    {
-        return isCell() ? asCell()->toThisString(exec) : toString(exec);
     }
 
     inline JSValue JSValue::getJSNumber()

@@ -25,11 +25,13 @@
 #include "JSArray.h"
 #include "JSGlobalData.h"
 #include "JSVariableObject.h"
+#include "JSWeakObjectMapRefInternal.h"
 #include "NativeFunctionWrapper.h"
 #include "NumberPrototype.h"
 #include "StringPrototype.h"
 #include <wtf/HashSet.h>
 #include <wtf/OwnPtr.h>
+#include <wtf/RandomNumber.h>
 
 namespace JSC {
 
@@ -56,6 +58,7 @@ namespace JSC {
     class JSGlobalObject : public JSVariableObject {
     protected:
         using JSVariableObject::JSVariableObjectData;
+        typedef HashSet<RefPtr<OpaqueJSWeakObjectMap> > WeakMapSet;
 
         struct JSGlobalObjectData : public JSVariableObjectData {
             // We use an explicit destructor function pointer instead of a
@@ -90,6 +93,7 @@ namespace JSC {
                 , datePrototype(0)
                 , regExpPrototype(0)
                 , methodCallDummy(0)
+                , weakRandom(static_cast<unsigned>(randomNumber() * (std::numeric_limits<unsigned>::max() + 1.0)))
             {
             }
             
@@ -153,6 +157,8 @@ namespace JSC {
             RefPtr<JSGlobalData> globalData;
 
             HashSet<GlobalCodeBlock*> codeBlocks;
+            WeakMapSet weakMaps;
+            WeakRandom weakRandom;
         };
 
     public:
@@ -254,7 +260,7 @@ namespace JSC {
 
         virtual bool allowsAccessFrom(const JSGlobalObject*) const { return true; }
 
-        virtual bool isDynamicScope() const;
+        virtual bool isDynamicScope(bool& requiresDynamicChecks) const;
 
         HashSet<GlobalCodeBlock*>& codeBlocks() { return d()->codeBlocks; }
 
@@ -271,6 +277,17 @@ namespace JSC {
             return Structure::create(prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount);
         }
 
+        void registerWeakMap(OpaqueJSWeakObjectMap* map)
+        {
+            d()->weakMaps.add(map);
+        }
+
+        void deregisterWeakMap(OpaqueJSWeakObjectMap* map)
+        {
+            d()->weakMaps.remove(map);
+        }
+
+        double weakRandomNumber() { return d()->weakRandom.get(); }
     protected:
 
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | OverridesMarkChildren | OverridesGetPropertyNames | JSVariableObject::StructureFlags;

@@ -134,14 +134,15 @@ JSObject* JSActivation::toThisObject(ExecState* exec) const
     return exec->globalThisValue();
 }
 
-bool JSActivation::isDynamicScope() const
+bool JSActivation::isDynamicScope(bool& requiresDynamicChecks) const
 {
-    return d()->functionExecutable->usesEval();
+    requiresDynamicChecks = d()->functionExecutable->usesEval();
+    return false;
 }
 
-JSValue JSActivation::argumentsGetter(ExecState* exec, const Identifier&, const PropertySlot& slot)
+JSValue JSActivation::argumentsGetter(ExecState* exec, JSValue slotBase, const Identifier&)
 {
-    JSActivation* activation = asActivation(slot.slotBase());
+    JSActivation* activation = asActivation(slotBase);
 
     if (activation->d()->functionExecutable->usesArguments()) {
         PropertySlot slot;

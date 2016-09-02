@@ -43,6 +43,7 @@ namespace JSC {
     struct Instruction;
     
     JSValue createInterruptedExecutionException(JSGlobalData*);
+    JSValue createTerminatedExecutionException(JSGlobalData*);
     JSValue createStackOverflowError(ExecState*);
     JSValue createTypeError(ExecState*, const char* message);
     JSValue createUndefinedVariableError(ExecState*, const Identifier&, unsigned bytecodeOffset, CodeBlock*);
@@ -51,6 +52,7 @@ namespace JSC {
     JSObject* createNotAConstructorError(ExecState*, JSValue, unsigned bytecodeOffset, CodeBlock*);
     JSValue createNotAFunctionError(ExecState*, JSValue, unsigned bytecodeOffset, CodeBlock*);
     JSObject* createNotAnObjectError(ExecState*, JSNotAnObjectErrorStub*, unsigned bytecodeOffset, CodeBlock*);
+    JSValue throwOutOfMemoryError(ExecState*);
 
 } // namespace JSC
 

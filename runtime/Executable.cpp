@@ -139,6 +139,9 @@ void FunctionExecutable::compile(ExecState*, ScopeChainNode* scopeChainNode)
 
 void EvalExecutable::generateJITCode(ExecState* exec, ScopeChainNode* scopeChainNode)
 {
+#if ENABLE(INTERPRETER)
+    ASSERT(scopeChainNode->globalData->canUseJIT());
+#endif
     CodeBlock* codeBlock = &bytecode(exec, scopeChainNode);
     m_jitCode = JIT::compile(scopeChainNode->globalData, codeBlock);
 
@@ -150,6 +153,9 @@ void EvalExecutable::generateJITCode(ExecState* exec, ScopeChainNode* scopeChain
 
 void ProgramExecutable::generateJITCode(ExecState* exec, ScopeChainNode* scopeChainNode)
 {
+#if ENABLE(INTERPRETER)
+    ASSERT(scopeChainNode->globalData->canUseJIT());
+#endif
     CodeBlock* codeBlock = &bytecode(exec, scopeChainNode);
     m_jitCode = JIT::compile(scopeChainNode->globalData, codeBlock);
 
@@ -161,6 +167,9 @@ void ProgramExecutable::generateJITCode(ExecState* exec, ScopeChainNode* scopeCh
 
 void FunctionExecutable::generateJITCode(ExecState* exec, ScopeChainNode* scopeChainNode)
 {
+#if ENABLE(INTERPRETER)
+    ASSERT(scopeChainNode->globalData->canUseJIT());
+#endif
     CodeBlock* codeBlock = &bytecode(exec, scopeChainNode);
     m_jitCode = JIT::compile(scopeChainNode->globalData, codeBlock);
 
@@ -198,8 +207,13 @@ ExceptionInfo* FunctionExecutable::reparseExceptionInfo(JSGlobalData* globalData
     ASSERT(newCodeBlock->instructionCount() == codeBlock->instructionCount());
 
 #if ENABLE(JIT)
-    JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
-    ASSERT(newJITCode.size() == generatedJITCode().size());
+#if ENABLE(INTERPRETER)
+    if (globalData->canUseJIT())
+#endif
+    {
+        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
+        ASSERT(newJITCode.size() == generatedJITCode().size());
+    }
 #endif
 
     globalData->functionCodeBlockBeingReparsed = 0;
@@ -223,8 +237,13 @@ ExceptionInfo* EvalExecutable::reparseExceptionInfo(JSGlobalData* globalData, Sc
     ASSERT(newCodeBlock->instructionCount() == codeBlock->instructionCount());
 
 #if ENABLE(JIT)
-    JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
-    ASSERT(newJITCode.size() == generatedJITCode().size());
+#if ENABLE(INTERPRETER)
+    if (globalData->canUseJIT())
+#endif
+    {
+        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
+        ASSERT(newJITCode.size() == generatedJITCode().size());
+    }
 #endif
 
     return newCodeBlock->extractExceptionInfo();
@@ -272,7 +291,7 @@ UString FunctionExecutable::paramString() const
             builder.append(", ");
         builder.append(parameters[pos].ustring());
     }
-    return builder.release();
+    return builder.build();
 }
 
 };

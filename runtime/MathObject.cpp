@@ -21,6 +21,7 @@
 #include "config.h"
 #include "MathObject.h"
 
+#include "Lookup.h"
 #include "ObjectPrototype.h"
 #include "Operations.h"
 #include <time.h>
@@ -210,20 +211,19 @@ JSValue JSC_HOST_CALL mathProtoFuncPow(ExecState* exec, JSObject*, JSValue, cons
 
 JSValue JSC_HOST_CALL mathProtoFuncRandom(ExecState* exec, JSObject*, JSValue, const ArgList&)
 {
-    return jsDoubleNumber(exec, exec->globalData().weakRandom.get());
+    return jsDoubleNumber(exec, exec->lexicalGlobalObject()->weakRandomNumber());
 }
 
 JSValue JSC_HOST_CALL mathProtoFuncRound(ExecState* exec, JSObject*, JSValue, const ArgList& args)
 {
     double arg = args.at(0).toNumber(exec);
-    if (signbit(arg) && arg >= -0.5)
-         return jsNumber(exec, -0.0);
-    return jsNumber(exec, floor(arg + 0.5));
+    double integer = ceil(arg);
+    return jsNumber(exec, integer - (integer - arg > 0.5));
 }
 
 JSValue JSC_HOST_CALL mathProtoFuncSin(ExecState* exec, JSObject*, JSValue, const ArgList& args)
 {
-    return jsDoubleNumber(exec, sin(args.at(0).toNumber(exec)));
+    return exec->globalData().cachedSin(exec, args.at(0).toNumber(exec));
 }
 
 JSValue JSC_HOST_CALL mathProtoFuncSqrt(ExecState* exec, JSObject*, JSValue, const ArgList& args)

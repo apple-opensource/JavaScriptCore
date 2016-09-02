@@ -43,6 +43,10 @@
 #include <e32std.h>
 #endif
 
+#if CPU(MIPS) && OS(LINUX)
+#include <sys/cachectl.h>
+#endif
+
 #if OS(WINCE)
 // From pkfuncs.h (private header file from the Platform Builder)
 #define CACHE_SYNC_ALL 0x07F
@@ -147,12 +151,20 @@ public:
     {
         if (!pageSize)
             intializePageSize();
-        m_smallAllocationPool = ExecutablePool::create(JIT_ALLOCATOR_LARGE_ALLOC_SIZE);
+        if (isValid())
+            m_smallAllocationPool = ExecutablePool::create(JIT_ALLOCATOR_LARGE_ALLOC_SIZE);
+#if !ENABLE(INTERPRETER)
+        else
+            CRASH();
+#endif
     }
 
+    bool isValid() const;
+    
     PassRefPtr<ExecutablePool> poolForSize(size_t n)
     {
         // Try to fit in the existing small allocator
+        ASSERT(m_smallAllocationPool);
         if (n < m_smallAllocationPool->available())
             return m_smallAllocationPool;
 
@@ -190,6 +202,32 @@ public:
     static void cacheFlush(void*, size_t)
     {
     }
+#elif CPU(MIPS)
+    static void cacheFlush(void* code, size_t size)
+    {
+#if COMPILER(GCC) && (GCC_VERSION >= 40300)
+#if WTF_MIPS_ISA_REV(2) && (GCC_VERSION < 40403)
+        int lineSize;
+        asm("rdhwr %0, $1" : "=r" (lineSize));
+        //
+        // Modify "start" and "end" to avoid GCC 4.3.0-4.4.2 bug in
+        // mips_expand_synci_loop that may execute synci one more time.
+        // "start" points to the fisrt byte of the cache line.
+        // "end" points to the last byte of the line before the last cache line.
+        // Because size is always a multiple of 4, this is safe to set
+        // "end" to the last byte.
+        //
+        intptr_t start = reinterpret_cast<intptr_t>(code) & (-lineSize);
+        intptr_t end = ((reinterpret_cast<intptr_t>(code) + size - 1) & (-lineSize)) - 1;
+        __builtin___clear_cache(reinterpret_cast<char*>(start), reinterpret_cast<char*>(end));
+#else
+        intptr_t end = reinterpret_cast<intptr_t>(code) + size;
+        __builtin___clear_cache(reinterpret_cast<char*>(code), reinterpret_cast<char*>(end));
+#endif
+#else
+        _flush_cache(reinterpret_cast<char*>(code), size, BCACHE);
+#endif
+    }
 #elif CPU(ARM_THUMB2) && OS(IPHONE_OS)
     static void cacheFlush(void* code, size_t size)
     {
@@ -217,7 +255,9 @@ public:
     {
         User::IMB_Range(code, static_cast<char*>(code) + size);
     }
-#elif CPU(ARM_TRADITIONAL) && OS(LINUX)
+#elif CPU(ARM_TRADITIONAL) && OS(LINUX) && COMPILER(RVCT)
+    static __asm void cacheFlush(void* code, size_t size);
+#elif CPU(ARM_TRADITIONAL) && OS(LINUX) && COMPILER(GCC)
     static void cacheFlush(void* code, size_t size)
     {
         asm volatile (

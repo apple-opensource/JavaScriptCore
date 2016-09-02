@@ -31,6 +31,7 @@
 #include "ExceptionHelpers.h"
 #include "JSArray.h"
 #include "LiteralParser.h"
+#include "Lookup.h"
 #include "PropertyNameArray.h"
 #include "StringBuilder.h"
 #include <wtf/MathExtras.h>
@@ -135,7 +136,7 @@ static inline JSValue unwrapBoxedPrimitive(ExecState* exec, JSValue value)
 
 static inline UString gap(ExecState* exec, JSValue space)
 {
-    const int maxGapLength = 10;
+    const unsigned maxGapLength = 10;
     space = unwrapBoxedPrimitive(exec, space);
 
     // If the space value is a number, create a gap string with that number of spaces.
@@ -268,7 +269,7 @@ JSValue Stringifier::stringify(JSValue value)
     if (m_exec->hadException())
         return jsNull();
 
-    return jsString(m_exec, result.release());
+    return jsString(m_exec, result.build());
 }
 
 void Stringifier::appendQuotedString(StringBuilder& builder, const UString& value)
@@ -456,7 +457,7 @@ inline bool Stringifier::willIndent() const
 inline void Stringifier::indent()
 {
     // Use a single shared string, m_repeatedGap, so we don't keep allocating new ones as we indent and unindent.
-    int newSize = m_indent.size() + m_gap.size();
+    unsigned newSize = m_indent.size() + m_gap.size();
     if (newSize > m_repeatedGap.size())
         m_repeatedGap = makeString(m_repeatedGap, m_gap);
     ASSERT(newSize <= m_repeatedGap.size());
@@ -866,6 +867,14 @@ JSValue JSC_HOST_CALL JSONProtoFuncStringify(ExecState* exec, JSObject*, JSValue
     JSValue replacer = args.at(1);
     JSValue space = args.at(2);
     return Stringifier(exec, replacer, space).stringify(value);
+}
+
+UString JSONStringify(ExecState* exec, JSValue value, unsigned indent)
+{
+    JSValue result = Stringifier(exec, jsNull(), jsNumber(exec, indent)).stringify(value);
+    if (result.isUndefinedOrNull())
+        return UString();
+    return result.getString(exec);
 }
 
 } // namespace JSC

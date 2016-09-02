@@ -27,11 +27,13 @@
 #include "JSFunction.h"
 #include "JSObject.h"
 #include "JSString.h"
+#include "JSStringBuilder.h"
 #include "JSValue.h"
 #include "ObjectPrototype.h"
 #include "PrototypeFunction.h"
 #include "RegExpObject.h"
 #include "RegExp.h"
+#include "RegExpCache.h"
 
 namespace JSC {
 
@@ -87,7 +89,7 @@ JSValue JSC_HOST_CALL regExpProtoFuncCompile(ExecState* exec, JSObject*, JSValue
     } else {
         UString pattern = args.isEmpty() ? UString("") : arg0.toString(exec);
         UString flags = arg1.isUndefined() ? UString("") : arg1.toString(exec);
-        regExp = RegExp::create(&exec->globalData(), pattern, flags);
+        regExp = exec->globalData().regExpCache()->lookupOrCreate(pattern, flags);
     }
 
     if (!regExp->isValid())
@@ -116,7 +118,7 @@ JSValue JSC_HOST_CALL regExpProtoFuncToString(ExecState* exec, JSObject*, JSValu
         postfix[index] = 'm';
     UString source = asRegExpObject(thisValue)->get(exec, exec->propertyNames().source).toString(exec);
     // If source is empty, use "/(?:)/" to avoid colliding with comment syntax
-    return jsNontrivialString(exec, makeString("/", source.size() ? source : UString("(?:)"), postfix));
+    return jsMakeNontrivialString(exec, "/", source.size() ? source : UString("(?:)"), postfix);
 }
 
 } // namespace JSC

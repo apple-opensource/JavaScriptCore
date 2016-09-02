@@ -66,7 +66,7 @@ namespace JSC {
 
     // We use a smaller reentrancy limit on iPhone because of the high amount of
     // stack space required on the web thread.
-    enum { MaxMainThreadReentryDepth = 100, MaxSecondaryThreadReentryDepth = 32 };
+    enum { MaxLargeThreadReentryDepth = 100, MaxSmallThreadReentryDepth = 32 };
 
     class Interpreter : public FastAllocBase {
         friend class JIT;
@@ -78,7 +78,7 @@ namespace JSC {
         
         Opcode getOpcode(OpcodeID id)
         {
-            #if HAVE(COMPUTED_GOTO)
+            #if ENABLE(COMPUTED_GOTO_INTERPRETER)
                 return m_opcodeTable[id];
             #else
                 return id;
@@ -87,7 +87,7 @@ namespace JSC {
 
         OpcodeID getOpcodeID(Opcode opcode)
         {
-            #if HAVE(COMPUTED_GOTO)
+            #if ENABLE(COMPUTED_GOTO_INTERPRETER)
                 ASSERT(isOpcode(opcode));
                 return m_opcodeIDTable.get(opcode);
             #else
@@ -125,10 +125,11 @@ namespace JSC {
 
         JSValue execute(EvalExecutable*, CallFrame*, JSObject* thisObject, int globalRegisterOffset, ScopeChainNode*, JSValue* exception);
 
-#if USE(INTERPRETER)
+#if ENABLE(INTERPRETER)
         NEVER_INLINE bool resolve(CallFrame*, Instruction*, JSValue& exceptionValue);
         NEVER_INLINE bool resolveSkip(CallFrame*, Instruction*, JSValue& exceptionValue);
         NEVER_INLINE bool resolveGlobal(CallFrame*, Instruction*, JSValue& exceptionValue);
+        NEVER_INLINE bool resolveGlobalDynamic(CallFrame*, Instruction*, JSValue& exceptionValue);
         NEVER_INLINE void resolveBase(CallFrame*, Instruction* vPC);
         NEVER_INLINE bool resolveBaseAndProperty(CallFrame*, Instruction*, JSValue& exceptionValue);
         NEVER_INLINE ScopeChainNode* createExceptionScope(CallFrame*, const Instruction* vPC);
@@ -137,7 +138,7 @@ namespace JSC {
         void uncacheGetByID(CodeBlock*, Instruction* vPC);
         void tryCachePutByID(CallFrame*, CodeBlock*, Instruction*, JSValue baseValue, const PutPropertySlot&);
         void uncachePutByID(CodeBlock*, Instruction* vPC);        
-#endif
+#endif // ENABLE(INTERPRETER)
 
         NEVER_INLINE bool unwindCallFrame(CallFrame*&, JSValue, unsigned& bytecodeOffset, CodeBlock*&);
 
@@ -160,7 +161,7 @@ namespace JSC {
 
         RegisterFile m_registerFile;
         
-#if HAVE(COMPUTED_GOTO)
+#if ENABLE(COMPUTED_GOTO_INTERPRETER)
         Opcode m_opcodeTable[numOpcodeIDs]; // Maps OpcodeID => Opcode for compiling
         HashMap<Opcode, OpcodeID> m_opcodeIDTable; // Maps Opcode => OpcodeID for decompiling
 #endif
