@@ -85,7 +85,7 @@ void Debugger::recompileAllJSFunctions(JSGlobalData* globalData)
             continue;
 
         ExecState* exec = function->scope().globalObject()->JSGlobalObject::globalExec();
-        executable->recompile(exec);
+        executable->recompile();
         if (function->scope().globalObject()->debugger() == this)
             sourceProviders.add(executable->source().provider(), exec);
     }

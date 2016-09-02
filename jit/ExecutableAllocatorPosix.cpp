@@ -55,6 +55,11 @@ void ExecutablePool::systemRelease(const ExecutablePool::Allocation& alloc)
     ASSERT_UNUSED(result, !result);
 }
 
+bool ExecutablePool::underMemoryPressure()
+{
+    return false;
+}
+
 bool ExecutableAllocator::isValid() const
 {
     return true;

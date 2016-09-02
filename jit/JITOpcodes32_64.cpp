@@ -380,7 +380,7 @@ void JIT::privateCompileCTIMachineTrampolines(RefPtr<ExecutablePool>* executable
 #endif
 
     // All trampolines constructed! copy the code, link up calls, and set the pointers on the Machine object.
-    LinkBuffer patchBuffer(this, m_globalData->executableAllocator.poolForSize(m_assembler.size()));
+    LinkBuffer patchBuffer(this, m_globalData->executableAllocator.poolForSize(m_assembler.size()), 0);
 
 #if ENABLE(JIT_OPTIMIZE_PROPERTY_ACCESS)
     patchBuffer.link(string_failureCases1Call, FunctionPtr(cti_op_get_by_id_string_fail));
@@ -398,22 +398,22 @@ void JIT::privateCompileCTIMachineTrampolines(RefPtr<ExecutablePool>* executable
     CodeRef finalCode = patchBuffer.finalizeCode();
     *executablePool = finalCode.m_executablePool;
 
-    trampolines->ctiVirtualCall = trampolineAt(finalCode, virtualCallBegin);
+    trampolines->ctiVirtualCall = patchBuffer.trampolineAt(virtualCallBegin);
 #if ENABLE(JIT_OPTIMIZE_NATIVE_CALL)
-    trampolines->ctiNativeCallThunk = adoptRef(new NativeExecutable(JITCode(JITCode::HostFunction(trampolineAt(finalCode, nativeCallThunk)))));
+    trampolines->ctiNativeCallThunk = adoptRef(new NativeExecutable(JITCode(JITCode::HostFunction(patchBuffer.trampolineAt(nativeCallThunk)))));
 #endif
 #if ENABLE(JIT_OPTIMIZE_PROPERTY_ACCESS)
-    trampolines->ctiStringLengthTrampoline = trampolineAt(finalCode, stringLengthBegin);
+    trampolines->ctiStringLengthTrampoline = patchBuffer.trampolineAt(stringLengthBegin);
 #else
     UNUSED_PARAM(ctiStringLengthTrampoline);
 #endif
 #if ENABLE(JIT_OPTIMIZE_CALL)
-    trampolines->ctiVirtualCallLink = trampolineAt(finalCode, virtualCallLinkBegin);
+    trampolines->ctiVirtualCallLink = patchBuffer.trampolineAt(virtualCallLinkBegin);
 #else
     UNUSED_PARAM(ctiVirtualCallLink);
 #endif
 #if ENABLE(JIT_OPTIMIZE_MOD)
-    trampolines->ctiSoftModulo = trampolineAt(finalCode, softModBegin);
+    trampolines->ctiSoftModulo = patchBuffer.trampolineAt(softModBegin);
 #endif
 }
 
@@ -796,9 +796,8 @@ void JIT::emit_op_jfalse(Instruction* currentInstruction)
 
         addSlowCase(branch32(Above, regT1, Imm32(JSValue::LowestTag)));
 
-        zeroDouble(fpRegT0);
-        emitLoadDouble(cond, fpRegT1);
-        addJump(branchDouble(DoubleEqualOrUnordered, fpRegT0, fpRegT1), target);
+        emitLoadDouble(cond, fpRegT0);
+        addJump(branchDoubleZeroOrNaN(fpRegT0, fpRegT1), target);
     } else
         addSlowCase(isNotInteger);
 
@@ -837,9 +836,8 @@ void JIT::emit_op_jtrue(Instruction* currentInstruction)
 
         addSlowCase(branch32(Above, regT1, Imm32(JSValue::LowestTag)));
 
-        zeroDouble(fpRegT0);
-        emitLoadDouble(cond, fpRegT1);
-        addJump(branchDouble(DoubleNotEqual, fpRegT0, fpRegT1), target);
+        emitLoadDouble(cond, fpRegT0);
+        addJump(branchDoubleNonZero(fpRegT0, fpRegT1), target);
     } else
         addSlowCase(isNotInteger);
 

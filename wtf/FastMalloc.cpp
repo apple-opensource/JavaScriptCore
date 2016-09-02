@@ -4468,9 +4468,8 @@ void* FastMallocZone::zoneRealloc(malloc_zone_t*, void*, size_t)
 extern "C" {
 malloc_introspection_t jscore_fastmalloc_introspection = { &FastMallocZone::enumerate, &FastMallocZone::goodSize, &FastMallocZone::check, &FastMallocZone::print,
     &FastMallocZone::log, &FastMallocZone::forceLock, &FastMallocZone::forceUnlock, &FastMallocZone::statistics
-
     , 0 // zone_locked will not be called on the zone unless it advertises itself as version five or higher.
-
+    , 0, 0, 0, 0 // These members will not be used unless the zone advertises itself as version seven or higher.
     };
 }
 

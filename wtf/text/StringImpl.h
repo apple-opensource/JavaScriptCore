@@ -171,11 +171,15 @@ public:
             return empty();
         }
 
-        if (length > ((std::numeric_limits<size_t>::max() - sizeof(StringImpl)) / sizeof(UChar)))
+        if (length > ((std::numeric_limits<unsigned>::max() - sizeof(StringImpl)) / sizeof(UChar))) {
+            output = 0;
             return 0;
+        }
         StringImpl* resultImpl;
-        if (!tryFastMalloc(sizeof(UChar) * length + sizeof(StringImpl)).getValue(resultImpl))
+        if (!tryFastMalloc(sizeof(UChar) * length + sizeof(StringImpl)).getValue(resultImpl)) {
+            output = 0;
             return 0;
+        }
         output = reinterpret_cast<UChar*>(resultImpl + 1);
         return adoptRef(new(resultImpl) StringImpl(length));
     }
@@ -189,6 +193,8 @@ public:
     {
         if (size_t size = vector.size()) {
             ASSERT(vector.data());
+            if (size > std::numeric_limits<unsigned>::max())
+                CRASH();
             return adoptRef(new StringImpl(vector.releaseBuffer(), size));
         }
         return empty();
@@ -284,7 +290,7 @@ public:
 
     PassRefPtr<StringImpl> lower();
     PassRefPtr<StringImpl> upper();
-    PassRefPtr<StringImpl> secure(UChar aChar, bool last = true);
+    PassRefPtr<StringImpl> secure(UChar, bool hideLastCharacter = true);
     PassRefPtr<StringImpl> foldCase();
 
     PassRefPtr<StringImpl> stripWhiteSpace();

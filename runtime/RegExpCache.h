@@ -39,10 +39,12 @@ public:
     PassRefPtr<RegExp> lookupOrCreate(const UString& patternString, const UString& flags);
     PassRefPtr<RegExp> create(const UString& patternString, const UString& flags);
     RegExpCache(JSGlobalData* globalData);
+    
+    static bool isCacheable(const UString& patternString) { return patternString.size() < maxCacheablePatternLength; }
 
 private:
     static const unsigned maxCacheablePatternLength = 256;
-    static const int maxCacheableEntries = 256;
+    static const int maxCacheableEntries = 32;
 
     typedef HashMap<RegExpKey, RefPtr<RegExp> > RegExpCacheMap;
     RegExpKey patternKeyArray[maxCacheableEntries];

@@ -724,9 +724,17 @@ JSValue JSC_HOST_CALL stringProtoFuncSplit(ExecState* exec, JSObject*, JSValue t
 }
 
 JSValue JSC_HOST_CALL stringProtoFuncSubstr(ExecState* exec, JSObject*, JSValue thisValue, const ArgList& args)
-{
-    UString s = thisValue.toThisString(exec);
-    int len = s.size();
+{    
+    int len;
+    JSString* jsString = 0;
+    UString uString;
+    if (thisValue.isString()) {
+        jsString = static_cast<JSString*>(thisValue.asCell());
+        len = jsString->length();
+    } else {
+        uString = thisValue.toThisObject(exec)->toString(exec);
+        len = uString.size();
+    }
 
     JSValue a0 = args.at(0);
     JSValue a1 = args.at(1);
@@ -742,13 +750,26 @@ JSValue JSC_HOST_CALL stringProtoFuncSubstr(ExecState* exec, JSObject*, JSValue 
     }
     if (start + length > len)
         length = len - start;
-    return jsSubstring(exec, s, static_cast<unsigned>(start), static_cast<unsigned>(length));
+    
+    unsigned substringStart = static_cast<unsigned>(start);
+    unsigned substringLength = static_cast<unsigned>(length);
+    if (jsString)
+        return jsSubstring(exec, jsString, substringStart, substringLength);
+    return jsSubstring(exec, uString, substringStart, substringLength);
 }
 
 JSValue JSC_HOST_CALL stringProtoFuncSubstring(ExecState* exec, JSObject*, JSValue thisValue, const ArgList& args)
 {
-    UString s = thisValue.toThisString(exec);
-    int len = s.size();
+    int len;
+    JSString* jsString = 0;
+    UString uString;
+    if (thisValue.isString()) {
+        jsString = static_cast<JSString*>(thisValue.asCell());
+        len = jsString->length();
+    } else {
+        uString = thisValue.toThisObject(exec)->toString(exec);
+        len = uString.size();
+    }
 
     JSValue a0 = args.at(0);
     JSValue a1 = args.at(1);
@@ -774,7 +795,11 @@ JSValue JSC_HOST_CALL stringProtoFuncSubstring(ExecState* exec, JSObject*, JSVal
         end = start;
         start = temp;
     }
-    return jsSubstring(exec, s, static_cast<unsigned>(start), static_cast<unsigned>(end) - static_cast<unsigned>(start));
+    unsigned substringStart = static_cast<unsigned>(start);
+    unsigned substringLength = static_cast<unsigned>(end) - substringStart;
+    if (jsString)
+        return jsSubstring(exec, jsString, substringStart, substringLength);
+    return jsSubstring(exec, uString, substringStart, substringLength);
 }
 
 JSValue JSC_HOST_CALL stringProtoFuncToLowerCase(ExecState* exec, JSObject*, JSValue thisValue, const ArgList&)

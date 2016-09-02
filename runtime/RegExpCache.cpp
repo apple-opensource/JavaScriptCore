@@ -33,7 +33,7 @@ namespace JSC {
 
 PassRefPtr<RegExp> RegExpCache::lookupOrCreate(const UString& patternString, const UString& flags)
 {
-    if (patternString.size() < maxCacheablePatternLength) {
+    if (isCacheable(patternString)) {
         pair<HashMap<RegExpKey, RefPtr<RegExp> >::iterator, bool> result = m_cacheMap.add(RegExpKey(flags, patternString), 0);
         if (!result.second)
             return result.first->second;

@@ -287,7 +287,7 @@ namespace JSC {
         unsigned variableCount() const { return m_numVariables; }
         UString paramString() const;
 
-        void recompile(ExecState*);
+        void recompile();
         ExceptionInfo* reparseExceptionInfo(JSGlobalData*, ScopeChainNode*, CodeBlock*);
         void markAggregate(MarkStack& markStack);
         static PassRefPtr<FunctionExecutable> fromGlobalCode(const Identifier&, ExecState*, Debugger*, const SourceCode&, int* errLine = 0, UString* errMsg = 0);

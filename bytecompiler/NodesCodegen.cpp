@@ -830,6 +830,8 @@ RegisterID* BinaryOpNode::emitStrcat(BytecodeGenerator& generator, RegisterID* d
     ASSERT(isAdd());
     ASSERT(resultDescriptor().definitelyIsString());
 
+    IncreaseEmitNodeDepth stackGuard(generator, 3);
+
     // Create a list of expressions for all the adds in the tree of nodes we can convert into
     // a string concatenation.  The rightmost node (c) is added first.  The rightmost node is
     // added first, and the leftmost child is never added, so the vector produced for the
@@ -1515,6 +1517,8 @@ RegisterID* ForNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
 
 RegisterID* ForInNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
 {
+    IncreaseEmitNodeDepth stackGuard(generator);
+
     RefPtr<LabelScope> scope = generator.newLabelScope(LabelScope::Loop);
 
     if (!m_lexpr->isLocation())
@@ -1863,6 +1867,8 @@ RegisterID* TryNode::emitBytecode(BytecodeGenerator& generator, RegisterID* dst)
 {
     // NOTE: The catch and finally blocks must be labeled explicitly, so the
     // optimizer knows they may be jumped to from anywhere.
+
+    IncreaseEmitNodeDepth stackGuard(generator);
 
     generator.emitDebugHook(WillExecuteStatement, firstLine(), lastLine());
 

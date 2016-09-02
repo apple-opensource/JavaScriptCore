@@ -30,6 +30,7 @@
 #include "JSGlobalData.h"
 #include "LinkBuffer.h"
 #include "MacroAssembler.h"
+#include "RegExpCache.h"
 #include "RegexCompiler.h"
 
 #include "pcre.h" // temporary, remove when fallback is removed.
@@ -1384,7 +1385,7 @@ public:
     {
         generate();
 
-        LinkBuffer patchBuffer(this, globalData->executableAllocator.poolForSize(size()));
+        LinkBuffer patchBuffer(this, globalData->regexAllocator.poolForSize(size()), 0);
 
         for (unsigned i = 0; i < m_backtrackRecords.size(); ++i)
             patchBuffer.patch(m_backtrackRecords[i].dataLabel, patchBuffer.locationOf(m_backtrackRecords[i].backtrackLocation));
@@ -1404,7 +1405,7 @@ void jitCompileRegex(JSGlobalData* globalData, RegexCodeBlock& jitObject, const 
         return;
     numSubpatterns = pattern.m_numSubpatterns;
 
-    if (!pattern.m_shouldFallBack && globalData->canUseJIT()) {
+    if (!pattern.m_shouldFallBack && globalData->canUseJIT() && RegExpCache::isCacheable(patternString)) {
         RegexGenerator generator(pattern);
         generator.compile(globalData, jitObject);
         return;

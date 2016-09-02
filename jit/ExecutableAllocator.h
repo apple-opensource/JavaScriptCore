@@ -120,6 +120,13 @@ public:
         return poolAllocate(n);
     }
     
+    void tryShrink(void* allocation, size_t oldSize, size_t newSize)
+    {
+        if (static_cast<char*>(allocation) + oldSize != m_freePtr)
+            return;
+        m_freePtr = static_cast<char*>(allocation) + roundUpAllocationSize(newSize, sizeof(void*));
+    }
+
     ~ExecutablePool()
     {
         AllocationList::const_iterator end = m_pools.end();
@@ -128,6 +135,8 @@ public:
     }
 
     size_t available() const { return (m_pools.size() > 1) ? 0 : m_end - m_freePtr; }
+
+    static bool underMemoryPressure();
 
 private:
     static Allocation systemAlloc(size_t n);

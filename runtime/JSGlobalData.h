@@ -164,6 +164,7 @@ namespace JSC {
         
 #if ENABLE(ASSEMBLER)
         ExecutableAllocator executableAllocator;
+        ExecutableAllocator regexAllocator;
 #endif
 
 #if ENABLE(JIT)
@@ -229,6 +230,7 @@ namespace JSC {
         void startSampling();
         void stopSampling();
         void dumpSampleData(ExecState* exec);
+        void recompileAllJSFunctions();
         RegExpCache* regExpCache() { return m_regExpCache; }
     private:
         JSGlobalData(GlobalDataType, ThreadStackType);

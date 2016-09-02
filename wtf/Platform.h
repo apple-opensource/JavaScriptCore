@@ -596,6 +596,7 @@
 #endif
 
 #define ENABLE_CONTEXT_MENUS 0
+#define ENABLE_DISK_IMAGE_CACHE 1
 #define ENABLE_DRAG_SUPPORT 0
 #define ENABLE_FTPDIR 1
 #define ENABLE_GEOLOCATION 1
@@ -626,13 +627,24 @@
 
 #define WTF_USE_PTHREAD_GETSPECIFIC_DIRECT 1
 
-#define ENABLE_JIT 0
-#define ENABLE_YARR 0
-#define ENABLE_YARR_JIT 0
-#ifdef __llvm__
-#define WTF_USE_JSVALUE32_64 1
+#if defined(WTF_ARM_ARCH_VERSION) && WTF_ARM_ARCH_VERSION >= 7
+    // ARMv7;
+    #define WTF_USE_JSVALUE32_64 1
+    #define ENABLE_INTERPRETER 1
+    #define ENABLE_JIT 1
+    #define ENABLE_YARR 1
+    #define ENABLE_YARR_JIT 1
 #else
-#define WTF_USE_JSVALUE32 1
+    // ARMv6; never use the JIT, use JSVALUE32_64 only if compiling with llvm.
+    #define ENABLE_JIT 0
+    #define ENABLE_YARR 0
+    #define ENABLE_YARR_JIT 0
+    /* FIXME: <rdar://problem/7478149> gcc-4.2 compiler bug with USE(JSVALUE32_64) and armv6 target */
+    #ifdef __llvm__
+    #define WTF_USE_JSVALUE32_64 1
+    #else
+    #define WTF_USE_JSVALUE32 1
+    #endif
 #endif
 
 #undef ENABLE_3D_CANVAS
@@ -823,6 +835,10 @@
 
 #if !defined(ENABLE_CONTEXT_MENUS)
 #define ENABLE_CONTEXT_MENUS 1
+#endif
+
+#if !defined(ENABLE_DISK_IMAGE_CACHE)
+#define ENABLE_DISK_IMAGE_CACHE 0
 #endif
 
 #if !defined(ENABLE_DRAG_SUPPORT)
@@ -1143,5 +1159,9 @@ on MinGW. See https://bugs.webkit.org/show_bug.cgi?id=29268 */
 #define WTF_PLATFORM_CFNETWORK Error USE_macro_should_be_used_with_CFNETWORK
 
 #define ENABLE_JSC_ZOMBIES 0
+
+#if CPU(ARM_THUMB2)
+#define ENABLE_BRANCH_COMPACTION 1
+#endif
 
 #endif /* WTF_Platform_h */

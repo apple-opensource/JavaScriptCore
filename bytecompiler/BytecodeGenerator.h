@@ -524,9 +524,29 @@ namespace JSC {
         bool m_regeneratingForExceptionInfo;
         CodeBlock* m_codeBlockBeingRegeneratedFrom;
 
-        static const unsigned s_maxEmitNodeDepth = 5000;
+        static const unsigned s_maxEmitNodeDepth = 3000;
+
+        friend class IncreaseEmitNodeDepth;
     };
 
+    class IncreaseEmitNodeDepth {
+    public:
+        IncreaseEmitNodeDepth(BytecodeGenerator& generator, unsigned count = 1)
+            : m_generator(generator)
+            , m_count(count)
+        {
+            m_generator.m_emitNodeDepth += count;
+        }
+
+        ~IncreaseEmitNodeDepth()
+        {
+            m_generator.m_emitNodeDepth -= m_count;
+        }
+
+    private:
+        BytecodeGenerator& m_generator;
+        unsigned m_count;
+    };
 }
 
 #endif // BytecodeGenerator_h

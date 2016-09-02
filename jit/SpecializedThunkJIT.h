@@ -129,7 +129,7 @@ namespace JSC {
         
         PassRefPtr<NativeExecutable> finalize()
         {
-            LinkBuffer patchBuffer(this, m_pool.get());
+            LinkBuffer patchBuffer(this, m_pool.get(), 0);
             patchBuffer.link(m_failures, CodeLocationLabel(m_globalData->jitStubs->ctiNativeCallThunk()->generatedJITCode().addressForCall()));
             return adoptRef(new NativeExecutable(patchBuffer.finalizeCode()));
         }

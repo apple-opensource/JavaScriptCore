@@ -211,7 +211,7 @@ ExceptionInfo* FunctionExecutable::reparseExceptionInfo(JSGlobalData* globalData
     if (globalData->canUseJIT())
 #endif
     {
-        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
+        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get(), generatedJITCode().start());
         ASSERT(newJITCode.size() == generatedJITCode().size());
     }
 #endif
@@ -241,7 +241,7 @@ ExceptionInfo* EvalExecutable::reparseExceptionInfo(JSGlobalData* globalData, Sc
     if (globalData->canUseJIT())
 #endif
     {
-        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get());
+        JITCode newJITCode = JIT::compile(globalData, newCodeBlock.get(), generatedJITCode().start());
         ASSERT(newJITCode.size() == generatedJITCode().size());
     }
 #endif
@@ -249,7 +249,7 @@ ExceptionInfo* EvalExecutable::reparseExceptionInfo(JSGlobalData* globalData, Sc
     return newCodeBlock->extractExceptionInfo();
 }
 
-void FunctionExecutable::recompile(ExecState*)
+void FunctionExecutable::recompile()
 {
     delete m_codeBlock;
     m_codeBlock = 0;
