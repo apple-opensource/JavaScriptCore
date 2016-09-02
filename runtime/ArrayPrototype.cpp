@@ -235,7 +235,7 @@ static inline void unshift(ExecState* exec, JSObject* thisObj, unsigned header, 
 
     if (!header && isJSArray(thisObj)) {
         JSArray* array = asArray(thisObj);
-        if (array->length() == length && array->unshiftCount(exec, count))
+        if (array->length() == length && asArray(thisObj)->unshiftCount(exec, count))
             return;
     }
 
