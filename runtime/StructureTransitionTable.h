@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2008, 2009 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -54,7 +54,7 @@ namespace JSC {
     struct StructureTransitionTableHashTraits {
         typedef WTF::HashTraits<RefPtr<UString::Rep> > FirstTraits;
         typedef WTF::GenericHashTraits<unsigned> SecondTraits;
-        typedef std::pair<FirstTraits::TraitType, SecondTraits::TraitType> TraitType;
+        typedef std::pair<FirstTraits::TraitType, SecondTraits::TraitType > TraitType;
 
         static const bool emptyValueIsZero = FirstTraits::emptyValueIsZero && SecondTraits::emptyValueIsZero;
         static TraitType emptyValue() { return std::make_pair(FirstTraits::emptyValue(), SecondTraits::emptyValue()); }
@@ -65,7 +65,48 @@ namespace JSC {
         static bool isDeletedValue(const TraitType& value) { return FirstTraits::isDeletedValue(value.first); }
     };
 
-    typedef HashMap<StructureTransitionTableHash::Key, Structure*, StructureTransitionTableHash, StructureTransitionTableHashTraits> StructureTransitionTable;
+    class StructureTransitionTable {
+        typedef std::pair<Structure*, Structure*> Transition;
+        typedef HashMap<StructureTransitionTableHash::Key, Transition, StructureTransitionTableHash, StructureTransitionTableHashTraits> TransitionTable;
+    public:
+        // The contains and get methods accept imprecise matches, so if an unspecialised transition exists
+        // for the given key they will consider that transition to be a match.  If a specialised transition
+        // exists and it matches the provided specificValue, get will return the specific transition.
+        inline bool contains(const StructureTransitionTableHash::Key&, JSCell* specificValue);
+        inline Structure* get(const StructureTransitionTableHash::Key&, JSCell* specificValue) const;
+        bool hasTransition(const StructureTransitionTableHash::Key& key)
+        {
+            return m_table.contains(key);
+        }
+        void remove(const StructureTransitionTableHash::Key& key, JSCell* specificValue)
+        {
+            TransitionTable::iterator find = m_table.find(key);
+            if (!specificValue)
+                find->second.first = 0;
+            else
+                find->second.second = 0;
+            if (!find->second.first && !find->second.second)
+                m_table.remove(find);
+        }
+        void add(const StructureTransitionTableHash::Key& key, Structure* structure, JSCell* specificValue)
+        {
+            if (!specificValue) {
+                TransitionTable::iterator find = m_table.find(key);
+                if (find == m_table.end())
+                    m_table.add(key, Transition(structure, 0));
+                else
+                    find->second.first = structure;
+            } else {
+                // If we're adding a transition to a specific value, then there cannot be
+                // an existing transition
+                ASSERT(!m_table.contains(key));
+                m_table.add(key, Transition(0, structure));
+            }
+
+        }
+    private:
+        TransitionTable m_table;
+    };
 
 } // namespace JSC
 

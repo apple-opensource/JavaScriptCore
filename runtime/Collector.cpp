@@ -27,21 +27,24 @@
 #include "Interpreter.h"
 #include "JSGlobalObject.h"
 #include "JSLock.h"
+#include "JSONObject.h"
 #include "JSString.h"
 #include "JSValue.h"
 #include "Nodes.h"
 #include "Tracing.h"
 #include <algorithm>
+#include <limits.h>
 #include <setjmp.h>
 #include <stdlib.h>
 #include <wtf/FastMalloc.h>
 #include <wtf/HashCountedSet.h>
 #include <wtf/UnusedParam.h>
+#include <wtf/VMTags.h>
 
 #if PLATFORM(DARWIN)
 
-#include <mach/mach_port.h>
 #include <mach/mach_init.h>
+#include <mach/mach_port.h>
 #include <mach/task.h>
 #include <mach/thread_act.h>
 #include <mach/vm_map.h>
@@ -58,9 +61,7 @@
 
 #if PLATFORM(SOLARIS)
 #include <thread.h>
-#endif
-
-#if PLATFORM(OPENBSD)
+#else
 #include <pthread.h>
 #endif
 
@@ -183,7 +184,7 @@ static NEVER_INLINE CollectorBlock* allocateBlock()
 #if PLATFORM(DARWIN)
     vm_address_t address = 0;
     // FIXME: tag the region as a JavaScriptCore heap when we get a registered VM tag: <rdar://problem/6054788>.
-    vm_map(current_task(), &address, BLOCK_SIZE, BLOCK_OFFSET_MASK, VM_FLAGS_ANYWHERE, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_DEFAULT);
+    vm_map(current_task(), &address, BLOCK_SIZE, BLOCK_OFFSET_MASK, VM_FLAGS_ANYWHERE | VM_TAG_FOR_COLLECTOR_MEMORY, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_DEFAULT);
 #elif PLATFORM(SYMBIAN)
     // no memory map in symbian, need to hack with fastMalloc
     void* address = fastMalloc(BLOCK_SIZE);
@@ -393,6 +394,63 @@ void* Heap::allocateNumber(size_t s)
     return heapAllocate<NumberHeap>(s);
 }
 
+#if PLATFORM(WINCE)
+void* g_stackBase = 0;
+
+inline bool isPageWritable(void* page)
+{
+    MEMORY_BASIC_INFORMATION memoryInformation;
+    DWORD result = VirtualQuery(page, &memoryInformation, sizeof(memoryInformation));
+
+    // return false on error, including ptr outside memory
+    if (result != sizeof(memoryInformation))
+        return false;
+
+    DWORD protect = memoryInformation.Protect & ~(PAGE_GUARD | PAGE_NOCACHE);
+    return protect == PAGE_READWRITE
+        || protect == PAGE_WRITECOPY
+        || protect == PAGE_EXECUTE_READWRITE
+        || protect == PAGE_EXECUTE_WRITECOPY;
+}
+
+static void* getStackBase(void* previousFrame)
+{
+    // find the address of this stack frame by taking the address of a local variable
+    bool isGrowingDownward;
+    void* thisFrame = (void*)(&isGrowingDownward);
+
+    isGrowingDownward = previousFrame < &thisFrame;
+    static DWORD pageSize = 0;
+    if (!pageSize) {
+        SYSTEM_INFO systemInfo;
+        GetSystemInfo(&systemInfo);
+        pageSize = systemInfo.dwPageSize;
+    }
+
+    // scan all of memory starting from this frame, and return the last writeable page found
+    register char* currentPage = (char*)((DWORD)thisFrame & ~(pageSize - 1));
+    if (isGrowingDownward) {
+        while (currentPage > 0) {
+            // check for underflow
+            if (currentPage >= (char*)pageSize)
+                currentPage -= pageSize;
+            else
+                currentPage = 0;
+            if (!isPageWritable(currentPage))
+                return currentPage + pageSize;
+        }
+        return 0;
+    } else {
+        while (true) {
+            // guaranteed to complete because isPageWritable returns false at end of memory
+            currentPage += pageSize;
+            if (!isPageWritable(currentPage))
+                return currentPage;
+        }
+    }
+}
+#endif
+
 static inline void* currentThreadStackBase()
 {
 #if PLATFORM(DARWIN)
@@ -427,6 +485,15 @@ static inline void* currentThreadStackBase()
     stack_t stack;
     pthread_stackseg_np(thread, &stack);
     return stack.ss_sp;
+#elif PLATFORM(SYMBIAN)
+    static void* stackBase = 0;
+    if (stackBase == 0) {
+        TThreadStackInfo info;
+        RThread thread;
+        thread.StackInfo(info);
+        stackBase = (void*)info.iBase;
+    }
+    return (void*)stackBase;
 #elif PLATFORM(UNIX)
     static void* stackBase = 0;
     static size_t stackSize = 0;
@@ -449,15 +516,13 @@ static inline void* currentThreadStackBase()
         stackThread = thread;
     }
     return static_cast<char*>(stackBase) + stackSize;
-#elif PLATFORM(SYMBIAN)
-    static void* stackBase = 0;
-    if (stackBase == 0) {
-        TThreadStackInfo info;
-        RThread thread;
-        thread.StackInfo(info);
-        stackBase = (void*)info.iBase;
+#elif PLATFORM(WINCE)
+    if (g_stackBase)
+        return g_stackBase;
+    else {
+        int dummy;
+        return getStackBase(&dummy);
     }
-    return (void*)stackBase;
 #else
 #error Need a way to get the stack base on this platform
 #endif
@@ -807,7 +872,7 @@ void Heap::setGCProtectNeedsLocking()
         m_protectedValuesMutex.set(new Mutex);
 }
 
-void Heap::protect(JSValuePtr k)
+void Heap::protect(JSValue k)
 {
     ASSERT(k);
     ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance);
@@ -824,7 +889,7 @@ void Heap::protect(JSValuePtr k)
         m_protectedValuesMutex->unlock();
 }
 
-void Heap::unprotect(JSValuePtr k)
+void Heap::unprotect(JSValue k)
 {
     ASSERT(k);
     ASSERT(JSLock::currentThreadIsHoldingLock() || !m_globalData->isSharedInstance);
@@ -841,7 +906,7 @@ void Heap::unprotect(JSValuePtr k)
         m_protectedValuesMutex->unlock();
 }
 
-Heap* Heap::heap(JSValuePtr v)
+Heap* Heap::heap(JSValue v)
 {
     if (!v.isCell())
         return 0;
@@ -985,13 +1050,15 @@ bool Heap::collect()
     markStackObjectsConservatively();
     markProtectedObjects();
     if (m_markListSet && m_markListSet->size())
-        ArgList::markLists(*m_markListSet);
+        MarkedArgumentBuffer::markLists(*m_markListSet);
     if (m_globalData->exception && !m_globalData->exception.marked())
         m_globalData->exception.mark();
     m_globalData->interpreter->registerFile().markCallFrames(this);
     m_globalData->smallStrings.mark();
     if (m_globalData->scopeNodeBeingReparsed)
         m_globalData->scopeNodeBeingReparsed->mark();
+    if (m_globalData->firstStringifierToMark)
+        JSONObject::markStringifiers(m_globalData->firstStringifierToMark);
 
     JAVASCRIPTCORE_GC_MARKED();
 
@@ -1082,8 +1149,10 @@ static const char* typeName(JSCell* cell)
 {
     if (cell->isString())
         return "string";
+#if USE(JSVALUE32)
     if (cell->isNumber())
         return "number";
+#endif
     if (cell->isGetterSetter())
         return "gettersetter";
     ASSERT(cell->isObject());

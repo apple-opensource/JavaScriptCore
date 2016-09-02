@@ -6,13 +6,13 @@
  * are met:
  *
  * 1.  Redistributions of source code must retain the above copyright
- *     notice, this list of conditions and the following disclaimer. 
+ *     notice, this list of conditions and the following disclaimer.
  * 2.  Redistributions in binary form must reproduce the above copyright
  *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution. 
+ *     documentation and/or other materials provided with the distribution.
  * 3.  Neither the name of Apple Computer, Inc. ("Apple") nor the names of
  *     its contributors may be used to endorse or promote products derived
- *     from this software without specific prior written permission. 
+ *     from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
  * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -26,23 +26,48 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#import "config.h"
-#import "Threading.h"
+#ifndef TimeoutChecker_h
+#define TimeoutChecker_h
 
-#import <Foundation/NSThread.h>
+#include <wtf/Assertions.h>
 
-namespace WTF {
+namespace JSC {
 
-static NSThread *mainThread;
+    class ExecState;
 
-NSThread *mainNSThread()
-{
-    return mainThread;
-}
+    class TimeoutChecker {
+    public:
+        TimeoutChecker();
 
-void initializeMainNSThread()
-{
-    mainThread = [[NSThread currentThread] retain];
-}
+        void setTimeoutInterval(unsigned timeoutInterval) { m_timeoutInterval = timeoutInterval; }
+        
+        unsigned ticksUntilNextCheck() { return m_ticksUntilNextCheck; }
+        
+        void start()
+        {
+            if (!m_startCount)
+                reset();
+            ++m_startCount;
+        }
 
-} // namespace WTF
+        void stop()
+        {
+            ASSERT(m_startCount);
+            --m_startCount;
+        }
+
+        void reset();
+
+        bool didTimeOut(ExecState*);
+
+    private:
+        unsigned m_timeoutInterval;
+        unsigned m_timeAtLastCheck;
+        unsigned m_timeExecuting;
+        unsigned m_startCount;
+        unsigned m_ticksUntilNextCheck;
+    };
+
+} // namespace JSC
+
+#endif // TimeoutChecker_h

@@ -77,7 +77,7 @@ CompiledRegExp Generator::compileRegExp(JSGlobalData* globalData, const UString&
     }
 
     *numSubpatterns_ptr = parser.numSubpatterns();
-    pool = globalData->poolForSize(generator.size());
+    pool = globalData->executableAllocator.poolForSize(generator.size());
     return reinterpret_cast<CompiledRegExp>(generator.copyCode(pool.get()));
 }
 

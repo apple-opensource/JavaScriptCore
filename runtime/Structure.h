@@ -51,7 +51,7 @@ namespace JSC {
     class Structure : public RefCounted<Structure> {
     public:
         friend class JIT;
-        static PassRefPtr<Structure> create(JSValuePtr prototype, const TypeInfo& typeInfo)
+        static PassRefPtr<Structure> create(JSValue prototype, const TypeInfo& typeInfo)
         {
             return adoptRef(new Structure(prototype, typeInfo));
         }
@@ -61,13 +61,16 @@ namespace JSC {
 
         static void dumpStatistics();
 
-        static PassRefPtr<Structure> addPropertyTransition(Structure*, const Identifier& propertyName, unsigned attributes, size_t& offset);
-        static PassRefPtr<Structure> addPropertyTransitionToExistingStructure(Structure*, const Identifier& propertyName, unsigned attributes, size_t& offset);
+        static PassRefPtr<Structure> addPropertyTransition(Structure*, const Identifier& propertyName, unsigned attributes, JSCell* specificValue, size_t& offset);
+        static PassRefPtr<Structure> addPropertyTransitionToExistingStructure(Structure*, const Identifier& propertyName, unsigned attributes, JSCell* specificValue, size_t& offset);
         static PassRefPtr<Structure> removePropertyTransition(Structure*, const Identifier& propertyName, size_t& offset);
-        static PassRefPtr<Structure> changePrototypeTransition(Structure*, JSValuePtr prototype);
+        static PassRefPtr<Structure> changePrototypeTransition(Structure*, JSValue prototype);
+        static PassRefPtr<Structure> despecifyFunctionTransition(Structure*, const Identifier&);        
         static PassRefPtr<Structure> getterSetterTransition(Structure*);
-        static PassRefPtr<Structure> toDictionaryTransition(Structure*);
-        static PassRefPtr<Structure> fromDictionaryTransition(Structure*);
+        static PassRefPtr<Structure> toCacheableDictionaryTransition(Structure*);
+        static PassRefPtr<Structure> toUncacheableDictionaryTransition(Structure*);
+
+        PassRefPtr<Structure> flattenDictionaryStructure(JSObject*);
 
         ~Structure();
 
@@ -78,16 +81,17 @@ namespace JSC {
         }
 
         // These should be used with caution.  
-        size_t addPropertyWithoutTransition(const Identifier& propertyName, unsigned attributes);
+        size_t addPropertyWithoutTransition(const Identifier& propertyName, unsigned attributes, JSCell* specificValue);
         size_t removePropertyWithoutTransition(const Identifier& propertyName);
-        void setPrototypeWithoutTransition(JSValuePtr prototype) { m_prototype = prototype; }
-
-        bool isDictionary() const { return m_isDictionary; }
+        void setPrototypeWithoutTransition(JSValue prototype) { m_prototype = prototype; }
+        
+        bool isDictionary() const { return m_dictionaryKind != NoneDictionaryKind; }
+        bool isUncacheableDictionary() const { return m_dictionaryKind == UncachedDictionaryKind; }
 
         const TypeInfo& typeInfo() const { return m_typeInfo; }
 
-        JSValuePtr storedPrototype() const { return m_prototype; }
-        JSValuePtr prototypeForLookup(ExecState*) const;
+        JSValue storedPrototype() const { return m_prototype; }
+        JSValue prototypeForLookup(ExecState*) const;
         StructureChain* prototypeChain(ExecState*) const;
 
         Structure* previousID() const { return m_previous.get(); }
@@ -95,9 +99,25 @@ namespace JSC {
         void growPropertyStorageCapacity();
         size_t propertyStorageCapacity() const { return m_propertyStorageCapacity; }
         size_t propertyStorageSize() const { return m_propertyTable ? m_propertyTable->keyCount + (m_propertyTable->deletedOffsets ? m_propertyTable->deletedOffsets->size() : 0) : m_offset + 1; }
+        bool isUsingInlineStorage() const;
 
         size_t get(const Identifier& propertyName);
-        size_t get(const Identifier& propertyName, unsigned& attributes);
+        size_t get(const UString::Rep* rep, unsigned& attributes, JSCell*& specificValue);
+        size_t get(const Identifier& propertyName, unsigned& attributes, JSCell*& specificValue)
+        {
+            ASSERT(!propertyName.isNull());
+            return get(propertyName.ustring().rep(), attributes, specificValue);
+        }
+        bool transitionedFor(const JSCell* specificValue)
+        {
+            return m_specificValueInPrevious == specificValue;
+        }
+        bool hasTransition(UString::Rep*, unsigned attributes);
+        bool hasTransition(const Identifier& propertyName, unsigned attributes)
+        {
+            return hasTransition(propertyName._ustring.rep(), attributes);
+        }
+
         void getEnumerablePropertyNames(ExecState*, PropertyNameArray&, JSObject*);
 
         bool hasGetterSetterProperties() const { return m_hasGetterSetterProperties; }
@@ -105,10 +125,20 @@ namespace JSC {
 
         bool isEmpty() const { return m_propertyTable ? !m_propertyTable->keyCount : m_offset == noOffset; }
 
-    private:
-        Structure(JSValuePtr prototype, const TypeInfo&);
+        JSCell* specificValue() { return m_specificValueInPrevious; }
+        void despecifyDictionaryFunction(const Identifier& propertyName);
 
-        size_t put(const Identifier& propertyName, unsigned attributes);
+    private:
+        Structure(JSValue prototype, const TypeInfo&);
+        
+        typedef enum { 
+            NoneDictionaryKind = 0,
+            CachedDictionaryKind = 1,
+            UncachedDictionaryKind = 2
+        } DictionaryKind;
+        static PassRefPtr<Structure> toDictionaryTransition(Structure*, DictionaryKind);
+
+        size_t put(const Identifier& propertyName, unsigned attributes, JSCell* specificValue);
         size_t remove(const Identifier& propertyName);
         void getEnumerableNamesFromPropertyTable(PropertyNameArray&);
         void getEnumerableNamesFromClassInfoTable(ExecState*, const ClassInfo*, PropertyNameArray&);
@@ -121,6 +151,8 @@ namespace JSC {
         void insertIntoPropertyMapHashTable(const PropertyMapEntry&);
         void checkConsistency();
 
+        bool despecifyFunction(const Identifier&);
+
         PropertyMapHashTable* copyPropertyTable();
         void materializePropertyMap();
         void materializePropertyMapIfNecessary()
@@ -131,11 +163,6 @@ namespace JSC {
         }
 
         void clearEnumerationCache();
-
-        void* addressOfCount()
-        {
-            return &m_refCount;
-        }
 
         signed char transitionCount() const
         {
@@ -153,11 +180,12 @@ namespace JSC {
 
         TypeInfo m_typeInfo;
 
-        JSValuePtr m_prototype;
+        JSValue m_prototype;
         mutable RefPtr<StructureChain> m_cachedPrototypeChain;
 
         RefPtr<Structure> m_previous;
         RefPtr<UString::Rep> m_nameInPrevious;
+        JSCell* m_specificValueInPrevious;
 
         union {
             Structure* singleTransition;
@@ -171,11 +199,11 @@ namespace JSC {
         size_t m_propertyStorageCapacity;
         signed char m_offset;
 
-        bool m_isDictionary : 1;
+        unsigned m_dictionaryKind : 2;
         bool m_isPinnedPropertyTable : 1;
         bool m_hasGetterSetterProperties : 1;
         bool m_usingSingleTransitionSlot : 1;
-        unsigned m_attributesInPrevious : 5;
+        unsigned m_attributesInPrevious : 7;
     };
 
     inline size_t Structure::get(const Identifier& propertyName)
@@ -222,7 +250,23 @@ namespace JSC {
                 return m_propertyTable->entries()[entryIndex - 1].offset;
         }
     }
+    
+    bool StructureTransitionTable::contains(const StructureTransitionTableHash::Key& key, JSCell* specificValue)
+    {
+        TransitionTable::iterator find = m_table.find(key);
+        if (find == m_table.end())
+            return false;
 
+        return find->second.first || find->second.second->transitionedFor(specificValue);
+    }
+
+    Structure* StructureTransitionTable::get(const StructureTransitionTableHash::Key& key, JSCell* specificValue) const
+    {
+        Transition transition = m_table.get(key);
+        if (transition.second && transition.second->transitionedFor(specificValue))
+            return transition.second;
+        return transition.first;
+    }
 } // namespace JSC
 
 #endif // Structure_h

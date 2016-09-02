@@ -39,11 +39,11 @@
 
 namespace JSC {
 
-    class ArgList;
+    class MarkedArgumentBuffer;
     class CollectorBlock;
     class JSCell;
     class JSGlobalData;
-    class JSValuePtr;
+    class JSValue;
 
     enum OperationInProgress { NoOperation, Allocation, Collection };
     enum HeapType { PrimaryHeap, NumberHeap };
@@ -96,10 +96,10 @@ namespace JSC {
         Statistics statistics() const;
 
         void setGCProtectNeedsLocking();
-        void protect(JSValuePtr);
-        void unprotect(JSValuePtr);
+        void protect(JSValue);
+        void unprotect(JSValue);
 
-        static Heap* heap(JSValuePtr); // 0 for immediate values
+        static Heap* heap(JSValue); // 0 for immediate values
 
         size_t globalObjectCount();
         size_t protectedObjectCount();
@@ -113,7 +113,7 @@ namespace JSC {
 
         void markConservatively(void* start, void* end);
 
-        HashSet<ArgList*>& markListSet() { if (!m_markListSet) m_markListSet = new HashSet<ArgList*>; return *m_markListSet; }
+        HashSet<MarkedArgumentBuffer*>& markListSet() { if (!m_markListSet) m_markListSet = new HashSet<MarkedArgumentBuffer*>; return *m_markListSet; }
 
         JSGlobalData* globalData() const { return m_globalData; }
         static bool isNumber(JSCell*);
@@ -147,7 +147,7 @@ namespace JSC {
         OwnPtr<Mutex> m_protectedValuesMutex; // Only non-null if the client explicitly requested it via setGCPrtotectNeedsLocking().
         ProtectCountSet m_protectedValues;
 
-        HashSet<ArgList*>* m_markListSet;
+        HashSet<MarkedArgumentBuffer*>* m_markListSet;
 
 #if ENABLE(JSC_MULTIPLE_THREADS)
         void makeUsableFromMultipleThreads();
@@ -167,8 +167,13 @@ namespace JSC {
     template<size_t bytesPerWord> struct CellSize;
 
     // cell size needs to be a power of two for certain optimizations in collector.cpp
-    template<> struct CellSize<sizeof(uint32_t)> { static const size_t m_value = 32; }; // 32-bit
-    template<> struct CellSize<sizeof(uint64_t)> { static const size_t m_value = 64; }; // 64-bit
+#if USE(JSVALUE32)
+    template<> struct CellSize<sizeof(uint32_t)> { static const size_t m_value = 32; };
+#else
+    template<> struct CellSize<sizeof(uint32_t)> { static const size_t m_value = 64; };
+#endif
+    template<> struct CellSize<sizeof(uint64_t)> { static const size_t m_value = 64; };
+
     const size_t BLOCK_SIZE = 16 * 4096; // 64k
 
     // derived constants

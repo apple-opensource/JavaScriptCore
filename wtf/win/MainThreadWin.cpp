@@ -31,7 +31,7 @@
 
 #include "Assertions.h"
 #include "Threading.h"
-#if !PLATFORM(WIN_CE)
+#if !PLATFORM(WINCE)
 #include <windows.h>
 #endif
 
@@ -50,12 +50,10 @@ LRESULT CALLBACK ThreadingWindowWndProc(HWND hWnd, UINT message, WPARAM wParam, 
     return 0;
 }
 
-void initializeMainThread()
+void initializeMainThreadPlatform()
 {
     if (threadingWindowHandle)
         return;
-
-    mainThreadFunctionQueueMutex();
 
     WNDCLASSEX wcex;
     memset(&wcex, 0, sizeof(WNDCLASSEX));
@@ -75,4 +73,4 @@ void scheduleDispatchFunctionsOnMainThread()
     PostMessage(threadingWindowHandle, threadingFiredMessage, 0, 0);
 }
 
-} // namespace WebCore
+} // namespace WTF

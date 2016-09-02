@@ -44,6 +44,8 @@
 
 #include "Platform.h"
 
+#include <stdbool.h>
+
 #if COMPILER(MSVC)
 #include <stddef.h>
 #else
@@ -91,6 +93,13 @@
 #define WTF_ATTRIBUTE_PRINTF(formatStringArgument, extraArguments) 
 #endif
 
+/* This macro is needed to prevent the clang static analyzer from generating false-positive reports in ASSERT() macros. */
+#ifdef __clang__
+#define CLANG_ANALYZER_NORETURN __attribute__((analyzer_noreturn))
+#else
+#define CLANG_ANALYZER_NORETURN
+#endif
+
 /* These helper functions are always declared, but not necessarily always defined if the corresponding function is disabled. */
 
 #ifdef __cplusplus
@@ -105,10 +114,10 @@ typedef struct {
     WTFLogChannelState state;
 } WTFLogChannel;
 
-void WTFReportAssertionFailure(const char* file, int line, const char* function, const char* assertion);
-void WTFReportAssertionFailureWithMessage(const char* file, int line, const char* function, const char* assertion, const char* format, ...) WTF_ATTRIBUTE_PRINTF(5, 6);
-void WTFReportArgumentAssertionFailure(const char* file, int line, const char* function, const char* argName, const char* assertion);
-void WTFReportFatalError(const char* file, int line, const char* function, const char* format, ...) WTF_ATTRIBUTE_PRINTF(4, 5);
+void WTFReportAssertionFailure(const char* file, int line, const char* function, const char* assertion) CLANG_ANALYZER_NORETURN;
+void WTFReportAssertionFailureWithMessage(const char* file, int line, const char* function, const char* assertion, const char* format, ...) CLANG_ANALYZER_NORETURN WTF_ATTRIBUTE_PRINTF(5, 6);
+void WTFReportArgumentAssertionFailure(const char* file, int line, const char* function, const char* argName, const char* assertion) CLANG_ANALYZER_NORETURN;
+void WTFReportFatalError(const char* file, int line, const char* function, const char* format, ...) CLANG_ANALYZER_NORETURN WTF_ATTRIBUTE_PRINTF(4, 5);
 void WTFReportError(const char* file, int line, const char* function, const char* format, ...) WTF_ATTRIBUTE_PRINTF(4, 5);
 void WTFLog(WTFLogChannel* channel, const char* format, ...) WTF_ATTRIBUTE_PRINTF(2, 3);
 void WTFLogVerbose(const char* file, int line, const char* function, WTFLogChannel* channel, const char* format, ...) WTF_ATTRIBUTE_PRINTF(5, 6);
@@ -128,7 +137,7 @@ void WTFLogVerbose(const char* file, int line, const char* function, WTFLogChann
 
 /* ASSERT, ASSERT_WITH_MESSAGE, ASSERT_NOT_REACHED */
 
-#if PLATFORM(WIN_CE)
+#if PLATFORM(WINCE) && !PLATFORM(TORCHMOBILE)
 /* FIXME: We include this here only to avoid a conflict with the ASSERT macro. */
 #include <windows.h>
 #undef min
@@ -194,7 +203,7 @@ while (0)
 
 /* COMPILE_ASSERT */
 #ifndef COMPILE_ASSERT
-#define COMPILE_ASSERT(exp, name) typedef int dummy##name [(exp) ? 1 : -1];
+#define COMPILE_ASSERT(exp, name) typedef int dummy##name [(exp) ? 1 : -1]
 #endif
 
 /* FATAL */

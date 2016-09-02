@@ -38,12 +38,12 @@ namespace JSC {
             : m_object(object)
         {
             if (!m_object->structure()->isDictionary())
-                m_object->setStructure(Structure::toDictionaryTransition(m_object->structure()));
+                m_object->setStructure(Structure::toCacheableDictionaryTransition(m_object->structure()));
         }
 
         ~BatchedTransitionOptimizer()
         {
-            m_object->setStructure(Structure::fromDictionaryTransition(m_object->structure()));
+            m_object->flattenDictionaryObject();
         }
 
     private:
