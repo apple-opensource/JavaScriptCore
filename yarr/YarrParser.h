@@ -43,7 +43,7 @@ enum BuiltInCharacterClassID {
 };
 
 // The Parser class should not be used directly - only via the Yarr::parse() method.
-template<class Delegate>
+template<class Delegate, typename CharType>
 class Parser {
 private:
     template<class FriendDelegate>
@@ -54,6 +54,7 @@ private:
         PatternTooLarge,
         QuantifierOutOfOrder,
         QuantifierWithoutAtom,
+        QuantifierTooLarge,
         MissingParentheses,
         ParenthesesUnmatched,
         ParenthesesTypeInvalid,
@@ -211,8 +212,8 @@ private:
 
         // parseEscape() should never call these delegate methods when
         // invoked with inCharacterClass set.
-        void assertionWordBoundary(bool) { ASSERT_NOT_REACHED(); }
-        void atomBackReference(unsigned) { ASSERT_NOT_REACHED(); }
+        NO_RETURN_DUE_TO_ASSERT void assertionWordBoundary(bool) { ASSERT_NOT_REACHED(); }
+        NO_RETURN_DUE_TO_ASSERT void atomBackReference(unsigned) { ASSERT_NOT_REACHED(); }
 
     private:
         Delegate& m_delegate;
@@ -231,13 +232,13 @@ private:
         : m_delegate(delegate)
         , m_backReferenceLimit(backReferenceLimit)
         , m_err(NoError)
-        , m_data(pattern.characters())
+        , m_data(pattern.getCharacters<CharType>())
         , m_size(pattern.length())
         , m_index(0)
         , m_parenthesesNestingDepth(0)
     {
     }
-    
+
     /*
      * parseEscape():
      *
@@ -546,6 +547,11 @@ private:
         ASSERT(!m_err);
         ASSERT(min <= max);
 
+        if (min == UINT_MAX) {
+            m_err = QuantifierTooLarge;
+            return;
+        }
+
         if (lastTokenWasAnAtom)
             m_delegate.quantifyAtom(min, max, !tryConsume('?'));
         else
@@ -685,6 +691,7 @@ private:
             REGEXP_ERROR_PREFIX "regular expression too large",
             REGEXP_ERROR_PREFIX "numbers out of order in {} quantifier",
             REGEXP_ERROR_PREFIX "nothing to repeat",
+            REGEXP_ERROR_PREFIX "number too large in {} quantifier",
             REGEXP_ERROR_PREFIX "missing )",
             REGEXP_ERROR_PREFIX "unmatched parentheses",
             REGEXP_ERROR_PREFIX "unrecognized character after (?",
@@ -695,7 +702,6 @@ private:
 
         return errorMessages[m_err];
     }
-
 
     // Misc helper functions:
 
@@ -793,7 +799,7 @@ private:
     Delegate& m_delegate;
     unsigned m_backReferenceLimit;
     ErrorCode m_err;
-    const UChar* m_data;
+    const CharType* m_data;
     unsigned m_size;
     unsigned m_index;
     unsigned m_parenthesesNestingDepth;
@@ -864,7 +870,9 @@ private:
 template<class Delegate>
 const char* parse(Delegate& delegate, const UString& pattern, unsigned backReferenceLimit = quantifyInfinite)
 {
-    return Parser<Delegate>(delegate, pattern, backReferenceLimit).parse();
+    if (pattern.is8Bit())
+        return Parser<Delegate, LChar>(delegate, pattern, backReferenceLimit).parse();
+    return Parser<Delegate, UChar>(delegate, pattern, backReferenceLimit).parse();
 }
 
 } } // namespace JSC::Yarr

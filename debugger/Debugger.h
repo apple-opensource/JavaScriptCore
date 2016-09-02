@@ -34,7 +34,7 @@ namespace JSC {
     class SourceProvider;
     class UString;
 
-    class Debugger {
+    class JS_EXPORT_PRIVATE Debugger {
     public:
         virtual ~Debugger();
 
@@ -58,7 +58,7 @@ namespace JSC {
     };
 
     // This function exists only for backwards compatibility with existing WebScriptDebugger clients.
-    JSValue evaluateInGlobalCallFrame(const UString&, JSValue& exception, JSGlobalObject*);
+    JS_EXPORT_PRIVATE JSValue evaluateInGlobalCallFrame(const UString&, JSValue& exception, JSGlobalObject*);
 
 } // namespace JSC
 

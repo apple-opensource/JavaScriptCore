@@ -42,11 +42,27 @@ DefaultGCActivityCallback::~DefaultGCActivityCallback()
 {
 }
 
-void DefaultGCActivityCallback::operator()()
+void DefaultGCActivityCallback::didAllocate(size_t)
+{
+}
+
+void DefaultGCActivityCallback::willCollect()
 {
 }
 
 void DefaultGCActivityCallback::synchronize()
+{
+}
+
+void DefaultGCActivityCallback::cancel()
+{
+}
+
+void DefaultGCActivityCallback::didStartVMShutdown()
+{
+}
+
+void DefaultGCActivityCallback::invalidate()
 {
 }
 

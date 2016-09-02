@@ -26,9 +26,11 @@
 #ifndef WriteBarrier_h
 #define WriteBarrier_h
 
+#include "GCAssertions.h"
 #include "HandleTypes.h"
 #include "Heap.h"
-#include "TypeTraits.h"
+#include "SamplingCounter.h"
+#include <wtf/TypeTraits.h>
 
 namespace JSC {
 
@@ -39,8 +41,8 @@ class JSGlobalObject;
 template<class T> class WriteBarrierBase;
 template<> class WriteBarrierBase<JSValue>;
 
-void slowValidateCell(JSCell*);
-void slowValidateCell(JSGlobalObject*);
+JS_EXPORT_PRIVATE void slowValidateCell(JSCell*);
+JS_EXPORT_PRIVATE void slowValidateCell(JSGlobalObject*);
     
 #if ENABLE(GC_VALIDATION)
 template<class T> inline void validateCell(T cell)
@@ -72,6 +74,13 @@ public:
         validateCell(value);
         setEarlyValue(globalData, owner, value);
     }
+    
+    // This is meant to be used like operator=, but is called copyFrom instead, in
+    // order to kindly inform the C++ compiler that its advice is not appreciated.
+    void copyFrom(const WriteBarrierBase<T>& other)
+    {
+        m_cell = other.m_cell;
+    }
 
     void setMayBeNull(JSGlobalData& globalData, const JSCell* owner, T* value)
     {
@@ -86,25 +95,18 @@ public:
     {
         this->m_cell = reinterpret_cast<JSCell*>(value);
         Heap::writeBarrier(owner, this->m_cell);
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!isZombie(owner));
-        ASSERT(!isZombie(m_cell));
-#endif
     }
     
     T* get() const
     {
         if (m_cell)
             validateCell(m_cell);
-        return reinterpret_cast<T*>(m_cell);
+        return reinterpret_cast<T*>(static_cast<void*>(m_cell));
     }
 
     T* operator*() const
     {
         ASSERT(m_cell);
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!isZombie(m_cell));
-#endif
         validateCell<T>(static_cast<T*>(m_cell));
         return static_cast<T*>(m_cell);
     }
@@ -127,14 +129,14 @@ public:
 
     void setWithoutWriteBarrier(T* value)
     {
-        this->m_cell = reinterpret_cast<JSCell*>(value);
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!m_cell || !isZombie(m_cell));
+#if ENABLE(WRITE_BARRIER_PROFILING)
+        WriteBarrierCounters::usesWithoutBarrierFromCpp.count();
 #endif
+        this->m_cell = reinterpret_cast<JSCell*>(value);
     }
 
 #if ENABLE(GC_VALIDATION)
-    T* unvalidatedGet() const { return reinterpret_cast<T*>(m_cell); }
+    T* unvalidatedGet() const { return reinterpret_cast<T*>(static_cast<void*>(m_cell)); }
 #endif
 
 private:
@@ -145,19 +147,12 @@ template <> class WriteBarrierBase<Unknown> {
 public:
     void set(JSGlobalData&, const JSCell* owner, JSValue value)
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!isZombie(owner));
-        ASSERT(!value.isZombie());
-#endif
         m_value = JSValue::encode(value);
         Heap::writeBarrier(owner, value);
     }
 
     void setWithoutWriteBarrier(JSValue value)
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!value.isZombie());
-#endif
         m_value = JSValue::encode(value);
     }
 
@@ -234,14 +229,9 @@ template<typename T> inline void MarkStack::append(WriteBarrierBase<T>* slot)
     internalAppend(*slot->slot());
 }
 
-inline void MarkStack::appendValues(WriteBarrierBase<Unknown>* barriers, size_t count, MarkSetProperties properties)
+ALWAYS_INLINE void MarkStack::appendValues(WriteBarrierBase<Unknown>* barriers, size_t count)
 {
-    JSValue* values = barriers->slot();
-#if ENABLE(GC_VALIDATION)
-    validateSet(values, count);
-#endif
-    if (count)
-        m_markSets.append(MarkSet(values, values + count, properties));
+    append(barriers->slot(), count);
 }
 
 } // namespace JSC

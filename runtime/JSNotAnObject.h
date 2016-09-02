@@ -37,41 +37,48 @@ namespace JSC {
     // in certain SquirrelFish bytecodes -- effectively it just silently consumes
     // any operations performed on the result of a failed toObject call.
     class JSNotAnObject : public JSNonFinalObject {
-    public:
+    private:
         JSNotAnObject(ExecState* exec)
             : JSNonFinalObject(exec->globalData(), exec->globalData().notAnObjectStructure.get())
         {
         }
+        
+    public:
+        typedef JSNonFinalObject Base;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static JSNotAnObject* create(ExecState* exec)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            JSNotAnObject* object = new (NotNull, allocateCell<JSNotAnObject>(*exec->heap())) JSNotAnObject(exec);
+            object->finishCreation(exec->globalData());
+            return object;
         }
+
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
+        {
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
+        }
+
+        static const ClassInfo s_info;
 
      private:
         
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | OverridesGetPropertyNames | JSObject::StructureFlags;
 
         // JSValue methods
-        virtual JSValue toPrimitive(ExecState*, PreferredPrimitiveType) const;
-        virtual bool getPrimitiveNumber(ExecState*, double& number, JSValue&);
-        virtual bool toBoolean(ExecState*) const;
-        virtual double toNumber(ExecState*) const;
-        virtual UString toString(ExecState*) const;
-        virtual JSObject* toObject(ExecState*, JSGlobalObject*) const;
+        static JSValue defaultValue(const JSObject*, ExecState*, PreferredPrimitiveType);
 
         // JSObject methods
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
-        virtual bool getOwnPropertySlot(ExecState*, unsigned propertyName, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier& propertyName, PropertySlot&);
+        static bool getOwnPropertySlotByIndex(JSCell*, ExecState*, unsigned propertyName, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
 
-        virtual void put(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
-        virtual void put(ExecState*, unsigned propertyName, JSValue);
+        static void put(JSCell*, ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        static void putByIndex(JSCell*, ExecState*, unsigned propertyName, JSValue, bool shouldThrow);
 
-        virtual bool deleteProperty(ExecState*, const Identifier& propertyName);
-        virtual bool deleteProperty(ExecState*, unsigned propertyName);
+        static bool deleteProperty(JSCell*, ExecState*, const Identifier& propertyName);
+        static bool deletePropertyByIndex(JSCell*, ExecState*, unsigned propertyName);
 
-        virtual void getOwnPropertyNames(ExecState*, PropertyNameArray&, EnumerationMode mode = ExcludeDontEnumProperties);
+        static void getOwnPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
     };
 
 } // namespace JSC

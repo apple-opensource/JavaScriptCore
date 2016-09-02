@@ -34,129 +34,94 @@
 #include "CommonIdentifiers.h"
 #include "DebuggerActivation.h"
 #include "FunctionConstructor.h"
+#include "GCActivityCallback.h"
 #include "GetterSetter.h"
+#include "HostCallReturnValue.h"
 #include "Interpreter.h"
 #include "JSActivation.h"
 #include "JSAPIValueWrapper.h"
 #include "JSArray.h"
-#include "JSByteArray.h"
 #include "JSClassRef.h"
 #include "JSFunction.h"
 #include "JSLock.h"
 #include "JSNotAnObject.h"
 #include "JSPropertyNameIterator.h"
 #include "JSStaticScopeObject.h"
-#include "JSZombie.h"
 #include "Lexer.h"
 #include "Lookup.h"
 #include "Nodes.h"
-#include "Parser.h"
+#include "ParserArena.h"
 #include "RegExpCache.h"
 #include "RegExpObject.h"
 #include "StrictEvalActivation.h"
+#include "StrongInlines.h"
+#include <wtf/Threading.h>
 #include <wtf/WTFThreadData.h>
+
+#if ENABLE(DFG_JIT)
+#include "ConservativeRoots.h"
+#endif
+
 #if ENABLE(REGEXP_TRACING)
 #include "RegExp.h"
 #endif
 
-
-#if ENABLE(JSC_MULTIPLE_THREADS)
-#include <wtf/Threading.h>
-#endif
-
-#if PLATFORM(MAC)
-#include "ProfilerServer.h"
+#if USE(CF)
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 
 using namespace WTF;
 
-namespace {
-
-using namespace JSC;
-
-class Recompiler {
-public:
-    void operator()(JSCell*);
-};
-
-inline void Recompiler::operator()(JSCell* cell)
-{
-    if (!cell->inherits(&JSFunction::s_info))
-        return;
-    JSFunction* function = asFunction(cell);
-    if (function->executable()->isHostFunction())
-        return;
-    function->jsExecutable()->discardCode();
-}
-
-} // namespace
-
 namespace JSC {
 
-extern JSC_CONST_HASHTABLE HashTable arrayConstructorTable;
-extern JSC_CONST_HASHTABLE HashTable arrayPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable booleanPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable jsonTable;
-extern JSC_CONST_HASHTABLE HashTable dateTable;
-extern JSC_CONST_HASHTABLE HashTable dateConstructorTable;
-extern JSC_CONST_HASHTABLE HashTable errorPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable globalObjectTable;
-extern JSC_CONST_HASHTABLE HashTable mathTable;
-extern JSC_CONST_HASHTABLE HashTable numberConstructorTable;
-extern JSC_CONST_HASHTABLE HashTable numberPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable objectConstructorTable;
-extern JSC_CONST_HASHTABLE HashTable objectPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable regExpTable;
-extern JSC_CONST_HASHTABLE HashTable regExpConstructorTable;
-extern JSC_CONST_HASHTABLE HashTable regExpPrototypeTable;
-extern JSC_CONST_HASHTABLE HashTable stringTable;
-extern JSC_CONST_HASHTABLE HashTable stringConstructorTable;
+extern const HashTable arrayConstructorTable;
+extern const HashTable arrayPrototypeTable;
+extern const HashTable booleanPrototypeTable;
+extern const HashTable jsonTable;
+extern const HashTable dateTable;
+extern const HashTable dateConstructorTable;
+extern const HashTable errorPrototypeTable;
+extern const HashTable globalObjectTable;
+extern const HashTable mathTable;
+extern const HashTable numberConstructorTable;
+extern const HashTable numberPrototypeTable;
+JS_EXPORTDATA extern const HashTable objectConstructorTable;
+extern const HashTable objectPrototypeTable;
+extern const HashTable regExpTable;
+extern const HashTable regExpConstructorTable;
+extern const HashTable regExpPrototypeTable;
+extern const HashTable stringTable;
+extern const HashTable stringConstructorTable;
 
-void* JSGlobalData::jsArrayVPtr;
-void* JSGlobalData::jsByteArrayVPtr;
-void* JSGlobalData::jsStringVPtr;
-void* JSGlobalData::jsFunctionVPtr;
-
-#if COMPILER(GCC)
-// Work around for gcc trying to coalesce our reads of the various cell vptrs
-#define CLOBBER_MEMORY() do { \
-    asm volatile ("" : : : "memory"); \
-} while (false)
-#else
-#define CLOBBER_MEMORY() do { } while (false)
+#if ENABLE(ASSEMBLER) && (ENABLE(CLASSIC_INTERPRETER) || ENABLE(LLINT))
+static bool enableAssembler(ExecutableAllocator& executableAllocator)
+{
+    if (!executableAllocator.isValid() || !Options::useJIT)
+        return false;
+#if USE(CF)
+    CFStringRef canUseJITKey = CFStringCreateWithCString(0 , "JavaScriptCoreUseJIT", kCFStringEncodingMacRoman);
+    CFBooleanRef canUseJIT = (CFBooleanRef)CFPreferencesCopyAppValue(canUseJITKey, kCFPreferencesCurrentApplication);
+    if (canUseJIT) {
+        return kCFBooleanTrue == canUseJIT;
+        CFRelease(canUseJIT);
+    }
+    CFRelease(canUseJITKey);
 #endif
 
-void JSGlobalData::storeVPtrs()
-{
-    // Enough storage to fit a JSArray, JSByteArray, JSString, or JSFunction.
-    // COMPILE_ASSERTS below check that this is true.
-    char storage[64];
-
-    COMPILE_ASSERT(sizeof(JSArray) <= sizeof(storage), sizeof_JSArray_must_be_less_than_storage);
-    JSCell* jsArray = new (storage) JSArray(JSArray::VPtrStealingHack);
-    CLOBBER_MEMORY();
-    JSGlobalData::jsArrayVPtr = jsArray->vptr();
-
-    COMPILE_ASSERT(sizeof(JSByteArray) <= sizeof(storage), sizeof_JSByteArray_must_be_less_than_storage);
-    JSCell* jsByteArray = new (storage) JSByteArray(JSByteArray::VPtrStealingHack);
-    CLOBBER_MEMORY();
-    JSGlobalData::jsByteArrayVPtr = jsByteArray->vptr();
-
-    COMPILE_ASSERT(sizeof(JSString) <= sizeof(storage), sizeof_JSString_must_be_less_than_storage);
-    JSCell* jsString = new (storage) JSString(JSString::VPtrStealingHack);
-    CLOBBER_MEMORY();
-    JSGlobalData::jsStringVPtr = jsString->vptr();
-
-    COMPILE_ASSERT(sizeof(JSFunction) <= sizeof(storage), sizeof_JSFunction_must_be_less_than_storage);
-    JSCell* jsFunction = new (storage) JSFunction(JSCell::VPtrStealingHack);
-    CLOBBER_MEMORY();
-    JSGlobalData::jsFunctionVPtr = jsFunction->vptr();
+#if USE(CF) || OS(UNIX)
+    char* canUseJITString = getenv("JavaScriptCoreUseJIT");
+    return !canUseJITString || atoi(canUseJITString);
+#else
+    return true;
+#endif
 }
+#endif
 
-JSGlobalData::JSGlobalData(GlobalDataType globalDataType, ThreadStackType threadStackType)
-    : globalDataType(globalDataType)
+JSGlobalData::JSGlobalData(GlobalDataType globalDataType, ThreadStackType threadStackType, HeapSize heapSize)
+    : heap(this, heapSize)
+    , globalDataType(globalDataType)
     , clientData(0)
+    , topCallFrame(CallFrame::noCaller())
     , arrayConstructorTable(fastNew<HashTable>(JSC::arrayConstructorTable))
     , arrayPrototypeTable(fastNew<HashTable>(JSC::arrayPrototypeTable))
     , booleanPrototypeTable(fastNew<HashTable>(JSC::booleanPrototypeTable))
@@ -180,15 +145,17 @@ JSGlobalData::JSGlobalData(GlobalDataType globalDataType, ThreadStackType thread
     , emptyList(new MarkedArgumentBuffer)
 #if ENABLE(ASSEMBLER)
     , executableAllocator(*this)
-    , regexAllocator(*this)
 #endif
-    , lexer(new Lexer(this))
-    , parser(new Parser)
+    , parserArena(adoptPtr(new ParserArena))
+    , keywords(adoptPtr(new Keywords(this)))
     , interpreter(0)
-    , heap(this)
-    , globalObjectCount(0)
+    , jsArrayClassInfo(&JSArray::s_info)
+    , jsFinalObjectClassInfo(&JSFinalObject::s_info)
+#if ENABLE(DFG_JIT)
+    , sizeOfLastScratchBuffer(0)
+#endif
     , dynamicGlobalObject(0)
-    , cachedUTCOffset(NaN)
+    , cachedUTCOffset(std::numeric_limits<double>::quiet_NaN())
     , maxReentryDepth(threadStackType == ThreadStackTypeSmall ? MaxSmallThreadReentryDepth : MaxLargeThreadReentryDepth)
     , m_regExpCache(new RegExpCache(this))
 #if ENABLE(REGEXP_TRACING)
@@ -197,110 +164,68 @@ JSGlobalData::JSGlobalData(GlobalDataType globalDataType, ThreadStackType thread
 #ifndef NDEBUG
     , exclusiveThread(0)
 #endif
+#if CPU(X86) && ENABLE(JIT)
+    , m_timeoutCount(512)
+#endif
+#if ENABLE(ASSEMBLER) && (ENABLE(CLASSIC_INTERPRETER) || ENABLE(LLINT))
+    , m_canUseAssembler(enableAssembler(executableAllocator))
+#endif
+#if ENABLE(GC_VALIDATION)
+    , m_initializingObjectClass(0)
+#endif
+    , m_inDefineOwnProperty(false)
 {
-    interpreter = new Interpreter(*this);
-    if (globalDataType == Default)
-        m_stack = wtfThreadData().stack();
+    interpreter = new Interpreter;
 
     // Need to be careful to keep everything consistent here
+    JSLockHolder lock(this);
     IdentifierTable* existingEntryIdentifierTable = wtfThreadData().setCurrentIdentifierTable(identifierTable);
-    JSLock lock(SilenceAssertionsOnly);
     structureStructure.set(*this, Structure::createStructure(*this));
-    debuggerActivationStructure.set(*this, DebuggerActivation::createStructure(*this, jsNull()));
-    activationStructure.set(*this, JSActivation::createStructure(*this, jsNull()));
-    interruptedExecutionErrorStructure.set(*this, JSNonFinalObject::createStructure(*this, jsNull()));
-    terminatedExecutionErrorStructure.set(*this, JSNonFinalObject::createStructure(*this, jsNull()));
-    staticScopeStructure.set(*this, JSStaticScopeObject::createStructure(*this, jsNull()));
-    strictEvalActivationStructure.set(*this, StrictEvalActivation::createStructure(*this, jsNull()));
-    stringStructure.set(*this, JSString::createStructure(*this, jsNull()));
-    notAnObjectStructure.set(*this, JSNotAnObject::createStructure(*this, jsNull()));
-    propertyNameIteratorStructure.set(*this, JSPropertyNameIterator::createStructure(*this, jsNull()));
-    getterSetterStructure.set(*this, GetterSetter::createStructure(*this, jsNull()));
-    apiWrapperStructure.set(*this, JSAPIValueWrapper::createStructure(*this, jsNull()));
-    scopeChainNodeStructure.set(*this, ScopeChainNode::createStructure(*this, jsNull()));
-    executableStructure.set(*this, ExecutableBase::createStructure(*this, jsNull()));
-    nativeExecutableStructure.set(*this, NativeExecutable::createStructure(*this, jsNull()));
-    evalExecutableStructure.set(*this, EvalExecutable::createStructure(*this, jsNull()));
-    programExecutableStructure.set(*this, ProgramExecutable::createStructure(*this, jsNull()));
-    functionExecutableStructure.set(*this, FunctionExecutable::createStructure(*this, jsNull()));
-    dummyMarkableCellStructure.set(*this, JSCell::createDummyStructure(*this));
-    regExpStructure.set(*this, RegExp::createStructure(*this, jsNull()));
-    structureChainStructure.set(*this, StructureChain::createStructure(*this, jsNull()));
-
-#if ENABLE(JSC_ZOMBIES)
-    zombieStructure.set(*this, JSZombie::createStructure(*this, jsNull()));
-#endif
+    debuggerActivationStructure.set(*this, DebuggerActivation::createStructure(*this, 0, jsNull()));
+    activationStructure.set(*this, JSActivation::createStructure(*this, 0, jsNull()));
+    interruptedExecutionErrorStructure.set(*this, InterruptedExecutionError::createStructure(*this, 0, jsNull()));
+    terminatedExecutionErrorStructure.set(*this, TerminatedExecutionError::createStructure(*this, 0, jsNull()));
+    staticScopeStructure.set(*this, JSStaticScopeObject::createStructure(*this, 0, jsNull()));
+    strictEvalActivationStructure.set(*this, StrictEvalActivation::createStructure(*this, 0, jsNull()));
+    stringStructure.set(*this, JSString::createStructure(*this, 0, jsNull()));
+    notAnObjectStructure.set(*this, JSNotAnObject::createStructure(*this, 0, jsNull()));
+    propertyNameIteratorStructure.set(*this, JSPropertyNameIterator::createStructure(*this, 0, jsNull()));
+    getterSetterStructure.set(*this, GetterSetter::createStructure(*this, 0, jsNull()));
+    apiWrapperStructure.set(*this, JSAPIValueWrapper::createStructure(*this, 0, jsNull()));
+    scopeChainNodeStructure.set(*this, ScopeChainNode::createStructure(*this, 0, jsNull()));
+    executableStructure.set(*this, ExecutableBase::createStructure(*this, 0, jsNull()));
+    nativeExecutableStructure.set(*this, NativeExecutable::createStructure(*this, 0, jsNull()));
+    evalExecutableStructure.set(*this, EvalExecutable::createStructure(*this, 0, jsNull()));
+    programExecutableStructure.set(*this, ProgramExecutable::createStructure(*this, 0, jsNull()));
+    functionExecutableStructure.set(*this, FunctionExecutable::createStructure(*this, 0, jsNull()));
+    regExpStructure.set(*this, RegExp::createStructure(*this, 0, jsNull()));
+    structureChainStructure.set(*this, StructureChain::createStructure(*this, 0, jsNull()));
 
     wtfThreadData().setCurrentIdentifierTable(existingEntryIdentifierTable);
 
-#if PLATFORM(MAC)
-    startProfilerServerIfNeeded();
-#endif
-#if ENABLE(JIT) && ENABLE(INTERPRETER)
-#if USE(CF)
-    CFStringRef canUseJITKey = CFStringCreateWithCString(0 , "JavaScriptCoreUseJIT", kCFStringEncodingMacRoman);
-    CFBooleanRef canUseJIT = (CFBooleanRef)CFPreferencesCopyAppValue(canUseJITKey, kCFPreferencesCurrentApplication);
-    if (canUseJIT) {
-        m_canUseJIT = kCFBooleanTrue == canUseJIT;
-        CFRelease(canUseJIT);
-    } else {
-      char* canUseJITString = getenv("JavaScriptCoreUseJIT");
-      m_canUseJIT = !canUseJITString || atoi(canUseJITString);
-    }
-    CFRelease(canUseJITKey);
-#elif OS(UNIX)
-    char* canUseJITString = getenv("JavaScriptCoreUseJIT");
-    m_canUseJIT = !canUseJITString || atoi(canUseJITString);
-#else
-    m_canUseJIT = true;
-#endif
-#endif
 #if ENABLE(JIT)
-#if ENABLE(INTERPRETER)
-    if (m_canUseJIT)
-        m_canUseJIT = executableAllocator.isValid();
-#endif
     jitStubs = adoptPtr(new JITThunks(this));
 #endif
-}
+    
+    interpreter->initialize(&llintData, this->canUseJIT());
+    
+    initializeHostCallReturnValue(); // This is needed to convince the linker not to drop host call return support.
 
-void JSGlobalData::clearBuiltinStructures()
-{
-    structureStructure.clear();
-    debuggerActivationStructure.clear();
-    activationStructure.clear();
-    interruptedExecutionErrorStructure.clear();
-    terminatedExecutionErrorStructure.clear();
-    staticScopeStructure.clear();
-    strictEvalActivationStructure.clear();
-    stringStructure.clear();
-    notAnObjectStructure.clear();
-    propertyNameIteratorStructure.clear();
-    getterSetterStructure.clear();
-    apiWrapperStructure.clear();
-    scopeChainNodeStructure.clear();
-    executableStructure.clear();
-    nativeExecutableStructure.clear();
-    evalExecutableStructure.clear();
-    programExecutableStructure.clear();
-    functionExecutableStructure.clear();
-    dummyMarkableCellStructure.clear();
-    regExpStructure.clear();
-    structureChainStructure.clear();
-
-#if ENABLE(JSC_ZOMBIES)
-    zombieStructure.clear();
-#endif
+    heap.notifyIsSafeToCollect();
+    
+    llintData.performAssertions(*this);
 }
 
 JSGlobalData::~JSGlobalData()
 {
-    // By the time this is destroyed, heap.destroy() must already have been called.
+    ASSERT(!m_apiLock.currentThreadIsHoldingLock());
+    if (heap.activityCallback())
+        heap.activityCallback()->didStartVMShutdown();
+    heap.lastChanceToFinalize();
 
     delete interpreter;
 #ifndef NDEBUG
-    // Zeroing out to make the behavior more predictable when someone attempts to use a deleted instance.
-    interpreter = 0;
+    interpreter = reinterpret_cast<Interpreter*>(0xbbadbeef);
 #endif
 
     arrayPrototypeTable->deleteTable();
@@ -341,10 +266,7 @@ JSGlobalData::~JSGlobalData()
     fastDelete(const_cast<HashTable*>(stringTable));
     fastDelete(const_cast<HashTable*>(stringConstructorTable));
 
-    delete parser;
-    delete lexer;
-
-    deleteAllValues(opaqueJSClassData);
+    opaqueJSClassData.clear();
 
     delete emptyList;
 
@@ -357,21 +279,26 @@ JSGlobalData::~JSGlobalData()
 #if ENABLE(REGEXP_TRACING)
     delete m_rtTraceList;
 #endif
+
+#if ENABLE(DFG_JIT)
+    for (unsigned i = 0; i < scratchBuffers.size(); ++i)
+        fastFree(scratchBuffers[i]);
+#endif
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::createContextGroup(ThreadStackType type)
+PassRefPtr<JSGlobalData> JSGlobalData::createContextGroup(ThreadStackType type, HeapSize heapSize)
 {
-    return adoptRef(new JSGlobalData(APIContextGroup, type));
+    return adoptRef(new JSGlobalData(APIContextGroup, type, heapSize));
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::create(ThreadStackType type)
+PassRefPtr<JSGlobalData> JSGlobalData::create(ThreadStackType type, HeapSize heapSize)
 {
-    return adoptRef(new JSGlobalData(Default, type));
+    return adoptRef(new JSGlobalData(Default, type, heapSize));
 }
 
-PassRefPtr<JSGlobalData> JSGlobalData::createLeaked(ThreadStackType type)
+PassRefPtr<JSGlobalData> JSGlobalData::createLeaked(ThreadStackType type, HeapSize heapSize)
 {
-    return create(type);
+    return create(type, heapSize);
 }
 
 bool JSGlobalData::sharedInstanceExists()
@@ -381,36 +308,69 @@ bool JSGlobalData::sharedInstanceExists()
 
 JSGlobalData& JSGlobalData::sharedInstance()
 {
+    GlobalJSLock globalLock;
     JSGlobalData*& instance = sharedInstanceInternal();
     if (!instance) {
-        instance = adoptRef(new JSGlobalData(APIShared, ThreadStackTypeSmall)).leakRef();
-#if ENABLE(JSC_MULTIPLE_THREADS)
+        instance = adoptRef(new JSGlobalData(APIShared, ThreadStackTypeSmall, SmallHeap)).leakRef();
         instance->makeUsableFromMultipleThreads();
-#endif
     }
     return *instance;
 }
 
 JSGlobalData*& JSGlobalData::sharedInstanceInternal()
 {
-    ASSERT(JSLock::currentThreadIsHoldingLock());
     static JSGlobalData* sharedInstance;
     return sharedInstance;
 }
 
 #if ENABLE(JIT)
-NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function)
+static ThunkGenerator thunkGeneratorForIntrinsic(Intrinsic intrinsic)
 {
-    return jitStubs->hostFunctionStub(this, function);
+    switch (intrinsic) {
+    case CharCodeAtIntrinsic:
+        return charCodeAtThunkGenerator;
+    case CharAtIntrinsic:
+        return charAtThunkGenerator;
+    case FromCharCodeIntrinsic:
+        return fromCharCodeThunkGenerator;
+    case SqrtIntrinsic:
+        return sqrtThunkGenerator;
+    case PowIntrinsic:
+        return powThunkGenerator;
+    case AbsIntrinsic:
+        return absThunkGenerator;
+    case FloorIntrinsic:
+        return floorThunkGenerator;
+    case CeilIntrinsic:
+        return ceilThunkGenerator;
+    case RoundIntrinsic:
+        return roundThunkGenerator;
+    case ExpIntrinsic:
+        return expThunkGenerator;
+    case LogIntrinsic:
+        return logThunkGenerator;
+    default:
+        return 0;
+    }
 }
-NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function, ThunkGenerator generator)
+
+NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function, NativeFunction constructor)
 {
-    return jitStubs->hostFunctionStub(this, function, generator);
+#if ENABLE(CLASSIC_INTERPRETER)
+    if (!canUseJIT())
+        return NativeExecutable::create(*this, function, constructor);
+#endif
+    return jitStubs->hostFunctionStub(this, function, constructor);
+}
+NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function, Intrinsic intrinsic)
+{
+    ASSERT(canUseJIT());
+    return jitStubs->hostFunctionStub(this, function, intrinsic != NoIntrinsic ? thunkGeneratorForIntrinsic(intrinsic) : 0, intrinsic);
 }
 #else
-NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function)
+NativeExecutable* JSGlobalData::getHostFunction(NativeFunction function, NativeFunction constructor)
 {
-    return NativeExecutable::create(*this, function, callHostFunctionAsConstructor);
+    return NativeExecutable::create(*this, function, constructor);
 }
 #endif
 
@@ -420,10 +380,10 @@ JSGlobalData::ClientData::~ClientData()
 
 void JSGlobalData::resetDateCache()
 {
-    cachedUTCOffset = NaN;
+    cachedUTCOffset = std::numeric_limits<double>::quiet_NaN();
     dstOffsetCache.reset();
     cachedDateString = UString();
-    cachedDateStringValue = NaN;
+    cachedDateStringValue = std::numeric_limits<double>::quiet_NaN();
     dateInstanceCache.reset();
 }
 
@@ -440,25 +400,18 @@ void JSGlobalData::stopSampling()
 void JSGlobalData::dumpSampleData(ExecState* exec)
 {
     interpreter->dumpSampleData(exec);
+#if ENABLE(ASSEMBLER)
+    ExecutableAllocator::dumpProfile();
+#endif
 }
 
-void JSGlobalData::recompileAllJSFunctions()
-{
-    // If JavaScript is running, it's not safe to recompile, since we'll end
-    // up throwing away code that is live on the stack.
-    ASSERT(!dynamicGlobalObject);
-    
-    Recompiler recompiler;
-    heap.forEach(recompiler);
-}
-
-struct StackPreservingRecompiler {
+struct StackPreservingRecompiler : public MarkedBlock::VoidFunctor {
     HashSet<FunctionExecutable*> currentlyExecutingFunctions;
     void operator()(JSCell* cell)
     {
         if (!cell->inherits(&FunctionExecutable::s_info))
             return;
-        FunctionExecutable* executable = static_cast<FunctionExecutable*>(cell);
+        FunctionExecutable* executable = jsCast<FunctionExecutable*>(cell);
         if (currentlyExecutingFunctions.contains(executable))
             return;
         executable->discardCode();
@@ -478,7 +431,7 @@ void JSGlobalData::releaseExecutableMemory()
             if (cell->inherits(&ScriptExecutable::s_info))
                 executable = static_cast<ScriptExecutable*>(*ptr);
             else if (cell->inherits(&JSFunction::s_info)) {
-                JSFunction* function = asFunction(*ptr);
+                JSFunction* function = jsCast<JSFunction*>(*ptr);
                 if (function->isHostFunction())
                     continue;
                 executable = function->jsExecutable();
@@ -490,10 +443,8 @@ void JSGlobalData::releaseExecutableMemory()
                 recompiler.currentlyExecutingFunctions.add(static_cast<FunctionExecutable*>(executable));
                 
         }
-        heap.forEach(recompiler);
-    } else
-        recompileAllJSFunctions();
-
+        heap.objectSpace().forEachCell<StackPreservingRecompiler>(recompiler);
+    }
     m_regExpCache->invalidateCode();
     heap.collectAllGarbage();
 }
@@ -502,6 +453,19 @@ void JSGlobalData::releaseExecutableMemory()
 void releaseExecutableMemory(JSGlobalData& globalData)
 {
     globalData.releaseExecutableMemory();
+}
+#endif
+
+#if ENABLE(DFG_JIT)
+void JSGlobalData::gatherConservativeRoots(ConservativeRoots& conservativeRoots)
+{
+    for (size_t i = 0; i < scratchBuffers.size(); i++) {
+        ScratchBuffer* scratchBuffer = scratchBuffers[i];
+        if (scratchBuffer->activeLength()) {
+            void* bufferStart = scratchBuffer->dataBuffer();
+            conservativeRoots.add(bufferStart, static_cast<void*>(static_cast<char*>(bufferStart) + scratchBuffer->activeLength()));
+        }
+    }
 }
 #endif
 
@@ -517,17 +481,17 @@ void JSGlobalData::dumpRegExpTrace()
     RTTraceList::iterator iter = ++m_rtTraceList->begin();
     
     if (iter != m_rtTraceList->end()) {
-        printf("\nRegExp Tracing\n");
-        printf("                                                            match()    matches\n");
-        printf("Regular Expression                          JIT Address      calls      found\n");
-        printf("----------------------------------------+----------------+----------+----------\n");
+        dataLog("\nRegExp Tracing\n");
+        dataLog("                                                            match()    matches\n");
+        dataLog("Regular Expression                          JIT Address      calls      found\n");
+        dataLog("----------------------------------------+----------------+----------+----------\n");
     
         unsigned reCount = 0;
     
         for (; iter != m_rtTraceList->end(); ++iter, ++reCount)
             (*iter)->printTraceData();
 
-        printf("%d Regular Expressions\n", reCount);
+        dataLog("%d Regular Expressions\n", reCount);
     }
     
     m_rtTraceList->clear();

@@ -23,6 +23,7 @@
 #ifndef CallFrame_h
 #define CallFrame_h
 
+#include "AbstractPC.h"
 #include "JSGlobalData.h"
 #include "MacroAssemblerCodeRef.h"
 #include "RegisterFile.h"
@@ -38,6 +39,7 @@ namespace JSC  {
     // Passed as the first argument to most functions.
     class ExecState : private Register {
     public:
+        JSValue calleeAsValue() const { return this[RegisterFile::Callee].jsValue(); }
         JSObject* callee() const { return this[RegisterFile::Callee].function(); }
         CodeBlock* codeBlock() const { return this[RegisterFile::CodeBlock].Register::codeBlock(); }
         ScopeChainNode* scopeChain() const
@@ -102,9 +104,64 @@ namespace JSC  {
         CallFrame* callerFrame() const { return this[RegisterFile::CallerFrame].callFrame(); }
 #if ENABLE(JIT)
         ReturnAddressPtr returnPC() const { return ReturnAddressPtr(this[RegisterFile::ReturnPC].vPC()); }
+        bool hasReturnPC() const { return !!this[RegisterFile::ReturnPC].vPC(); }
+        void clearReturnPC() { registers()[RegisterFile::ReturnPC] = static_cast<Instruction*>(0); }
 #endif
-#if ENABLE(INTERPRETER)
+        AbstractPC abstractReturnPC(JSGlobalData& globalData) { return AbstractPC(globalData, this); }
+#if USE(JSVALUE32_64)
+        unsigned bytecodeOffsetForNonDFGCode() const;
+        void setBytecodeOffsetForNonDFGCode(unsigned offset);
+#else
+        unsigned bytecodeOffsetForNonDFGCode() const
+        {
+            ASSERT(codeBlock());
+            return this[RegisterFile::ArgumentCount].tag();
+        }
+        
+        void setBytecodeOffsetForNonDFGCode(unsigned offset)
+        {
+            ASSERT(codeBlock());
+            this[RegisterFile::ArgumentCount].tag() = static_cast<int32_t>(offset);
+        }
+#endif
+
+        Register* frameExtent()
+        {
+            if (!codeBlock())
+                return registers();
+            return frameExtentInternal();
+        }
+    
+        Register* frameExtentInternal();
+    
+#if ENABLE(DFG_JIT)
+        InlineCallFrame* inlineCallFrame() const { return this[RegisterFile::ReturnPC].asInlineCallFrame(); }
+        unsigned codeOriginIndexForDFG() const { return this[RegisterFile::ArgumentCount].tag(); }
+#else
+        // This will never be called if !ENABLE(DFG_JIT) since all calls should be guarded by
+        // isInlineCallFrame(). But to make it easier to write code without having a bunch of
+        // #if's, we make a dummy implementation available anyway.
+        InlineCallFrame* inlineCallFrame() const
+        {
+            ASSERT_NOT_REACHED();
+            return 0;
+        }
+#endif
+#if ENABLE(CLASSIC_INTERPRETER)
         Instruction* returnVPC() const { return this[RegisterFile::ReturnPC].vPC(); }
+#endif
+#if USE(JSVALUE32_64)
+        Instruction* currentVPC() const
+        {
+            return bitwise_cast<Instruction*>(this[RegisterFile::ArgumentCount].tag());
+        }
+        void setCurrentVPC(Instruction* vpc)
+        {
+            this[RegisterFile::ArgumentCount].tag() = bitwise_cast<int32_t>(vpc);
+        }
+#else
+        Instruction* currentVPC() const;
+        void setCurrentVPC(Instruction* vpc);
 #endif
 
         void setCallerFrame(CallFrame* callerFrame) { static_cast<Register*>(this)[RegisterFile::CallerFrame] = callerFrame; }
@@ -130,17 +187,31 @@ namespace JSC  {
         inline Register& uncheckedR(int);
 
         // Access to arguments.
-        int hostThisRegister() { return -RegisterFile::CallFrameHeaderSize - argumentCountIncludingThis(); }
-        JSValue hostThisValue() { return this[hostThisRegister()].jsValue(); }
         size_t argumentCount() const { return argumentCountIncludingThis() - 1; }
-        size_t argumentCountIncludingThis() const { return this[RegisterFile::ArgumentCount].i(); }
-        JSValue argument(int argumentNumber)
+        size_t argumentCountIncludingThis() const { return this[RegisterFile::ArgumentCount].payload(); }
+        static int argumentOffset(size_t argument) { return s_firstArgumentOffset - argument; }
+        static int argumentOffsetIncludingThis(size_t argument) { return s_thisArgumentOffset - argument; }
+
+        JSValue argument(size_t argument)
         {
-            int argumentIndex = -RegisterFile::CallFrameHeaderSize - this[RegisterFile::ArgumentCount].i() + argumentNumber + 1;
-            if (argumentIndex >= -RegisterFile::CallFrameHeaderSize)
-                return jsUndefined();
-            return this[argumentIndex].jsValue();
+            if (argument >= argumentCount())
+                 return jsUndefined();
+            return this[argumentOffset(argument)].jsValue();
         }
+        void setArgument(size_t argument, JSValue value)
+        {
+            this[argumentOffset(argument)] = value;
+        }
+
+        static int thisArgumentOffset() { return argumentOffsetIncludingThis(0); }
+        JSValue thisValue() { return this[thisArgumentOffset()].jsValue(); }
+        void setThisValue(JSValue value) { this[thisArgumentOffset()] = value; }
+
+        static int offsetFor(size_t argumentCountIncludingThis) { return argumentCountIncludingThis + RegisterFile::CallFrameHeaderSize; }
+
+        // FIXME: Remove these.
+        int hostThisRegister() { return thisArgumentOffset(); }
+        JSValue hostThisValue() { return thisValue(); }
 
         static CallFrame* noCaller() { return reinterpret_cast<CallFrame*>(HostCallFrameFlag); }
 
@@ -148,15 +219,51 @@ namespace JSC  {
         CallFrame* addHostCallFrameFlag() const { return reinterpret_cast<CallFrame*>(reinterpret_cast<intptr_t>(this) | HostCallFrameFlag); }
         CallFrame* removeHostCallFrameFlag() { return reinterpret_cast<CallFrame*>(reinterpret_cast<intptr_t>(this) & ~HostCallFrameFlag); }
 
-        void setArgumentCountIncludingThis(int count) { static_cast<Register*>(this)[RegisterFile::ArgumentCount] = Register::withInt(count); }
+        void setArgumentCountIncludingThis(int count) { static_cast<Register*>(this)[RegisterFile::ArgumentCount].payload() = count; }
         void setCallee(JSObject* callee) { static_cast<Register*>(this)[RegisterFile::Callee] = Register::withCallee(callee); }
         void setCodeBlock(CodeBlock* codeBlock) { static_cast<Register*>(this)[RegisterFile::CodeBlock] = codeBlock; }
         void setReturnPC(void* value) { static_cast<Register*>(this)[RegisterFile::ReturnPC] = (Instruction*)value; }
+        
+#if ENABLE(DFG_JIT)
+        bool isInlineCallFrame();
+        
+        void setInlineCallFrame(InlineCallFrame* inlineCallFrame) { static_cast<Register*>(this)[RegisterFile::ReturnPC] = inlineCallFrame; }
+        
+        // Call this to get the semantically correct JS CallFrame* for the
+        // currently executing function.
+        CallFrame* trueCallFrame(AbstractPC);
+        
+        // Call this to get the semantically correct JS CallFrame* corresponding
+        // to the caller. This resolves issues surrounding inlining and the
+        // HostCallFrameFlag stuff.
+        CallFrame* trueCallerFrame();
+#else
+        bool isInlineCallFrame() { return false; }
+        
+        CallFrame* trueCallFrame(AbstractPC) { return this; }
+        CallFrame* trueCallerFrame() { return callerFrame()->removeHostCallFrameFlag(); }
+#endif
+        
+        // Call this to get the true call frame (accounted for inlining and any
+        // other optimizations), when you have entered into VM code through one
+        // of the "blessed" entrypoints (JITStubs or DFGOperations). This means
+        // that if you're pretty much anywhere in the VM you can safely call this;
+        // though if you were to magically get an ExecState* by, say, interrupting
+        // a thread that is running JS code and brutishly scraped the call frame
+        // register, calling this method would probably lead to horrible things
+        // happening.
+        CallFrame* trueCallFrameFromVMCode() { return trueCallFrame(AbstractPC()); }
 
     private:
         static const intptr_t HostCallFrameFlag = 1;
+        static const int s_thisArgumentOffset = -1 - RegisterFile::CallFrameHeaderSize;
+        static const int s_firstArgumentOffset = s_thisArgumentOffset - 1;
+
 #ifndef NDEBUG
         RegisterFile* registerFile();
+#endif
+#if ENABLE(DFG_JIT)
+        bool isInlineCallFrameSlow();
 #endif
         ExecState();
         ~ExecState();

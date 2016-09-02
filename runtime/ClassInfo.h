@@ -24,11 +24,114 @@
 #define ClassInfo_h
 
 #include "CallFrame.h"
+#include "ConstructData.h"
+#include "JSCell.h"
 
 namespace JSC {
 
     class HashEntry;
     struct HashTable;
+
+    struct MethodTable {
+        typedef void (*DestroyFunctionPtr)(JSCell*);
+        DestroyFunctionPtr destroy;
+
+        typedef void (*VisitChildrenFunctionPtr)(JSCell*, SlotVisitor&);
+        VisitChildrenFunctionPtr visitChildren;
+
+        typedef CallType (*GetCallDataFunctionPtr)(JSCell*, CallData&);
+        GetCallDataFunctionPtr getCallData;
+
+        typedef ConstructType (*GetConstructDataFunctionPtr)(JSCell*, ConstructData&);
+        GetConstructDataFunctionPtr getConstructData;
+
+        typedef void (*PutFunctionPtr)(JSCell*, ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        PutFunctionPtr put;
+
+        typedef void (*PutByIndexFunctionPtr)(JSCell*, ExecState*, unsigned propertyName, JSValue, bool shouldThrow);
+        PutByIndexFunctionPtr putByIndex;
+
+        typedef bool (*DeletePropertyFunctionPtr)(JSCell*, ExecState*, const Identifier&);
+        DeletePropertyFunctionPtr deleteProperty;
+
+        typedef bool (*DeletePropertyByIndexFunctionPtr)(JSCell*, ExecState*, unsigned);
+        DeletePropertyByIndexFunctionPtr deletePropertyByIndex;
+
+        typedef bool (*GetOwnPropertySlotFunctionPtr)(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+        GetOwnPropertySlotFunctionPtr getOwnPropertySlot;
+
+        typedef bool (*GetOwnPropertySlotByIndexFunctionPtr)(JSCell*, ExecState*, unsigned, PropertySlot&);
+        GetOwnPropertySlotByIndexFunctionPtr getOwnPropertySlotByIndex;
+
+        typedef JSObject* (*ToThisObjectFunctionPtr)(JSCell*, ExecState*);
+        ToThisObjectFunctionPtr toThisObject;
+
+        typedef JSValue (*DefaultValueFunctionPtr)(const JSObject*, ExecState*, PreferredPrimitiveType);
+        DefaultValueFunctionPtr defaultValue;
+
+        typedef void (*GetOwnPropertyNamesFunctionPtr)(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
+        GetOwnPropertyNamesFunctionPtr getOwnPropertyNames;
+
+        typedef void (*GetPropertyNamesFunctionPtr)(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
+        GetPropertyNamesFunctionPtr getPropertyNames;
+
+        typedef UString (*ClassNameFunctionPtr)(const JSObject*);
+        ClassNameFunctionPtr className;
+
+        typedef bool (*HasInstanceFunctionPtr)(JSObject*, ExecState*, JSValue, JSValue);
+        HasInstanceFunctionPtr hasInstance;
+
+        typedef void (*PutWithAttributesFunctionPtr)(JSObject*, ExecState*, const Identifier& propertyName, JSValue, unsigned attributes);
+        PutWithAttributesFunctionPtr putDirectVirtual;
+
+        typedef bool (*DefineOwnPropertyFunctionPtr)(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&, bool);
+        DefineOwnPropertyFunctionPtr defineOwnProperty;
+
+        typedef bool (*GetOwnPropertyDescriptorFunctionPtr)(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
+        GetOwnPropertyDescriptorFunctionPtr getOwnPropertyDescriptor;
+    };
+
+#define CREATE_MEMBER_CHECKER(member) \
+template <typename T> \
+struct MemberCheck##member { \
+    struct Fallback { \
+        void member(...); \
+    }; \
+    struct Derived : T, Fallback { }; \
+    template <typename U, U> struct Check; \
+    typedef char Yes[2]; \
+    typedef char No[1]; \
+    template <typename U> \
+    static No &func(Check<void (Fallback::*)(...), &U::member>*); \
+    template <typename U> \
+    static Yes &func(...); \
+    enum { has = sizeof(func<Derived>(0)) == sizeof(Yes) }; \
+}
+
+#define HAS_MEMBER_NAMED(klass, name) (MemberCheck##name<klass>::has)
+
+#define CREATE_METHOD_TABLE(ClassName) { \
+        &ClassName::destroy, \
+        &ClassName::visitChildren, \
+        &ClassName::getCallData, \
+        &ClassName::getConstructData, \
+        &ClassName::put, \
+        &ClassName::putByIndex, \
+        &ClassName::deleteProperty, \
+        &ClassName::deletePropertyByIndex, \
+        &ClassName::getOwnPropertySlot, \
+        &ClassName::getOwnPropertySlotByIndex, \
+        &ClassName::toThisObject, \
+        &ClassName::defaultValue, \
+        &ClassName::getOwnPropertyNames, \
+        &ClassName::getPropertyNames, \
+        &ClassName::className, \
+        &ClassName::hasInstance, \
+        &ClassName::putDirectVirtual, \
+        &ClassName::defineOwnProperty, \
+        &ClassName::getOwnPropertyDescriptor, \
+    }, \
+    ClassName::TypedArrayStorageType
 
     struct ClassInfo {
         /**
@@ -51,10 +154,32 @@ namespace JSC {
                 return classPropHashTableGetterFunction(exec);
             return staticPropHashTable;
         }
+        
+        bool isSubClassOf(const ClassInfo* other) const
+        {
+            for (const ClassInfo* ci = this; ci; ci = ci->parentClass) {
+                if (ci == other)
+                    return true;
+            }
+            return false;
+        }
+
+        bool hasStaticProperties() const
+        {
+            for (const ClassInfo* ci = this; ci; ci = ci->parentClass) {
+                if (ci->staticPropHashTable || ci->classPropHashTableGetterFunction)
+                    return true;
+            }
+            return false;
+        }
 
         const HashTable* staticPropHashTable;
         typedef const HashTable* (*ClassPropHashTableGetterFunction)(ExecState*);
         const ClassPropHashTableGetterFunction classPropHashTableGetterFunction;
+
+        MethodTable methodTable;
+
+        TypedArrayType typedArrayStorageType;
     };
 
 } // namespace JSC

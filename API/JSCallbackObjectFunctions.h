@@ -42,36 +42,49 @@
 
 namespace JSC {
 
-template <class Base>
-inline JSCallbackObject<Base>* JSCallbackObject<Base>::asCallbackObject(JSValue value)
+template <class Parent>
+inline JSCallbackObject<Parent>* JSCallbackObject<Parent>::asCallbackObject(JSValue value)
 {
     ASSERT(asObject(value)->inherits(&s_info));
-    return static_cast<JSCallbackObject*>(asObject(value));
+    return jsCast<JSCallbackObject*>(asObject(value));
 }
 
-template <class Base>
-JSCallbackObject<Base>::JSCallbackObject(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, JSClassRef jsClass, void* data)
-    : Base(globalObject, structure)
+template <class Parent>
+JSCallbackObject<Parent>::JSCallbackObject(ExecState* exec, Structure* structure, JSClassRef jsClass, void* data)
+    : Parent(exec->globalData(), structure)
     , m_callbackObjectData(adoptPtr(new JSCallbackObjectData(data, jsClass)))
 {
-    ASSERT(Base::inherits(&s_info));
-    init(exec);
 }
 
 // Global object constructor.
 // FIXME: Move this into a separate JSGlobalCallbackObject class derived from this one.
-template <class Base>
-JSCallbackObject<Base>::JSCallbackObject(JSGlobalData& globalData, JSClassRef jsClass, Structure* structure)
-    : Base(globalData, structure)
+template <class Parent>
+JSCallbackObject<Parent>::JSCallbackObject(JSGlobalData& globalData, JSClassRef jsClass, Structure* structure)
+    : Parent(globalData, structure)
     , m_callbackObjectData(adoptPtr(new JSCallbackObjectData(0, jsClass)))
 {
-    ASSERT(Base::inherits(&s_info));
-    ASSERT(Base::isGlobalObject());
-    init(static_cast<JSGlobalObject*>(this)->globalExec());
 }
 
-template <class Base>
-void JSCallbackObject<Base>::init(ExecState* exec)
+template <class Parent>
+void JSCallbackObject<Parent>::finishCreation(ExecState* exec)
+{
+    Base::finishCreation(exec->globalData());
+    ASSERT(Parent::inherits(&s_info));
+    init(exec);
+}
+
+// This is just for Global object, so we can assume that Base::finishCreation is JSGlobalObject::finishCreation.
+template <class Parent>
+void JSCallbackObject<Parent>::finishCreation(JSGlobalData& globalData)
+{
+    ASSERT(Parent::inherits(&s_info));
+    ASSERT(Parent::isGlobalObject());
+    Base::finishCreation(globalData);
+    init(jsCast<JSGlobalObject*>(this)->globalExec());
+}
+
+template <class Parent>
+void JSCallbackObject<Parent>::init(ExecState* exec)
 {
     ASSERT(exec);
     
@@ -89,42 +102,41 @@ void JSCallbackObject<Base>::init(ExecState* exec)
         initialize(toRef(exec), toRef(this));
     }
 
-    bool needsFinalizer = false;
-    for (JSClassRef jsClassPtr = classRef(); jsClassPtr && !needsFinalizer; jsClassPtr = jsClassPtr->parentClass)
-        needsFinalizer = jsClassPtr->finalize;
-    if (needsFinalizer) {
-        HandleSlot slot = exec->globalData().allocateGlobalHandle();
-        HandleHeap::heapFor(slot)->makeWeak(slot, m_callbackObjectData.get(), classRef());
-        HandleHeap::heapFor(slot)->writeBarrier(slot, this);
-        *slot = this;
+    for (JSClassRef jsClassPtr = classRef(); jsClassPtr; jsClassPtr = jsClassPtr->parentClass) {
+        if (jsClassPtr->finalize) {
+            WeakSet::allocate(this, m_callbackObjectData.get(), classRef());
+            break;
+        }
     }
 }
 
-template <class Base>
-UString JSCallbackObject<Base>::className() const
+template <class Parent>
+UString JSCallbackObject<Parent>::className(const JSObject* object)
 {
-    UString thisClassName = classRef()->className();
+    const JSCallbackObject* thisObject = jsCast<const JSCallbackObject*>(object);
+    UString thisClassName = thisObject->classRef()->className();
     if (!thisClassName.isEmpty())
         return thisClassName;
     
-    return Base::className();
+    return Parent::className(object);
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::getOwnPropertySlot(ExecState* exec, const Identifier& propertyName, PropertySlot& slot)
+template <class Parent>
+bool JSCallbackObject<Parent>::getOwnPropertySlot(JSCell* cell, ExecState* exec, const Identifier& propertyName, PropertySlot& slot)
 {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
     JSContextRef ctx = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisRef = toRef(thisObject);
     RefPtr<OpaqueJSString> propertyNameRef;
     
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         // optional optimization to bypass getProperty in cases when we only need to know if the property exists
         if (JSObjectHasPropertyCallback hasProperty = jsClass->hasProperty) {
             if (!propertyNameRef)
                 propertyNameRef = OpaqueJSString::create(propertyName.ustring());
             APICallbackShim callbackShim(exec);
             if (hasProperty(ctx, thisRef, propertyNameRef.get())) {
-                slot.setCustom(this, callbackGetter);
+                slot.setCustom(thisObject, callbackGetter);
                 return true;
             }
         } else if (JSObjectGetPropertyCallback getProperty = jsClass->getProperty) {
@@ -149,7 +161,7 @@ bool JSCallbackObject<Base>::getOwnPropertySlot(ExecState* exec, const Identifie
         
         if (OpaqueJSClassStaticValuesTable* staticValues = jsClass->staticValues(exec)) {
             if (staticValues->contains(propertyName.impl())) {
-                JSValue value = getStaticValue(exec, propertyName);
+                JSValue value = thisObject->getStaticValue(exec, propertyName);
                 if (value) {
                     slot.setValue(value);
                     return true;
@@ -159,20 +171,45 @@ bool JSCallbackObject<Base>::getOwnPropertySlot(ExecState* exec, const Identifie
         
         if (OpaqueJSClassStaticFunctionsTable* staticFunctions = jsClass->staticFunctions(exec)) {
             if (staticFunctions->contains(propertyName.impl())) {
-                slot.setCustom(this, staticFunctionGetter);
+                slot.setCustom(thisObject, staticFunctionGetter);
                 return true;
             }
         }
     }
     
-    return Base::getOwnPropertySlot(exec, propertyName, slot);
+    return Parent::getOwnPropertySlot(thisObject, exec, propertyName, slot);
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::getOwnPropertyDescriptor(ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
+template <class Parent>
+JSValue JSCallbackObject<Parent>::defaultValue(const JSObject* object, ExecState* exec, PreferredPrimitiveType hint)
 {
+    const JSCallbackObject* thisObject = jsCast<const JSCallbackObject*>(object);
+    JSContextRef ctx = toRef(exec);
+    JSObjectRef thisRef = toRef(thisObject);
+    ::JSType jsHint = hint == PreferString ? kJSTypeString : kJSTypeNumber;
+
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
+        if (JSObjectConvertToTypeCallback convertToType = jsClass->convertToType) {
+            JSValueRef exception = 0;
+            JSValueRef result = convertToType(ctx, thisRef, jsHint, &exception);
+            if (exception) {
+                throwError(exec, toJS(exec, exception));
+                return jsUndefined();
+            }
+            if (result)
+                return toJS(exec, result);
+        }
+    }
+    
+    return Parent::defaultValue(object, exec, hint);
+}
+
+template <class Parent>
+bool JSCallbackObject<Parent>::getOwnPropertyDescriptor(JSObject* object, ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
+{
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(object);
     PropertySlot slot;
-    if (getOwnPropertySlot(exec, propertyName, slot)) {
+    if (thisObject->methodTable()->getOwnPropertySlot(thisObject, exec, propertyName, slot)) {
         // Ideally we should return an access descriptor, but returning a value descriptor is better than nothing.
         JSValue value = slot.getValue(exec, propertyName);
         if (!exec->hadException())
@@ -184,18 +221,19 @@ bool JSCallbackObject<Base>::getOwnPropertyDescriptor(ExecState* exec, const Ide
         return true;
     }
 
-    return Base::getOwnPropertyDescriptor(exec, propertyName, descriptor);
+    return Parent::getOwnPropertyDescriptor(thisObject, exec, propertyName, descriptor);
 }
 
-template <class Base>
-void JSCallbackObject<Base>::put(ExecState* exec, const Identifier& propertyName, JSValue value, PutPropertySlot& slot)
+template <class Parent>
+void JSCallbackObject<Parent>::put(JSCell* cell, ExecState* exec, const Identifier& propertyName, JSValue value, PutPropertySlot& slot)
 {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
     JSContextRef ctx = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisRef = toRef(thisObject);
     RefPtr<OpaqueJSString> propertyNameRef;
     JSValueRef valueRef = toRef(exec, value);
     
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectSetPropertyCallback setProperty = jsClass->setProperty) {
             if (!propertyNameRef)
                 propertyNameRef = OpaqueJSString::create(propertyName.ustring());
@@ -236,23 +274,24 @@ void JSCallbackObject<Base>::put(ExecState* exec, const Identifier& propertyName
             if (StaticFunctionEntry* entry = staticFunctions->get(propertyName.impl())) {
                 if (entry->attributes & kJSPropertyAttributeReadOnly)
                     return;
-                JSCallbackObject<Base>::putDirect(exec->globalData(), propertyName, value); // put as override property
+                thisObject->JSCallbackObject<Parent>::putDirect(exec->globalData(), propertyName, value); // put as override property
                 return;
             }
         }
     }
     
-    return Base::put(exec, propertyName, value, slot);
+    return Parent::put(thisObject, exec, propertyName, value, slot);
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::deleteProperty(ExecState* exec, const Identifier& propertyName)
+template <class Parent>
+bool JSCallbackObject<Parent>::deleteProperty(JSCell* cell, ExecState* exec, const Identifier& propertyName)
 {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
     JSContextRef ctx = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisRef = toRef(thisObject);
     RefPtr<OpaqueJSString> propertyNameRef;
     
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectDeletePropertyCallback deleteProperty = jsClass->deleteProperty) {
             if (!propertyNameRef)
                 propertyNameRef = OpaqueJSString::create(propertyName.ustring());
@@ -285,19 +324,21 @@ bool JSCallbackObject<Base>::deleteProperty(ExecState* exec, const Identifier& p
         }
     }
     
-    return Base::deleteProperty(exec, propertyName);
+    return Parent::deleteProperty(thisObject, exec, propertyName);
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::deleteProperty(ExecState* exec, unsigned propertyName)
+template <class Parent>
+bool JSCallbackObject<Parent>::deletePropertyByIndex(JSCell* cell, ExecState* exec, unsigned propertyName)
 {
-    return deleteProperty(exec, Identifier::from(exec, propertyName));
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
+    return thisObject->methodTable()->deleteProperty(thisObject, exec, Identifier::from(exec, propertyName));
 }
 
-template <class Base>
-ConstructType JSCallbackObject<Base>::getConstructData(ConstructData& constructData)
+template <class Parent>
+ConstructType JSCallbackObject<Parent>::getConstructData(JSCell* cell, ConstructData& constructData)
 {
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (jsClass->callAsConstructor) {
             constructData.native.function = construct;
             return ConstructTypeHost;
@@ -306,14 +347,14 @@ ConstructType JSCallbackObject<Base>::getConstructData(ConstructData& constructD
     return ConstructTypeNone;
 }
 
-template <class Base>
-EncodedJSValue JSCallbackObject<Base>::construct(ExecState* exec)
+template <class Parent>
+EncodedJSValue JSCallbackObject<Parent>::construct(ExecState* exec)
 {
     JSObject* constructor = exec->callee();
     JSContextRef execRef = toRef(exec);
     JSObjectRef constructorRef = toRef(constructor);
     
-    for (JSClassRef jsClass = static_cast<JSCallbackObject<Base>*>(constructor)->classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = jsCast<JSCallbackObject<Parent>*>(constructor)->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectCallAsConstructorCallback callAsConstructor = jsClass->callAsConstructor) {
             int argumentCount = static_cast<int>(exec->argumentCount());
             Vector<JSValueRef, 16> arguments(argumentCount);
@@ -335,13 +376,14 @@ EncodedJSValue JSCallbackObject<Base>::construct(ExecState* exec)
     return JSValue::encode(JSValue());
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::hasInstance(ExecState* exec, JSValue value, JSValue)
+template <class Parent>
+bool JSCallbackObject<Parent>::hasInstance(JSObject* object, ExecState* exec, JSValue value, JSValue)
 {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(object);
     JSContextRef execRef = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisRef = toRef(thisObject);
     
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectHasInstanceCallback hasInstance = jsClass->hasInstance) {
             JSValueRef valueRef = toRef(exec, value);
             JSValueRef exception = 0;
@@ -358,10 +400,11 @@ bool JSCallbackObject<Base>::hasInstance(ExecState* exec, JSValue value, JSValue
     return false;
 }
 
-template <class Base>
-CallType JSCallbackObject<Base>::getCallData(CallData& callData)
+template <class Parent>
+CallType JSCallbackObject<Parent>::getCallData(JSCell* cell, CallData& callData)
 {
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (jsClass->callAsFunction) {
             callData.native.function = call;
             return CallTypeHost;
@@ -370,14 +413,14 @@ CallType JSCallbackObject<Base>::getCallData(CallData& callData)
     return CallTypeNone;
 }
 
-template <class Base>
-EncodedJSValue JSCallbackObject<Base>::call(ExecState* exec)
+template <class Parent>
+EncodedJSValue JSCallbackObject<Parent>::call(ExecState* exec)
 {
     JSContextRef execRef = toRef(exec);
     JSObjectRef functionRef = toRef(exec->callee());
     JSObjectRef thisObjRef = toRef(exec->hostThisValue().toThisObject(exec));
     
-    for (JSClassRef jsClass = static_cast<JSCallbackObject<Base>*>(toJS(functionRef))->classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = jsCast<JSCallbackObject<Parent>*>(toJS(functionRef))->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectCallAsFunctionCallback callAsFunction = jsClass->callAsFunction) {
             int argumentCount = static_cast<int>(exec->argumentCount());
             Vector<JSValueRef, 16> arguments(argumentCount);
@@ -399,13 +442,14 @@ EncodedJSValue JSCallbackObject<Base>::call(ExecState* exec)
     return JSValue::encode(JSValue());
 }
 
-template <class Base>
-void JSCallbackObject<Base>::getOwnPropertyNames(ExecState* exec, PropertyNameArray& propertyNames, EnumerationMode mode)
+template <class Parent>
+void JSCallbackObject<Parent>::getOwnPropertyNames(JSObject* object, ExecState* exec, PropertyNameArray& propertyNames, EnumerationMode mode)
 {
+    JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(object);
     JSContextRef execRef = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisRef = toRef(thisObject);
     
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass) {
+    for (JSClassRef jsClass = thisObject->classRef(); jsClass; jsClass = jsClass->parentClass) {
         if (JSObjectGetPropertyNamesCallback getPropertyNames = jsClass->getPropertyNames) {
             APICallbackShim callbackShim(exec);
             getPropertyNames(execRef, thisRef, toRef(&propertyNames));
@@ -416,7 +460,7 @@ void JSCallbackObject<Base>::getOwnPropertyNames(ExecState* exec, PropertyNameAr
             iterator end = staticValues->end();
             for (iterator it = staticValues->begin(); it != end; ++it) {
                 StringImpl* name = it->first.get();
-                StaticValueEntry* entry = it->second;
+                StaticValueEntry* entry = it->second.get();
                 if (entry->getProperty && (!(entry->attributes & kJSPropertyAttributeDontEnum) || (mode == IncludeDontEnumProperties)))
                     propertyNames.add(Identifier(exec, name));
             }
@@ -427,87 +471,30 @@ void JSCallbackObject<Base>::getOwnPropertyNames(ExecState* exec, PropertyNameAr
             iterator end = staticFunctions->end();
             for (iterator it = staticFunctions->begin(); it != end; ++it) {
                 StringImpl* name = it->first.get();
-                StaticFunctionEntry* entry = it->second;
+                StaticFunctionEntry* entry = it->second.get();
                 if (!(entry->attributes & kJSPropertyAttributeDontEnum) || (mode == IncludeDontEnumProperties))
                     propertyNames.add(Identifier(exec, name));
             }
         }
     }
     
-    Base::getOwnPropertyNames(exec, propertyNames, mode);
+    Parent::getOwnPropertyNames(thisObject, exec, propertyNames, mode);
 }
 
-template <class Base>
-double JSCallbackObject<Base>::toNumber(ExecState* exec) const
-{
-    // We need this check to guard against the case where this object is rhs of
-    // a binary expression where lhs threw an exception in its conversion to
-    // primitive
-    if (exec->hadException())
-        return NaN;
-    JSContextRef ctx = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
-    
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass)
-        if (JSObjectConvertToTypeCallback convertToType = jsClass->convertToType) {
-            JSValueRef exception = 0;
-            JSValueRef value;
-            {
-                APICallbackShim callbackShim(exec);
-                value = convertToType(ctx, thisRef, kJSTypeNumber, &exception);
-            }
-            if (exception) {
-                throwError(exec, toJS(exec, exception));
-                return 0;
-            }
-
-            double dValue;
-            if (value)
-                return toJS(exec, value).getNumber(dValue) ? dValue : NaN;
-        }
-            
-    return Base::toNumber(exec);
-}
-
-template <class Base>
-UString JSCallbackObject<Base>::toString(ExecState* exec) const
-{
-    JSContextRef ctx = toRef(exec);
-    JSObjectRef thisRef = toRef(this);
-    
-    for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass)
-        if (JSObjectConvertToTypeCallback convertToType = jsClass->convertToType) {
-            JSValueRef exception = 0;
-            JSValueRef value;
-            {
-                APICallbackShim callbackShim(exec);
-                value = convertToType(ctx, thisRef, kJSTypeString, &exception);
-            }
-            if (exception) {
-                throwError(exec, toJS(exec, exception));
-                return "";
-            }
-            if (value)
-                return toJS(exec, value).getString(exec);
-        }
-            
-    return Base::toString(exec);
-}
-
-template <class Base>
-void JSCallbackObject<Base>::setPrivate(void* data)
+template <class Parent>
+void JSCallbackObject<Parent>::setPrivate(void* data)
 {
     m_callbackObjectData->privateData = data;
 }
 
-template <class Base>
-void* JSCallbackObject<Base>::getPrivate()
+template <class Parent>
+void* JSCallbackObject<Parent>::getPrivate()
 {
     return m_callbackObjectData->privateData;
 }
 
-template <class Base>
-bool JSCallbackObject<Base>::inherits(JSClassRef c) const
+template <class Parent>
+bool JSCallbackObject<Parent>::inherits(JSClassRef c) const
 {
     for (JSClassRef jsClass = classRef(); jsClass; jsClass = jsClass->parentClass)
         if (jsClass == c)
@@ -516,8 +503,8 @@ bool JSCallbackObject<Base>::inherits(JSClassRef c) const
     return false;
 }
 
-template <class Base>
-JSValue JSCallbackObject<Base>::getStaticValue(ExecState* exec, const Identifier& propertyName)
+template <class Parent>
+JSValue JSCallbackObject<Parent>::getStaticValue(ExecState* exec, const Identifier& propertyName)
 {
     JSObjectRef thisRef = toRef(this);
     RefPtr<OpaqueJSString> propertyNameRef;
@@ -545,14 +532,14 @@ JSValue JSCallbackObject<Base>::getStaticValue(ExecState* exec, const Identifier
     return JSValue();
 }
 
-template <class Base>
-JSValue JSCallbackObject<Base>::staticFunctionGetter(ExecState* exec, JSValue slotBase, const Identifier& propertyName)
+template <class Parent>
+JSValue JSCallbackObject<Parent>::staticFunctionGetter(ExecState* exec, JSValue slotParent, const Identifier& propertyName)
 {
-    JSCallbackObject* thisObj = asCallbackObject(slotBase);
+    JSCallbackObject* thisObj = asCallbackObject(slotParent);
     
     // Check for cached or override property.
     PropertySlot slot2(thisObj);
-    if (thisObj->Base::getOwnPropertySlot(exec, propertyName, slot2))
+    if (Parent::getOwnPropertySlot(thisObj, exec, propertyName, slot2))
         return slot2.getValue(exec, propertyName);
     
     for (JSClassRef jsClass = thisObj->classRef(); jsClass; jsClass = jsClass->parentClass) {
@@ -560,7 +547,7 @@ JSValue JSCallbackObject<Base>::staticFunctionGetter(ExecState* exec, JSValue sl
             if (StaticFunctionEntry* entry = staticFunctions->get(propertyName.impl())) {
                 if (JSObjectCallAsFunctionCallback callAsFunction = entry->callAsFunction) {
                     
-                    JSObject* o = new (exec) JSCallbackFunction(exec, asGlobalObject(thisObj->getAnonymousValue(0)), callAsFunction, propertyName);
+                    JSObject* o = JSCallbackFunction::create(exec, thisObj->globalObject(), callAsFunction, propertyName);
                     thisObj->putDirect(exec->globalData(), propertyName, o, entry->attributes);
                     return o;
                 }
@@ -571,10 +558,10 @@ JSValue JSCallbackObject<Base>::staticFunctionGetter(ExecState* exec, JSValue sl
     return throwError(exec, createReferenceError(exec, "Static function property defined with NULL callAsFunction callback."));
 }
 
-template <class Base>
-JSValue JSCallbackObject<Base>::callbackGetter(ExecState* exec, JSValue slotBase, const Identifier& propertyName)
+template <class Parent>
+JSValue JSCallbackObject<Parent>::callbackGetter(ExecState* exec, JSValue slotParent, const Identifier& propertyName)
 {
-    JSCallbackObject* thisObj = asCallbackObject(slotBase);
+    JSCallbackObject* thisObj = asCallbackObject(slotParent);
     
     JSObjectRef thisRef = toRef(thisObj);
     RefPtr<OpaqueJSString> propertyNameRef;

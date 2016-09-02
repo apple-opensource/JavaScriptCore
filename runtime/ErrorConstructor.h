@@ -30,11 +30,29 @@ namespace JSC {
 
     class ErrorConstructor : public InternalFunction {
     public:
-        ErrorConstructor(ExecState*, JSGlobalObject*, Structure*, ErrorPrototype*);
+        typedef InternalFunction Base;
 
+        static ErrorConstructor* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, ErrorPrototype* errorPrototype)
+        {
+            ErrorConstructor* constructor = new (NotNull, allocateCell<ErrorConstructor>(*exec->heap())) ErrorConstructor(globalObject, structure);
+            constructor->finishCreation(exec, errorPrototype);
+            return constructor;
+        }
+
+        static const ClassInfo s_info;
+
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype) 
+        { 
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info); 
+        }
+
+    protected:
+        void finishCreation(ExecState*, ErrorPrototype*);
+        
     private:
-        virtual ConstructType getConstructData(ConstructData&);
-        virtual CallType getCallData(CallData&);
+        ErrorConstructor(JSGlobalObject*, Structure*);
+        static ConstructType getConstructData(JSCell*, ConstructData&);
+        static CallType getCallData(JSCell*, CallData&);
     };
 
 } // namespace JSC

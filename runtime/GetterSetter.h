@@ -36,28 +36,37 @@ namespace JSC {
     // for a property.
     class GetterSetter : public JSCell {
         friend class JIT;
-    public:
+
+    private:        
         GetterSetter(ExecState* exec)
             : JSCell(exec->globalData(), exec->globalData().getterSetterStructure.get())
         {
         }
 
-        virtual void visitChildren(SlotVisitor&);
+    public:
+        typedef JSCell Base;
+
+        static GetterSetter* create(ExecState* exec)
+        {
+            GetterSetter* getterSetter = new (NotNull, allocateCell<GetterSetter>(*exec->heap())) GetterSetter(exec);
+            getterSetter->finishCreation(exec->globalData());
+            return getterSetter;
+        }
+
+        static void visitChildren(JSCell*, SlotVisitor&);
 
         JSObject* getter() const { return m_getter.get(); }
-        void setGetter(JSGlobalData& globalData, JSObject* getter) { m_getter.set(globalData, this, getter); }
+        void setGetter(JSGlobalData& globalData, JSObject* getter) { m_getter.setMayBeNull(globalData, this, getter); }
         JSObject* setter() const { return m_setter.get(); }
-        void setSetter(JSGlobalData& globalData, JSObject* setter) { m_setter.set(globalData, this, setter); }
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        void setSetter(JSGlobalData& globalData, JSObject* setter) { m_setter.setMayBeNull(globalData, this, setter); }
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(GetterSetterType, OverridesVisitChildren), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(GetterSetterType, OverridesVisitChildren), &s_info);
         }
         
         static const ClassInfo s_info;
 
     private:
-        virtual bool isGetterSetter() const;
-
         WriteBarrier<JSObject> m_getter;
         WriteBarrier<JSObject> m_setter;  
     };

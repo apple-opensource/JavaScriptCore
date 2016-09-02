@@ -29,331 +29,93 @@
 #if ENABLE(DFG_JIT)
 
 #include "CodeBlock.h"
-#include "DFGJITCodeGenerator.h"
-#include "DFGNonSpeculativeJIT.h"
+#include "DFGOSRExitCompiler.h"
 #include "DFGOperations.h"
 #include "DFGRegisterBank.h"
 #include "DFGSpeculativeJIT.h"
+#include "DFGThunks.h"
 #include "JSGlobalData.h"
 #include "LinkBuffer.h"
 
 namespace JSC { namespace DFG {
 
-// This method used to fill a numeric value to a FPR when linking speculative -> non-speculative.
-void JITCompiler::fillNumericToDouble(NodeIndex nodeIndex, FPRReg fpr, GPRReg temporary)
+void JITCompiler::linkOSRExits()
 {
-    Node& node = graph()[nodeIndex];
-
-    if (node.isConstant()) {
-        ASSERT(node.op == DoubleConstant);
-        move(MacroAssembler::ImmPtr(reinterpret_cast<void*>(reinterpretDoubleToIntptr(valueOfDoubleConstant(nodeIndex)))), temporary);
-        movePtrToDouble(temporary, fpr);
-    } else {
-        loadPtr(addressFor(node.virtualRegister()), temporary);
-        Jump isInteger = branchPtr(MacroAssembler::AboveOrEqual, temporary, GPRInfo::tagTypeNumberRegister);
-        jitAssertIsJSDouble(temporary);
-        addPtr(GPRInfo::tagTypeNumberRegister, temporary);
-        movePtrToDouble(temporary, fpr);
-        Jump hasUnboxedDouble = jump();
-        isInteger.link(this);
-        convertInt32ToDouble(temporary, fpr);
-        hasUnboxedDouble.link(this);
+    for (unsigned i = 0; i < codeBlock()->numberOfOSRExits(); ++i) {
+        OSRExit& exit = codeBlock()->osrExit(i);
+        exit.m_check.initialJump().link(this);
+        jitAssertHasValidCallFrame();
+        store32(TrustedImm32(i), &globalData()->osrExitIndex);
+        exit.m_check.switchToLateJump(patchableJump());
     }
 }
 
-// This method used to fill an integer value to a GPR when linking speculative -> non-speculative.
-void JITCompiler::fillInt32ToInteger(NodeIndex nodeIndex, GPRReg gpr)
+void JITCompiler::compileEntry()
 {
-    Node& node = graph()[nodeIndex];
-
-    if (node.isConstant()) {
-        ASSERT(node.op == Int32Constant);
-        move(MacroAssembler::Imm32(valueOfInt32Constant(nodeIndex)), gpr);
-    } else {
-#if DFG_JIT_ASSERT
-        // Redundant load, just so we can check the tag!
-        loadPtr(addressFor(node.virtualRegister()), gpr);
-        jitAssertIsJSInt32(gpr);
-#endif
-        load32(addressFor(node.virtualRegister()), gpr);
-    }
-}
-
-// This method used to fill a JSValue to a GPR when linking speculative -> non-speculative.
-void JITCompiler::fillToJS(NodeIndex nodeIndex, GPRReg gpr)
-{
-    Node& node = graph()[nodeIndex];
-
-    if (node.isConstant()) {
-        if (isInt32Constant(nodeIndex)) {
-            JSValue jsValue = jsNumber(valueOfInt32Constant(nodeIndex));
-            move(MacroAssembler::ImmPtr(JSValue::encode(jsValue)), gpr);
-        } else if (isDoubleConstant(nodeIndex)) {
-            JSValue jsValue(JSValue::EncodeAsDouble, valueOfDoubleConstant(nodeIndex));
-            move(MacroAssembler::ImmPtr(JSValue::encode(jsValue)), gpr);
-        } else {
-            ASSERT(isJSConstant(nodeIndex));
-            JSValue jsValue = valueOfJSConstant(nodeIndex);
-            move(MacroAssembler::ImmPtr(JSValue::encode(jsValue)), gpr);
-        }
-        return;
-    }
-
-    loadPtr(addressFor(node.virtualRegister()), gpr);
-}
-
-void JITCompiler::jumpFromSpeculativeToNonSpeculative(const SpeculationCheck& check, const EntryLocation& entry, SpeculationRecovery* recovery)
-{
-    ASSERT(check.m_nodeIndex == entry.m_nodeIndex);
-
-    // Link the jump from the Speculative path to here.
-    check.m_check.link(this);
-
-    // Does this speculation check require any additional recovery to be performed,
-    // to restore any state that has been overwritten before we enter back in to the
-    // non-speculative path.
-    if (recovery) {
-        // The only additional recovery we currently support is for integer add operation
-        ASSERT(recovery->type() == SpeculativeAdd);
-        // Revert the add.
-        sub32(recovery->src(), recovery->dest());
-    }
-
-    // FIXME: - This is hideously inefficient!
-    // Where a value is live in a register in the speculative path, and is required in a register
-    // on the non-speculative path, we should not need to be spilling it and reloading (we may
-    // need to spill anyway, if the value is marked as spilled on the non-speculative path).
-    // This may also be spilling values that don't need spilling, e.g. are already spilled,
-    // are constants, or are arguments.
-
-    // Spill all GPRs in use by the speculative path.
-    for (unsigned index = 0; index < GPRInfo::numberOfRegisters; ++index) {
-        NodeIndex nodeIndex = check.m_gprInfo[index].nodeIndex;
-        if (nodeIndex == NoNode)
-            continue;
-
-        DataFormat dataFormat = check.m_gprInfo[index].format;
-        VirtualRegister virtualRegister = graph()[nodeIndex].virtualRegister();
-
-        ASSERT(dataFormat == DataFormatInteger || DataFormatCell || dataFormat & DataFormatJS);
-        if (dataFormat == DataFormatInteger)
-            orPtr(GPRInfo::tagTypeNumberRegister, GPRInfo::toRegister(index));
-        storePtr(GPRInfo::toRegister(index), addressFor(virtualRegister));
-    }
-
-    // Spill all FPRs in use by the speculative path.
-    for (unsigned index = 0; index < FPRInfo::numberOfRegisters; ++index) {
-        NodeIndex nodeIndex = check.m_fprInfo[index];
-        if (nodeIndex == NoNode)
-            continue;
-
-        VirtualRegister virtualRegister = graph()[nodeIndex].virtualRegister();
-
-        moveDoubleToPtr(FPRInfo::toRegister(index), GPRInfo::regT0);
-        subPtr(GPRInfo::tagTypeNumberRegister, GPRInfo::regT0);
-        storePtr(GPRInfo::regT0, addressFor(virtualRegister));
-    }
-
-    // Fill all FPRs in use by the non-speculative path.
-    for (unsigned index = 0; index < FPRInfo::numberOfRegisters; ++index) {
-        NodeIndex nodeIndex = entry.m_fprInfo[index];
-        if (nodeIndex == NoNode)
-            continue;
-
-        fillNumericToDouble(nodeIndex, FPRInfo::toRegister(index), GPRInfo::regT0);
-    }
-
-    // Fill all GPRs in use by the non-speculative path.
-    for (unsigned index = 0; index < GPRInfo::numberOfRegisters; ++index) {
-        NodeIndex nodeIndex = entry.m_gprInfo[index].nodeIndex;
-        if (nodeIndex == NoNode)
-            continue;
-
-        DataFormat dataFormat = entry.m_gprInfo[index].format;
-        if (dataFormat == DataFormatInteger)
-            fillInt32ToInteger(nodeIndex, GPRInfo::toRegister(index));
-        else {
-            ASSERT(dataFormat & DataFormatJS || dataFormat == DataFormatCell); // Treat cell as JSValue for now!
-            fillToJS(nodeIndex, GPRInfo::toRegister(index));
-            // FIXME: For subtypes of DataFormatJS, should jitAssert the subtype?
-        }
-    }
-
-    // Jump into the non-speculative path.
-    jump(entry.m_entry);
-}
-
-void JITCompiler::linkSpeculationChecks(SpeculativeJIT& speculative, NonSpeculativeJIT& nonSpeculative)
-{
-    // Iterators to walk over the set of bail outs & corresponding entry points.
-    SpeculationCheckVector::Iterator checksIter = speculative.speculationChecks().begin();
-    SpeculationCheckVector::Iterator checksEnd = speculative.speculationChecks().end();
-    NonSpeculativeJIT::EntryLocationVector::Iterator entriesIter = nonSpeculative.entryLocations().begin();
-    NonSpeculativeJIT::EntryLocationVector::Iterator entriesEnd = nonSpeculative.entryLocations().end();
-
-    // Iterate over the speculation checks.
-    while (checksIter != checksEnd) {
-        // For every bail out from the speculative path, we must have provided an entry point
-        // into the non-speculative one.
-        ASSERT(checksIter->m_nodeIndex == entriesIter->m_nodeIndex);
-
-        // There may be multiple bail outs that map to the same entry point!
-        do {
-            ASSERT(checksIter != checksEnd);
-            ASSERT(entriesIter != entriesEnd);
-
-            // Plant code to link this speculation failure.
-            const SpeculationCheck& check = *checksIter;
-            const EntryLocation& entry = *entriesIter;
-            jumpFromSpeculativeToNonSpeculative(check, entry, speculative.speculationRecovery(check.m_recoveryIndex));
-             ++checksIter;
-        } while (checksIter != checksEnd && checksIter->m_nodeIndex == entriesIter->m_nodeIndex);
-         ++entriesIter;
-    }
-
-    // FIXME: https://bugs.webkit.org/show_bug.cgi?id=56289
-    ASSERT(!(checksIter != checksEnd));
-    ASSERT(!(entriesIter != entriesEnd));
-}
-
-void JITCompiler::compileFunction(JITCode& entry, MacroAssemblerCodePtr& entryWithArityCheck)
-{
-    // === Stage 1 - Function header code generation ===
-    //
     // This code currently matches the old JIT. In the function header we need to
     // pop the return address (since we do not allow any recursion on the machine
     // stack), and perform a fast register file check.
-
-    // This is the main entry point, without performing an arity check.
     // FIXME: https://bugs.webkit.org/show_bug.cgi?id=56292
     // We'll need to convert the remaining cti_ style calls (specifically the register file
     // check) which will be dependent on stack layout. (We'd need to account for this in
     // both normal return code and when jumping to an exception handler).
     preserveReturnAddressAfterCall(GPRInfo::regT2);
     emitPutToCallFrameHeader(GPRInfo::regT2, RegisterFile::ReturnPC);
-    // If we needed to perform an arity check we will already have moved the return address,
-    // so enter after this.
-    Label fromArityCheck(this);
-
-    // Setup a pointer to the codeblock in the CallFrameHeader.
     emitPutImmediateToCallFrameHeader(m_codeBlock, RegisterFile::CodeBlock);
+}
 
-    // Plant a check that sufficient space is available in the RegisterFile.
-    // FIXME: https://bugs.webkit.org/show_bug.cgi?id=56291
-    addPtr(Imm32(m_codeBlock->m_numCalleeRegisters * sizeof(Register)), GPRInfo::callFrameRegister, GPRInfo::regT1);
-    Jump registerFileCheck = branchPtr(Below, AbsoluteAddress(m_globalData->interpreter->registerFile().addressOfEnd()), GPRInfo::regT1);
-    // Return here after register file check.
-    Label fromRegisterFileCheck = label();
+void JITCompiler::compileBody(SpeculativeJIT& speculative)
+{
+    // We generate the speculative code path, followed by OSR exit code to return
+    // to the old JIT code if speculations fail.
 
-
-    // === Stage 2 - Function body code generation ===
-    //
-    // We generate the speculative code path, followed by the non-speculative
-    // code for the function. Next we need to link the two together, making
-    // bail-outs from the speculative path jump to the corresponding point on
-    // the non-speculative one (and generating any code necessary to juggle
-    // register values around, rebox values, and ensure spilled, to match the
-    // non-speculative path's requirements).
-
-#if DFG_JIT_BREAK_ON_EVERY_FUNCTION
+#if DFG_ENABLE(JIT_BREAK_ON_EVERY_FUNCTION)
     // Handy debug tool!
     breakpoint();
 #endif
+    
+    addPtr(TrustedImm32(1), AbsoluteAddress(codeBlock()->addressOfSpeculativeSuccessCounter()));
 
-    // First generate the speculative path.
-    Label speculativePathBegin = label();
-    SpeculativeJIT speculative(*this);
-#if !DFG_DEBUG_LOCAL_DISBALE_SPECULATIVE
     bool compiledSpeculative = speculative.compile();
-#else
-    bool compiledSpeculative = false;
-#endif
+    ASSERT_UNUSED(compiledSpeculative, compiledSpeculative);
 
-    // Next, generate the non-speculative path. We pass this a SpeculationCheckIndexIterator
-    // to allow it to check which nodes in the graph may bail out, and may need to reenter the
-    // non-speculative path.
-    if (compiledSpeculative) {
-        SpeculationCheckIndexIterator checkIterator(speculative.speculationChecks());
-        NonSpeculativeJIT nonSpeculative(*this);
-        nonSpeculative.compile(checkIterator);
+    linkOSRExits();
 
-        // Link the bail-outs from the speculative path to the corresponding entry points into the non-speculative one.
-        linkSpeculationChecks(speculative, nonSpeculative);
-    } else {
-        // If compilation through the SpeculativeJIT failed, throw away the code we generated.
-        m_calls.clear();
-        rewindToLabel(speculativePathBegin);
-
-        SpeculationCheckVector noChecks;
-        SpeculationCheckIndexIterator checkIterator(noChecks);
-        NonSpeculativeJIT nonSpeculative(*this);
-        nonSpeculative.compile(checkIterator);
-    }
-
-    // === Stage 3 - Function footer code generation ===
-    //
-    // Generate code to lookup and jump to exception handlers, to perform the slow
-    // register file check (if the fast one in the function header fails), and
-    // generate the entry point with arity check.
-
-    // Iterate over the m_calls vector, checking for exception checks,
-    // and linking them to here.
-    unsigned exceptionCheckCount = 0;
-    for (unsigned i = 0; i < m_calls.size(); ++i) {
-        Jump& exceptionCheck = m_calls[i].m_exceptionCheck;
+    // Iterate over the m_calls vector, checking for jumps to link.
+    bool didLinkExceptionCheck = false;
+    for (unsigned i = 0; i < m_exceptionChecks.size(); ++i) {
+        Jump& exceptionCheck = m_exceptionChecks[i].m_exceptionCheck;
         if (exceptionCheck.isSet()) {
             exceptionCheck.link(this);
-            ++exceptionCheckCount;
+            didLinkExceptionCheck = true;
         }
     }
+
     // If any exception checks were linked, generate code to lookup a handler.
-    if (exceptionCheckCount) {
+    if (didLinkExceptionCheck) {
         // lookupExceptionHandler is passed two arguments, exec (the CallFrame*), and
-        // an identifier for the operation that threw the exception, which we can use
-        // to look up handler information. The identifier we use is the return address
-        // of the call out from JIT code that threw the exception; this is still
-        // available on the stack, just below the stack pointer!
+        // the index into the CodeBlock's callReturnIndexVector corresponding to the
+        // call that threw the exception (this was set in nonPreservedNonReturnGPR, when
+        // the exception check was planted).
+        move(GPRInfo::nonPreservedNonReturnGPR, GPRInfo::argumentGPR1);
         move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR0);
-        peek(GPRInfo::argumentGPR1, -1);
-        m_calls.append(CallRecord(call(), lookupExceptionHandler));
+#if CPU(X86)
+        // FIXME: should use the call abstraction, but this is currently in the SpeculativeJIT layer!
+        poke(GPRInfo::argumentGPR0);
+        poke(GPRInfo::argumentGPR1, 1);
+#endif
+        m_calls.append(CallLinkRecord(call(), lookupExceptionHandler));
         // lookupExceptionHandler leaves the handler CallFrame* in the returnValueGPR,
         // and the address of the handler in returnValueGPR2.
         jump(GPRInfo::returnValueGPR2);
     }
+}
 
-    // Generate the register file check; if the fast check in the function head fails,
-    // we need to call out to a helper function to check whether more space is available.
-    // FIXME: change this from a cti call to a DFG style operation (normal C calling conventions).
-    registerFileCheck.link(this);
-    move(stackPointerRegister, GPRInfo::argumentGPR0);
-    poke(GPRInfo::callFrameRegister, OBJECT_OFFSETOF(struct JITStackFrame, callFrame) / sizeof(void*));
-    Call callRegisterFileCheck = call();
-    jump(fromRegisterFileCheck);
-
-    // The fast entry point into a function does not check the correct number of arguments
-    // have been passed to the call (we only use the fast entry point where we can statically
-    // determine the correct number of arguments have been passed, or have already checked).
-    // In cases where an arity check is necessary, we enter here.
-    // FIXME: change this from a cti call to a DFG style operation (normal C calling conventions).
-    Label arityCheck = label();
-    preserveReturnAddressAfterCall(GPRInfo::regT2);
-    emitPutToCallFrameHeader(GPRInfo::regT2, RegisterFile::ReturnPC);
-    branch32(Equal, GPRInfo::regT1, Imm32(m_codeBlock->m_numParameters)).linkTo(fromArityCheck, this);
-    move(stackPointerRegister, GPRInfo::argumentGPR0);
-    poke(GPRInfo::callFrameRegister, OBJECT_OFFSETOF(struct JITStackFrame, callFrame) / sizeof(void*));
-    Call callArityCheck = call();
-    move(GPRInfo::regT0, GPRInfo::callFrameRegister);
-    jump(fromArityCheck);
-
-
-    // === Stage 4 - Link ===
-    //
+void JITCompiler::link(LinkBuffer& linkBuffer)
+{
     // Link the code, populate data in CodeBlock data structures.
-
-    LinkBuffer linkBuffer(*m_globalData, this, m_globalData->executableAllocator);
-
-#if DFG_DEBUG_VERBOSE
-    fprintf(stderr, "JIT code start at %p\n", linkBuffer.debugAddress());
+#if DFG_ENABLE(DEBUG_VERBOSE)
+    dataLog("JIT code for %p start at [%p, %p). Size = %zu.\n", m_codeBlock, linkBuffer.debugAddress(), static_cast<char*>(linkBuffer.debugAddress()) + linkBuffer.debugSize(), linkBuffer.debugSize());
 #endif
 
     // Link all calls out from the JIT code to their respective functions.
@@ -361,92 +123,172 @@ void JITCompiler::compileFunction(JITCode& entry, MacroAssemblerCodePtr& entryWi
         linkBuffer.link(m_calls[i].m_call, m_calls[i].m_function);
 
     if (m_codeBlock->needsCallReturnIndices()) {
-        m_codeBlock->callReturnIndexVector().reserveCapacity(exceptionCheckCount);
-        for (unsigned i = 0; i < m_calls.size(); ++i) {
-            if (m_calls[i].m_exceptionCheck.isSet()) {
-                unsigned returnAddressOffset = linkBuffer.returnAddressOffset(m_calls[i].m_call);
-                unsigned exceptionInfo = m_calls[i].m_exceptionInfo;
-                m_codeBlock->callReturnIndexVector().append(CallReturnOffsetToBytecodeOffset(returnAddressOffset, exceptionInfo));
-            }
+        m_codeBlock->callReturnIndexVector().reserveCapacity(m_exceptionChecks.size());
+        for (unsigned i = 0; i < m_exceptionChecks.size(); ++i) {
+            unsigned returnAddressOffset = linkBuffer.returnAddressOffset(m_exceptionChecks[i].m_call);
+            CodeOrigin codeOrigin = m_exceptionChecks[i].m_codeOrigin;
+            while (codeOrigin.inlineCallFrame)
+                codeOrigin = codeOrigin.inlineCallFrame->caller;
+            unsigned exceptionInfo = codeOrigin.bytecodeIndex;
+            m_codeBlock->callReturnIndexVector().append(CallReturnOffsetToBytecodeOffset(returnAddressOffset, exceptionInfo));
         }
     }
 
+    Vector<CodeOriginAtCallReturnOffset>& codeOrigins = m_codeBlock->codeOrigins();
+    codeOrigins.resize(m_exceptionChecks.size());
+    
+    for (unsigned i = 0; i < m_exceptionChecks.size(); ++i) {
+        CallExceptionRecord& record = m_exceptionChecks[i];
+        unsigned returnAddressOffset = linkBuffer.returnAddressOffset(m_exceptionChecks[i].m_call);
+        codeOrigins[i].codeOrigin = record.m_codeOrigin;
+        codeOrigins[i].callReturnOffset = returnAddressOffset;
+        record.m_token.assertCodeOriginIndex(i);
+    }
+    
+    m_codeBlock->setNumberOfStructureStubInfos(m_propertyAccesses.size());
+    for (unsigned i = 0; i < m_propertyAccesses.size(); ++i) {
+        StructureStubInfo& info = m_codeBlock->structureStubInfo(i);
+        CodeLocationCall callReturnLocation = linkBuffer.locationOf(m_propertyAccesses[i].m_functionCall);
+        info.codeOrigin = m_propertyAccesses[i].m_codeOrigin;
+        info.callReturnLocation = callReturnLocation;
+        info.patch.dfg.deltaCheckImmToCall = differenceBetweenCodePtr(linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCheckImmToCall), callReturnLocation);
+        info.patch.dfg.deltaCallToStructCheck = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToStructCheck));
+#if USE(JSVALUE64)
+        info.patch.dfg.deltaCallToLoadOrStore = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToLoadOrStore));
+#else
+        info.patch.dfg.deltaCallToTagLoadOrStore = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToTagLoadOrStore));
+        info.patch.dfg.deltaCallToPayloadLoadOrStore = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToPayloadLoadOrStore));
+#endif
+        info.patch.dfg.deltaCallToSlowCase = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToSlowCase));
+        info.patch.dfg.deltaCallToDone = differenceBetweenCodePtr(callReturnLocation, linkBuffer.locationOf(m_propertyAccesses[i].m_deltaCallToDone));
+        info.patch.dfg.baseGPR = m_propertyAccesses[i].m_baseGPR;
+#if USE(JSVALUE64)
+        info.patch.dfg.valueGPR = m_propertyAccesses[i].m_valueGPR;
+#else
+        info.patch.dfg.valueTagGPR = m_propertyAccesses[i].m_valueTagGPR;
+        info.patch.dfg.valueGPR = m_propertyAccesses[i].m_valueGPR;
+#endif
+        info.patch.dfg.scratchGPR = m_propertyAccesses[i].m_scratchGPR;
+        info.patch.dfg.registersFlushed = m_propertyAccesses[i].m_registerMode == PropertyAccessRecord::RegistersFlushed;
+    }
+    
+    m_codeBlock->setNumberOfCallLinkInfos(m_jsCalls.size());
+    for (unsigned i = 0; i < m_jsCalls.size(); ++i) {
+        CallLinkInfo& info = m_codeBlock->callLinkInfo(i);
+        info.callType = m_jsCalls[i].m_callType;
+        info.isDFG = true;
+        info.callReturnLocation = CodeLocationLabel(linkBuffer.locationOf(m_jsCalls[i].m_slowCall));
+        info.hotPathBegin = linkBuffer.locationOf(m_jsCalls[i].m_targetToCheck);
+        info.hotPathOther = linkBuffer.locationOfNearCall(m_jsCalls[i].m_fastCall);
+    }
+    
+    MacroAssemblerCodeRef osrExitThunk = globalData()->getCTIStub(osrExitGenerationThunkGenerator);
+    CodeLocationLabel target = CodeLocationLabel(osrExitThunk.code());
+    for (unsigned i = 0; i < codeBlock()->numberOfOSRExits(); ++i) {
+        OSRExit& exit = codeBlock()->osrExit(i);
+        linkBuffer.link(exit.m_check.lateJump(), target);
+        exit.m_check.correctLateJump(linkBuffer);
+    }
+    
+    codeBlock()->shrinkWeakReferencesToFit();
+    codeBlock()->shrinkWeakReferenceTransitionsToFit();
+}
+
+bool JITCompiler::compile(JITCode& entry)
+{
+    compileEntry();
+    SpeculativeJIT speculative(*this);
+    compileBody(speculative);
+
+    // Create OSR entry trampolines if necessary.
+    speculative.createOSREntries();
+
+    LinkBuffer linkBuffer(*m_globalData, this, m_codeBlock, JITCompilationCanFail);
+    if (linkBuffer.didFailToAllocate())
+        return false;
+    link(linkBuffer);
+    speculative.linkOSREntries(linkBuffer);
+
+    entry = JITCode(linkBuffer.finalizeCode(), JITCode::DFGJIT);
+    return true;
+}
+
+bool JITCompiler::compileFunction(JITCode& entry, MacroAssemblerCodePtr& entryWithArityCheck)
+{
+    compileEntry();
+
+    // === Function header code generation ===
+    // This is the main entry point, without performing an arity check.
+    // If we needed to perform an arity check we will already have moved the return address,
+    // so enter after this.
+    Label fromArityCheck(this);
+    // Plant a check that sufficient space is available in the RegisterFile.
+    // FIXME: https://bugs.webkit.org/show_bug.cgi?id=56291
+    addPtr(TrustedImm32(m_codeBlock->m_numCalleeRegisters * sizeof(Register)), GPRInfo::callFrameRegister, GPRInfo::regT1);
+    Jump registerFileCheck = branchPtr(Below, AbsoluteAddress(m_globalData->interpreter->registerFile().addressOfEnd()), GPRInfo::regT1);
+    // Return here after register file check.
+    Label fromRegisterFileCheck = label();
+
+
+    // === Function body code generation ===
+    SpeculativeJIT speculative(*this);
+    compileBody(speculative);
+
+    // === Function footer code generation ===
+    //
+    // Generate code to perform the slow register file check (if the fast one in
+    // the function header fails), and generate the entry point with arity check.
+    //
+    // Generate the register file check; if the fast check in the function head fails,
+    // we need to call out to a helper function to check whether more space is available.
+    // FIXME: change this from a cti call to a DFG style operation (normal C calling conventions).
+    registerFileCheck.link(this);
+    move(stackPointerRegister, GPRInfo::argumentGPR0);
+    poke(GPRInfo::callFrameRegister, OBJECT_OFFSETOF(struct JITStackFrame, callFrame) / sizeof(void*));
+
+    CallBeginToken token = beginCall();
+    Call callRegisterFileCheck = call();
+    notifyCall(callRegisterFileCheck, CodeOrigin(0), token);
+    jump(fromRegisterFileCheck);
+    
+    // The fast entry point into a function does not check the correct number of arguments
+    // have been passed to the call (we only use the fast entry point where we can statically
+    // determine the correct number of arguments have been passed, or have already checked).
+    // In cases where an arity check is necessary, we enter here.
+    // FIXME: change this from a cti call to a DFG style operation (normal C calling conventions).
+    Label arityCheck = label();
+    compileEntry();
+
+    load32(AssemblyHelpers::payloadFor((VirtualRegister)RegisterFile::ArgumentCount), GPRInfo::regT1);
+    branch32(AboveOrEqual, GPRInfo::regT1, TrustedImm32(m_codeBlock->numParameters())).linkTo(fromArityCheck, this);
+    move(stackPointerRegister, GPRInfo::argumentGPR0);
+    poke(GPRInfo::callFrameRegister, OBJECT_OFFSETOF(struct JITStackFrame, callFrame) / sizeof(void*));
+    token = beginCall();
+    Call callArityCheck = call();
+    notifyCall(callArityCheck, CodeOrigin(0), token);
+    move(GPRInfo::regT0, GPRInfo::callFrameRegister);
+    jump(fromArityCheck);
+    
+    // Create OSR entry trampolines if necessary.
+    speculative.createOSREntries();
+
+
+    // === Link ===
+    LinkBuffer linkBuffer(*m_globalData, this, m_codeBlock, JITCompilationCanFail);
+    if (linkBuffer.didFailToAllocate())
+        return false;
+    link(linkBuffer);
+    speculative.linkOSREntries(linkBuffer);
+    
     // FIXME: switch the register file check & arity check over to DFGOpertaion style calls, not JIT stubs.
     linkBuffer.link(callRegisterFileCheck, cti_register_file_check);
     linkBuffer.link(callArityCheck, m_codeBlock->m_isConstructor ? cti_op_construct_arityCheck : cti_op_call_arityCheck);
 
     entryWithArityCheck = linkBuffer.locationOf(arityCheck);
-    entry = linkBuffer.finalizeCode();
+    entry = JITCode(linkBuffer.finalizeCode(), JITCode::DFGJIT);
+    return true;
 }
-
-#if DFG_JIT_ASSERT
-void JITCompiler::jitAssertIsInt32(GPRReg gpr)
-{
-#if CPU(X86_64)
-    Jump checkInt32 = branchPtr(BelowOrEqual, gpr, TrustedImmPtr(reinterpret_cast<void*>(static_cast<uintptr_t>(0xFFFFFFFFu))));
-    breakpoint();
-    checkInt32.link(this);
-#else
-    UNUSED_PARAM(gpr);
-#endif
-}
-
-void JITCompiler::jitAssertIsJSInt32(GPRReg gpr)
-{
-    Jump checkJSInt32 = branchPtr(AboveOrEqual, gpr, GPRInfo::tagTypeNumberRegister);
-    breakpoint();
-    checkJSInt32.link(this);
-}
-
-void JITCompiler::jitAssertIsJSNumber(GPRReg gpr)
-{
-    Jump checkJSNumber = branchTestPtr(MacroAssembler::NonZero, gpr, GPRInfo::tagTypeNumberRegister);
-    breakpoint();
-    checkJSNumber.link(this);
-}
-
-void JITCompiler::jitAssertIsJSDouble(GPRReg gpr)
-{
-    Jump checkJSInt32 = branchPtr(AboveOrEqual, gpr, GPRInfo::tagTypeNumberRegister);
-    Jump checkJSNumber = branchTestPtr(MacroAssembler::NonZero, gpr, GPRInfo::tagTypeNumberRegister);
-    checkJSInt32.link(this);
-    breakpoint();
-    checkJSNumber.link(this);
-}
-#endif
-
-#if ENABLE(SAMPLING_COUNTERS) && CPU(X86_64) // Or any other 64-bit platform!
-void JITCompiler::emitCount(AbstractSamplingCounter& counter, uint32_t increment)
-{
-    addPtr(TrustedImm32(increment), AbsoluteAddress(counter.addressOfCounter()));
-}
-#endif
-
-#if ENABLE(SAMPLING_COUNTERS) && CPU(X86) // Or any other little-endian 32-bit platform!
-void JITCompiler::emitCount(AbstractSamplingCounter& counter, uint32_t increment)
-{
-    intptr_t hiWord = reinterpret_cast<intptr_t>(counter.addressOfCounter()) + sizeof(int32_t);
-    add32(TrustedImm32(increment), AbsoluteAddress(counter.addressOfCounter()));
-    addWithCarry32(TrustedImm32(0), AbsoluteAddress(reinterpret_cast<void*>(hiWord)));
-}
-#endif
-
-#if ENABLE(SAMPLING_FLAGS)
-void JITCompiler::setSamplingFlag(int32_t flag)
-{
-    ASSERT(flag >= 1);
-    ASSERT(flag <= 32);
-    or32(TrustedImm32(1u << (flag - 1)), AbsoluteAddress(SamplingFlags::addressOfFlags()));
-}
-
-void JITCompiler::clearSamplingFlag(int32_t flag)
-{
-    ASSERT(flag >= 1);
-    ASSERT(flag <= 32);
-    and32(TrustedImm32(~(1u << (flag - 1))), AbsoluteAddress(SamplingFlags::addressOfFlags()));
-}
-#endif
 
 } } // namespace JSC::DFG
 
-#endif
+#endif // ENABLE(DFG_JIT)

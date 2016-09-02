@@ -25,6 +25,7 @@
 #include "DateConversion.h"
 #include "DateInstance.h"
 #include "DatePrototype.h"
+#include "JSDateMath.h"
 #include "JSFunction.h"
 #include "JSGlobalObject.h"
 #include "JSString.h"
@@ -32,7 +33,6 @@
 #include "ObjectPrototype.h"
 #include <math.h>
 #include <time.h>
-#include <wtf/DateMath.h>
 #include <wtf/MathExtras.h>
 
 #if OS(WINCE) && !PLATFORM(QT)
@@ -61,7 +61,7 @@ static EncodedJSValue JSC_HOST_CALL dateUTC(ExecState*);
 
 namespace JSC {
 
-const ClassInfo DateConstructor::s_info = { "Function", &InternalFunction::s_info, 0, ExecState::dateConstructorTable };
+const ClassInfo DateConstructor::s_info = { "Function", &InternalFunction::s_info, 0, ExecState::dateConstructorTable, CREATE_METHOD_TABLE(DateConstructor) };
 
 /* Source for DateConstructor.lut.h
 @begin dateConstructorTable
@@ -72,22 +72,28 @@ const ClassInfo DateConstructor::s_info = { "Function", &InternalFunction::s_inf
 */
 
 ASSERT_CLASS_FITS_IN_CELL(DateConstructor);
+ASSERT_HAS_TRIVIAL_DESTRUCTOR(DateConstructor);
 
-DateConstructor::DateConstructor(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, DatePrototype* datePrototype)
-    : InternalFunction(&exec->globalData(), globalObject, structure, Identifier(exec, datePrototype->classInfo()->className))
+DateConstructor::DateConstructor(JSGlobalObject* globalObject, Structure* structure)
+    : InternalFunction(globalObject, structure) 
 {
+}
+
+void DateConstructor::finishCreation(ExecState* exec, DatePrototype* datePrototype)
+{
+    Base::finishCreation(exec->globalData(), Identifier(exec, datePrototype->classInfo()->className));
     putDirectWithoutTransition(exec->globalData(), exec->propertyNames().prototype, datePrototype, DontEnum | DontDelete | ReadOnly);
     putDirectWithoutTransition(exec->globalData(), exec->propertyNames().length, jsNumber(7), ReadOnly | DontEnum | DontDelete);
 }
 
-bool DateConstructor::getOwnPropertySlot(ExecState* exec, const Identifier& propertyName, PropertySlot &slot)
+bool DateConstructor::getOwnPropertySlot(JSCell* cell, ExecState* exec, const Identifier& propertyName, PropertySlot &slot)
 {
-    return getStaticFunctionSlot<InternalFunction>(exec, ExecState::dateConstructorTable(exec), this, propertyName, slot);
+    return getStaticFunctionSlot<InternalFunction>(exec, ExecState::dateConstructorTable(exec), jsCast<DateConstructor*>(cell), propertyName, slot);
 }
 
-bool DateConstructor::getOwnPropertyDescriptor(ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
+bool DateConstructor::getOwnPropertyDescriptor(JSObject* object, ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
 {
-    return getStaticFunctionDescriptor<InternalFunction>(exec, ExecState::dateConstructorTable(exec), this, propertyName, descriptor);
+    return getStaticFunctionDescriptor<InternalFunction>(exec, ExecState::dateConstructorTable(exec), jsCast<DateConstructor*>(object), propertyName, descriptor);
 }
 
 // ECMA 15.9.3
@@ -119,14 +125,14 @@ JSObject* constructDate(ExecState* exec, JSGlobalObject* globalObject, const Arg
             args.at(5).toNumber(exec), 
             args.at(6).toNumber(exec)
         };
-        if (isnan(doubleArguments[0])
-                || isnan(doubleArguments[1])
-                || (numArgs >= 3 && isnan(doubleArguments[2]))
-                || (numArgs >= 4 && isnan(doubleArguments[3]))
-                || (numArgs >= 5 && isnan(doubleArguments[4]))
-                || (numArgs >= 6 && isnan(doubleArguments[5]))
-                || (numArgs >= 7 && isnan(doubleArguments[6])))
-            value = NaN;
+        if (!isfinite(doubleArguments[0])
+            || !isfinite(doubleArguments[1])
+            || (numArgs >= 3 && !isfinite(doubleArguments[2]))
+            || (numArgs >= 4 && !isfinite(doubleArguments[3]))
+            || (numArgs >= 5 && !isfinite(doubleArguments[4]))
+            || (numArgs >= 6 && !isfinite(doubleArguments[5]))
+            || (numArgs >= 7 && !isfinite(doubleArguments[6])))
+            value = std::numeric_limits<double>::quiet_NaN();
         else {
             GregorianDateTime t;
             int year = JSC::toInt32(doubleArguments[0]);
@@ -142,7 +148,7 @@ JSObject* constructDate(ExecState* exec, JSGlobalObject* globalObject, const Arg
         }
     }
 
-    return new (exec) DateInstance(exec, globalObject->dateStructure(), value);
+    return DateInstance::create(exec, globalObject->dateStructure(), value);
 }
     
 static EncodedJSValue JSC_HOST_CALL constructWithDateConstructor(ExecState* exec)
@@ -151,7 +157,7 @@ static EncodedJSValue JSC_HOST_CALL constructWithDateConstructor(ExecState* exec
     return JSValue::encode(constructDate(exec, asInternalFunction(exec->callee())->globalObject(), args));
 }
 
-ConstructType DateConstructor::getConstructData(ConstructData& constructData)
+ConstructType DateConstructor::getConstructData(JSCell*, ConstructData& constructData)
 {
     constructData.native.function = constructWithDateConstructor;
     return ConstructTypeHost;
@@ -160,10 +166,8 @@ ConstructType DateConstructor::getConstructData(ConstructData& constructData)
 // ECMA 15.9.2
 static EncodedJSValue JSC_HOST_CALL callDate(ExecState* exec)
 {
-    time_t localTime = time(0);
-    tm localTM;
-    getLocalTime(&localTime, &localTM);
-    GregorianDateTime ts(exec, localTM);
+    GregorianDateTime ts;
+    msToGregorianDateTime(exec, currentTimeMS(), false, ts);
     DateConversionBuffer date;
     DateConversionBuffer time;
     formatDate(ts, date);
@@ -171,7 +175,7 @@ static EncodedJSValue JSC_HOST_CALL callDate(ExecState* exec)
     return JSValue::encode(jsMakeNontrivialString(exec, date, " ", time));
 }
 
-CallType DateConstructor::getCallData(CallData& callData)
+CallType DateConstructor::getCallData(JSCell*, CallData& callData)
 {
     callData.native.function = callDate;
     return CallTypeHost;
@@ -179,7 +183,7 @@ CallType DateConstructor::getCallData(CallData& callData)
 
 static EncodedJSValue JSC_HOST_CALL dateParse(ExecState* exec)
 {
-    return JSValue::encode(jsNumber(parseDate(exec, exec->argument(0).toString(exec))));
+    return JSValue::encode(jsNumber(parseDate(exec, exec->argument(0).toString(exec)->value(exec))));
 }
 
 static EncodedJSValue JSC_HOST_CALL dateNow(ExecState*)

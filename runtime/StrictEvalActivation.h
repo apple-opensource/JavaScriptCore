@@ -32,10 +32,30 @@ namespace JSC {
 
 class StrictEvalActivation : public JSNonFinalObject {
 public:
+    typedef JSNonFinalObject Base;
+
+    static StrictEvalActivation* create(ExecState* exec)
+    {
+        StrictEvalActivation* activation = new (NotNull, allocateCell<StrictEvalActivation>(*exec->heap())) StrictEvalActivation(exec);
+        activation->finishCreation(exec->globalData());
+        return activation;
+    }
+
+    static bool deleteProperty(JSCell*, ExecState*, const Identifier&);
+    static JSObject* toThisObject(JSCell*, ExecState*);
+
+    static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
+    {
+        return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
+    }
+    
+    static const ClassInfo s_info;
+
+protected:
+    static const unsigned StructureFlags = IsEnvironmentRecord | JSNonFinalObject::StructureFlags;
+
+private:
     StrictEvalActivation(ExecState*);
-    virtual bool deleteProperty(ExecState*, const Identifier&);
-    virtual JSObject* toThisObject(ExecState*) const;
-    virtual JSValue toStrictThisObject(ExecState*) const;
 };
 
 } // namespace JSC

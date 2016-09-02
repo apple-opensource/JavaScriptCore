@@ -23,23 +23,43 @@
 
 #include "InternalFunction.h"
 
+namespace WTF {
+class TextPosition;
+}
+
 namespace JSC {
 
     class FunctionPrototype;
 
     class FunctionConstructor : public InternalFunction {
     public:
-        FunctionConstructor(ExecState*, JSGlobalObject*, Structure*, FunctionPrototype*);
+        typedef InternalFunction Base;
+
+        static FunctionConstructor* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, FunctionPrototype* functionPrototype)
+        {
+            FunctionConstructor* constructor = new (NotNull, allocateCell<FunctionConstructor>(*exec->heap())) FunctionConstructor(globalObject, structure);
+            constructor->finishCreation(exec, functionPrototype);
+            return constructor;
+        }
+
+        static const ClassInfo s_info;
+
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype) 
+        { 
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info); 
+        }
 
     private:
-        virtual ConstructType getConstructData(ConstructData&);
-        virtual CallType getCallData(CallData&);
+        FunctionConstructor(JSGlobalObject*, Structure*);
+        void finishCreation(ExecState*, FunctionPrototype*);
+        static ConstructType getConstructData(JSCell*, ConstructData&);
+        static CallType getCallData(JSCell*, CallData&);
     };
 
-    JSObject* constructFunction(ExecState*, JSGlobalObject*, const ArgList&, const Identifier& functionName, const UString& sourceURL, int lineNumber);
+    JSObject* constructFunction(ExecState*, JSGlobalObject*, const ArgList&, const Identifier& functionName, const UString& sourceURL, const WTF::TextPosition&);
     JSObject* constructFunction(ExecState*, JSGlobalObject*, const ArgList&);
 
-    JSObject* constructFunctionSkippingEvalEnabledCheck(ExecState*, JSGlobalObject*, const ArgList&, const Identifier&, const UString&, int lineNumber);
+    JS_EXPORT_PRIVATE JSObject* constructFunctionSkippingEvalEnabledCheck(ExecState*, JSGlobalObject*, const ArgList&, const Identifier&, const UString&, const WTF::TextPosition&);
 
 } // namespace JSC
 

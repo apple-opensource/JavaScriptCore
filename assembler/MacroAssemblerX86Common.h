@@ -34,12 +34,18 @@
 namespace JSC {
 
 class MacroAssemblerX86Common : public AbstractMacroAssembler<X86Assembler> {
+protected:
+#if CPU(X86_64)
+    static const X86Registers::RegisterID scratchRegister = X86Registers::r11;
+#endif
+
     static const int DoubleConditionBitInvert = 0x10;
     static const int DoubleConditionBitSpecial = 0x20;
     static const int DoubleConditionBits = DoubleConditionBitInvert | DoubleConditionBitSpecial;
 
 public:
     typedef X86Assembler::FPRegisterID FPRegisterID;
+    typedef X86Assembler::XMMRegisterID XMMRegisterID;
     
     static const int MaximumCompactPtrAlignedAddressOffset = 127;
 
@@ -85,6 +91,13 @@ public:
 
     static const RegisterID stackPointerRegister = X86Registers::esp;
 
+#if ENABLE(JIT_CONSTANT_BLINDING)
+    static bool shouldBlindForSpecificArch(uint32_t value) { return value >= 0x00ffffff; }
+#if CPU(X86_64)
+    static bool shouldBlindForSpecificArch(uintptr_t value) { return value >= 0x00ffffff; }
+#endif
+#endif
+
     // Integer arithmetic operations:
     //
     // Operations are typically two operand - operation(source, srcDst)
@@ -115,6 +128,11 @@ public:
     void add32(RegisterID src, Address dest)
     {
         m_assembler.addl_rm(src, dest.offset, dest.base);
+    }
+
+    void add32(TrustedImm32 imm, RegisterID src, RegisterID dest)
+    {
+        m_assembler.leal_mr(imm.m_value, src, dest);
     }
     
     void and32(RegisterID src, RegisterID dest)
@@ -222,16 +240,6 @@ public:
         m_assembler.negl_m(srcDest.offset, srcDest.base);
     }
 
-    void not32(RegisterID srcDest)
-    {
-        m_assembler.notl_r(srcDest);
-    }
-
-    void not32(Address srcDest)
-    {
-        m_assembler.notl_m(srcDest.offset, srcDest.base);
-    }
-    
     void or32(RegisterID src, RegisterID dest)
     {
         m_assembler.orl_rr(src, dest);
@@ -374,7 +382,6 @@ public:
         m_assembler.subl_rm(src, dest.offset, dest.base);
     }
 
-
     void xor32(RegisterID src, RegisterID dest)
     {
         m_assembler.xorl_rr(src, dest);
@@ -382,11 +389,17 @@ public:
 
     void xor32(TrustedImm32 imm, Address dest)
     {
-        m_assembler.xorl_im(imm.m_value, dest.offset, dest.base);
+        if (imm.m_value == -1)
+            m_assembler.notl_m(dest.offset, dest.base);
+        else
+            m_assembler.xorl_im(imm.m_value, dest.offset, dest.base);
     }
 
     void xor32(TrustedImm32 imm, RegisterID dest)
     {
+        if (imm.m_value == -1)
+        m_assembler.notl_r(dest);
+        else
         m_assembler.xorl_ir(imm.m_value, dest);
     }
 
@@ -423,6 +436,23 @@ public:
         m_assembler.sqrtsd_rr(src, dst);
     }
 
+    void absDouble(FPRegisterID src, FPRegisterID dst)
+    {
+        ASSERT(src != dst);
+        static const double negativeZeroConstant = -0.0;
+        loadDouble(&negativeZeroConstant, dst);
+        m_assembler.andnpd_rr(src, dst);
+    }
+
+    void negateDouble(FPRegisterID src, FPRegisterID dst)
+    {
+        ASSERT(src != dst);
+        static const double negativeZeroConstant = -0.0;
+        loadDouble(&negativeZeroConstant, dst);
+        m_assembler.xorpd_rr(src, dst);
+    }
+
+
     // Memory access operations:
     //
     // Loads are of the form load(address, destination) and stores of the form
@@ -443,6 +473,11 @@ public:
     void load32WithUnalignedHalfWords(BaseIndex address, RegisterID dest)
     {
         load32(address, dest);
+    }
+
+    void load16Unaligned(BaseIndex address, RegisterID dest)
+    {
+        load16(address, dest);
     }
 
     DataLabel32 load32WithAddressOffsetPatch(Address address, RegisterID dest)
@@ -470,6 +505,26 @@ public:
         return DataLabelCompact(this);
     }
 
+    void load8(BaseIndex address, RegisterID dest)
+    {
+        m_assembler.movzbl_mr(address.offset, address.base, address.index, address.scale, dest);
+    }
+
+    void load8(ImplicitAddress address, RegisterID dest)
+    {
+        m_assembler.movzbl_mr(address.offset, address.base, dest);
+    }
+    
+    void load8Signed(BaseIndex address, RegisterID dest)
+    {
+        m_assembler.movsbl_mr(address.offset, address.base, address.index, address.scale, dest);
+    }
+
+    void load8Signed(ImplicitAddress address, RegisterID dest)
+    {
+        m_assembler.movsbl_mr(address.offset, address.base, dest);
+    }
+    
     void load16(BaseIndex address, RegisterID dest)
     {
         m_assembler.movzwl_mr(address.offset, address.base, address.index, address.scale, dest);
@@ -478,6 +533,16 @@ public:
     void load16(Address address, RegisterID dest)
     {
         m_assembler.movzwl_mr(address.offset, address.base, dest);
+    }
+
+    void load16Signed(BaseIndex address, RegisterID dest)
+    {
+        m_assembler.movswl_mr(address.offset, address.base, address.index, address.scale, dest);
+    }
+    
+    void load16Signed(Address address, RegisterID dest)
+    {
+        m_assembler.movswl_mr(address.offset, address.base, dest);
     }
 
     DataLabel32 store32WithAddressOffsetPatch(RegisterID src, Address address)
@@ -500,6 +565,77 @@ public:
     {
         m_assembler.movl_i32m(imm.m_value, address.offset, address.base);
     }
+    
+    void store32(TrustedImm32 imm, BaseIndex address)
+    {
+        m_assembler.movl_i32m(imm.m_value, address.offset, address.base, address.index, address.scale);
+    }
+
+    void store8(TrustedImm32 imm, Address address)
+    {
+        ASSERT(-128 <= imm.m_value && imm.m_value < 128);
+        m_assembler.movb_i8m(imm.m_value, address.offset, address.base);
+    }
+
+    void store8(TrustedImm32 imm, BaseIndex address)
+    {
+        ASSERT(-128 <= imm.m_value && imm.m_value < 128);
+        m_assembler.movb_i8m(imm.m_value, address.offset, address.base, address.index, address.scale);
+    }
+    
+    void store8(RegisterID src, BaseIndex address)
+    {
+#if CPU(X86)
+        // On 32-bit x86 we can only store from the first 4 registers;
+        // esp..edi are mapped to the 'h' registers!
+        if (src >= 4) {
+            // Pick a temporary register.
+            RegisterID temp;
+            if (address.base != X86Registers::eax && address.index != X86Registers::eax)
+                temp = X86Registers::eax;
+            else if (address.base != X86Registers::ebx && address.index != X86Registers::ebx)
+                temp = X86Registers::ebx;
+            else {
+                ASSERT(address.base != X86Registers::ecx && address.index != X86Registers::ecx);
+                temp = X86Registers::ecx;
+            }
+
+            // Swap to the temporary register to perform the store.
+            swap(src, temp);
+            m_assembler.movb_rm(temp, address.offset, address.base, address.index, address.scale);
+            swap(src, temp);
+            return;
+        }
+#endif
+        m_assembler.movb_rm(src, address.offset, address.base, address.index, address.scale);
+    }
+
+    void store16(RegisterID src, BaseIndex address)
+    {
+#if CPU(X86)
+        // On 32-bit x86 we can only store from the first 4 registers;
+        // esp..edi are mapped to the 'h' registers!
+        if (src >= 4) {
+            // Pick a temporary register.
+            RegisterID temp;
+            if (address.base != X86Registers::eax && address.index != X86Registers::eax)
+                temp = X86Registers::eax;
+            else if (address.base != X86Registers::ebx && address.index != X86Registers::ebx)
+                temp = X86Registers::ebx;
+            else {
+                ASSERT(address.base != X86Registers::ecx && address.index != X86Registers::ecx);
+                temp = X86Registers::ecx;
+            }
+            
+            // Swap to the temporary register to perform the store.
+            swap(src, temp);
+            m_assembler.movw_rm(temp, address.offset, address.base, address.index, address.scale);
+            swap(src, temp);
+            return;
+        }
+#endif
+        m_assembler.movw_rm(src, address.offset, address.base, address.index, address.scale);
+    }
 
 
     // Floating-point operation:
@@ -513,16 +649,62 @@ public:
             m_assembler.movsd_rr(src, dest);
     }
 
+    void loadDouble(const void* address, FPRegisterID dest)
+    {
+#if CPU(X86)
+        ASSERT(isSSE2Present());
+        m_assembler.movsd_mr(address, dest);
+#else
+        move(TrustedImmPtr(address), scratchRegister);
+        loadDouble(scratchRegister, dest);
+#endif
+    }
+
     void loadDouble(ImplicitAddress address, FPRegisterID dest)
     {
         ASSERT(isSSE2Present());
         m_assembler.movsd_mr(address.offset, address.base, dest);
+    }
+    
+    void loadDouble(BaseIndex address, FPRegisterID dest)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movsd_mr(address.offset, address.base, address.index, address.scale, dest);
+    }
+    void loadFloat(BaseIndex address, FPRegisterID dest)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movss_mr(address.offset, address.base, address.index, address.scale, dest);
     }
 
     void storeDouble(FPRegisterID src, ImplicitAddress address)
     {
         ASSERT(isSSE2Present());
         m_assembler.movsd_rm(src, address.offset, address.base);
+    }
+    
+    void storeDouble(FPRegisterID src, BaseIndex address)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movsd_rm(src, address.offset, address.base, address.index, address.scale);
+    }
+    
+    void storeFloat(FPRegisterID src, BaseIndex address)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movss_rm(src, address.offset, address.base, address.index, address.scale);
+    }
+    
+    void convertDoubleToFloat(FPRegisterID src, FPRegisterID dst)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.cvtsd2ss_rr(src, dst);
+    }
+
+    void convertFloatToDouble(FPRegisterID src, FPRegisterID dst)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.cvtss2sd_rr(src, dst);
     }
 
     void addDouble(FPRegisterID src, FPRegisterID dest)
@@ -664,6 +846,27 @@ public:
         return branch32(branchType ? NotEqual : Equal, dest, TrustedImm32(0x80000000));
     }
 
+    Jump branchTruncateDoubleToUint32(FPRegisterID src, RegisterID dest, BranchTruncateType branchType = BranchIfTruncateFailed)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.cvttsd2si_rr(src, dest);
+        return branch32(branchType ? GreaterThanOrEqual : LessThan, dest, TrustedImm32(0));
+    }
+
+    void truncateDoubleToInt32(FPRegisterID src, RegisterID dest)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.cvttsd2si_rr(src, dest);
+    }
+    
+#if CPU(X86_64)
+    void truncateDoubleToUint32(FPRegisterID src, RegisterID dest)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.cvttsd2siq_rr(src, dest);
+    }
+#endif
+    
     // Convert 'src' to an integer, and places the resulting 'dest'.
     // If the result is not representable as a 32 bit value, branch.
     // May also branch for some values that are representable in 32 bits
@@ -695,6 +898,36 @@ public:
         ASSERT(isSSE2Present());
         m_assembler.xorpd_rr(scratch, scratch);
         return branchDouble(DoubleEqualOrUnordered, reg, scratch);
+    }
+
+    void lshiftPacked(TrustedImm32 imm, XMMRegisterID reg)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.psllq_i8r(imm.m_value, reg);
+    }
+
+    void rshiftPacked(TrustedImm32 imm, XMMRegisterID reg)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.psrlq_i8r(imm.m_value, reg);
+    }
+
+    void orPacked(XMMRegisterID src, XMMRegisterID dst)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.por_rr(src, dst);
+    }
+
+    void moveInt32ToPacked(RegisterID src, XMMRegisterID dst)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movd_rr(src, dst);
+    }
+
+    void movePackedToInt32(XMMRegisterID src, RegisterID dst)
+    {
+        ASSERT(isSSE2Present());
+        m_assembler.movd_rr(src, dst);
     }
 
     // Stack manipulation operations:
@@ -839,15 +1072,6 @@ public:
         return Jump(m_assembler.jCC(x86Condition(cond)));
     }
     
-    Jump branch32(RelationalCondition cond, TrustedImm32 left, RegisterID right)
-    {
-        if (((cond == Equal) || (cond == NotEqual)) && !left.m_value)
-            m_assembler.testl_rr(right, right);
-        else
-            m_assembler.cmpl_ir(left.m_value, right);
-        return Jump(m_assembler.jCC(x86Condition(commute(cond))));
-    }
-    
     Jump branch32(RelationalCondition cond, RegisterID left, Address right)
     {
         m_assembler.cmpl_mr(right.offset, right.base, left);
@@ -877,20 +1101,6 @@ public:
         return branch32(cond, left, right);
     }
 
-    Jump branch16(RelationalCondition cond, BaseIndex left, RegisterID right)
-    {
-        m_assembler.cmpw_rm(right, left.offset, left.base, left.index, left.scale);
-        return Jump(m_assembler.jCC(x86Condition(cond)));
-    }
-
-    Jump branch16(RelationalCondition cond, BaseIndex left, TrustedImm32 right)
-    {
-        ASSERT(!(right.m_value & 0xFFFF0000));
-
-        m_assembler.cmpw_im(right.m_value, left.offset, left.base, left.index, left.scale);
-        return Jump(m_assembler.jCC(x86Condition(cond)));
-    }
-
     Jump branchTest32(ResultCondition cond, RegisterID reg, RegisterID mask)
     {
         m_assembler.testl_rr(reg, mask);
@@ -902,8 +1112,6 @@ public:
         // if we are only interested in the low seven bits, this can be tested with a testb
         if (mask.m_value == -1)
             m_assembler.testl_rr(reg, reg);
-        else if ((mask.m_value & ~0x7f) == 0)
-            m_assembler.testb_i8r(mask.m_value, reg);
         else
             m_assembler.testl_i32r(mask.m_value, reg);
         return Jump(m_assembler.jCC(x86Condition(cond)));
@@ -927,17 +1135,6 @@ public:
         return Jump(m_assembler.jCC(x86Condition(cond)));
     }
     
-    Jump branchTest8(ResultCondition cond, RegisterID reg, TrustedImm32 mask = TrustedImm32(-1))
-    {
-        // Byte in TrustedImm32 is not well defined, so be a little permisive here, but don't accept nonsense values.
-        ASSERT(mask.m_value >= -128 && mask.m_value <= 255);
-        if (mask.m_value == -1)
-            m_assembler.testb_rr(reg, reg);
-        else
-            m_assembler.testb_i8r(mask.m_value, reg);
-        return Jump(m_assembler.jCC(x86Condition(cond)));
-    }
-
     Jump branchTest8(ResultCondition cond, Address address, TrustedImm32 mask = TrustedImm32(-1))
     {
         // Byte in TrustedImm32 is not well defined, so be a little permisive here, but don't accept nonsense values.
@@ -957,6 +1154,14 @@ public:
             m_assembler.cmpb_im(0, address.offset, address.base, address.index, address.scale);
         else
             m_assembler.testb_im(mask.m_value, address.offset, address.base, address.index, address.scale);
+        return Jump(m_assembler.jCC(x86Condition(cond)));
+    }
+
+    Jump branch8(RelationalCondition cond, BaseIndex left, TrustedImm32 right)
+    {
+        ASSERT(!(right.m_value & 0xFFFFFF00));
+
+        m_assembler.cmpb_im(right.m_value, left.offset, left.base, left.index, left.scale);
         return Jump(m_assembler.jCC(x86Condition(cond)));
     }
 
@@ -1148,11 +1353,16 @@ public:
         m_assembler.ret();
     }
 
+    void compare8(RelationalCondition cond, Address left, TrustedImm32 right, RegisterID dest)
+    {
+        m_assembler.cmpb_im(right.m_value, left.offset, left.base);
+        set32(x86Condition(cond), dest);
+    }
+    
     void compare32(RelationalCondition cond, RegisterID left, RegisterID right, RegisterID dest)
     {
         m_assembler.cmpl_rr(right, left);
-        m_assembler.setCC_r(x86Condition(cond), dest);
-        m_assembler.movzbl_rr(dest, dest);
+        set32(x86Condition(cond), dest);
     }
 
     void compare32(RelationalCondition cond, RegisterID left, TrustedImm32 right, RegisterID dest)
@@ -1161,12 +1371,11 @@ public:
             m_assembler.testl_rr(left, left);
         else
             m_assembler.cmpl_ir(right.m_value, left);
-        m_assembler.setCC_r(x86Condition(cond), dest);
-        m_assembler.movzbl_rr(dest, dest);
+        set32(x86Condition(cond), dest);
     }
 
     // FIXME:
-    // The mask should be optional... paerhaps the argument order should be
+    // The mask should be optional... perhaps the argument order should be
     // dest-src, operations always have a dest? ... possibly not true, considering
     // asm ops like test, or pseudo ops like pop().
 
@@ -1176,8 +1385,7 @@ public:
             m_assembler.cmpb_im(0, address.offset, address.base);
         else
             m_assembler.testb_im(mask.m_value, address.offset, address.base);
-        m_assembler.setCC_r(x86Condition(cond), dest);
-        m_assembler.movzbl_rr(dest, dest);
+        set32(x86Condition(cond), dest);
     }
 
     void test32(ResultCondition cond, Address address, TrustedImm32 mask, RegisterID dest)
@@ -1186,8 +1394,7 @@ public:
             m_assembler.cmpl_im(0, address.offset, address.base);
         else
             m_assembler.testl_i32m(mask.m_value, address.offset, address.base);
-        m_assembler.setCC_r(x86Condition(cond), dest);
-        m_assembler.movzbl_rr(dest, dest);
+        set32(x86Condition(cond), dest);
     }
 
     // Invert a relational condition, e.g. == becomes !=, < becomes >=, etc.
@@ -1196,25 +1403,6 @@ public:
         return static_cast<RelationalCondition>(cond ^ 1);
     }
 
-    // Commute a relational condition, returns a new condition that will produce
-    // the same results given the same inputs but with their positions exchanged.
-    static RelationalCondition commute(RelationalCondition cond)
-    {
-        // Equality is commutative!
-        if (cond == Equal || cond == NotEqual)
-            return cond;
-
-        // Based on the values of x86 condition codes, remap > with < and >= with <=
-        if (cond >= LessThan) {
-            ASSERT(cond == LessThan || cond == LessThanOrEqual || cond == GreaterThan || cond == GreaterThanOrEqual);
-            return static_cast<RelationalCondition>(X86Assembler::ConditionL + X86Assembler::ConditionG - cond);
-        }
-
-        // As above, for unsigned conditions.
-        ASSERT(cond == Below || cond == BelowOrEqual || cond == Above || cond == AboveOrEqual);
-        return static_cast<RelationalCondition>(X86Assembler::ConditionB + X86Assembler::ConditionA - cond);
-    }
-    
     void nop()
     {
         m_assembler.nop();
@@ -1229,6 +1417,23 @@ protected:
     X86Assembler::Condition x86Condition(ResultCondition cond)
     {
         return static_cast<X86Assembler::Condition>(cond);
+    }
+
+    void set32(X86Assembler::Condition cond, RegisterID dest)
+    {
+#if CPU(X86)
+        // On 32-bit x86 we can only set the first 4 registers;
+        // esp..edi are mapped to the 'h' registers!
+        if (dest >= 4) {
+            m_assembler.xchgl_rr(dest, X86Registers::eax);
+            m_assembler.setCC_r(cond, X86Registers::eax);
+            m_assembler.movzbl_rr(X86Registers::eax, X86Registers::eax);
+            m_assembler.xchgl_rr(dest, X86Registers::eax);
+            return;
+        }
+#endif
+        m_assembler.setCC_r(cond, dest);
+        m_assembler.movzbl_rr(dest, dest);
     }
 
 private:

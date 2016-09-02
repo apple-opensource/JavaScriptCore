@@ -28,24 +28,32 @@ namespace JSC {
     class ObjectPrototype;
 
     class DatePrototype : public DateInstance {
-    public:
-        DatePrototype(ExecState*, JSGlobalObject*, Structure*);
+    private:
+        DatePrototype(ExecState*, Structure*);
 
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+    public:
+        typedef DateInstance Base;
+
+        static DatePrototype* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure)
+        {
+            DatePrototype* prototype = new (NotNull, allocateCell<DatePrototype>(*exec->heap())) DatePrototype(exec, structure);
+            prototype->finishCreation(exec, globalObject);
+            return prototype;
+        }
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
 
         static const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     protected:
+        void finishCreation(ExecState*, JSGlobalObject*);
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | DateInstance::StructureFlags;
-
-        COMPILE_ASSERT(!DateInstance::AnonymousSlotCount, DatePrototype_stomps_on_your_anonymous_slot);
-        static const unsigned AnonymousSlotCount = 1;
     };
 
 } // namespace JSC

@@ -21,14 +21,27 @@
 #ifndef NativeErrorPrototype_h
 #define NativeErrorPrototype_h
 
-#include "JSObjectWithGlobalObject.h"
+#include "ErrorPrototype.h"
 
 namespace JSC {
     class NativeErrorConstructor;
 
-    class NativeErrorPrototype : public JSObjectWithGlobalObject {
+    class NativeErrorPrototype : public ErrorPrototype {
+    private:
+        NativeErrorPrototype(ExecState*, Structure*);
+    
     public:
-        NativeErrorPrototype(ExecState*, JSGlobalObject*, Structure*, const UString&, NativeErrorConstructor*);
+        typedef ErrorPrototype Base;
+
+        static NativeErrorPrototype* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, const UString& name, NativeErrorConstructor* constructor)
+        {
+            NativeErrorPrototype* prototype = new (NotNull, allocateCell<NativeErrorPrototype>(*exec->heap())) NativeErrorPrototype(exec, structure);
+            prototype->finishCreation(exec, globalObject, name, constructor);
+            return prototype;
+        }
+
+    protected:
+        void finishCreation(ExecState*, JSGlobalObject*, const UString& nameAndMessage, NativeErrorConstructor*);
     };
 
 } // namespace JSC

@@ -29,6 +29,8 @@
 
 namespace JSC {
 
+ASSERT_HAS_TRIVIAL_DESTRUCTOR(ScopeChainNode);
+
 #ifndef NDEBUG
 
 void ScopeChainNode::print()
@@ -37,21 +39,21 @@ void ScopeChainNode::print()
     for (ScopeChainIterator scopeIter = begin(); scopeIter != scopeEnd; ++scopeIter) {
         JSObject* o = scopeIter->get();
         PropertyNameArray propertyNames(globalObject->globalExec());
-        o->getPropertyNames(globalObject->globalExec(), propertyNames);
+        o->methodTable()->getPropertyNames(o, globalObject->globalExec(), propertyNames, ExcludeDontEnumProperties);
         PropertyNameArray::const_iterator propEnd = propertyNames.end();
 
-        fprintf(stderr, "----- [scope %p] -----\n", o);
+        dataLog("----- [scope %p] -----\n", o);
         for (PropertyNameArray::const_iterator propIter = propertyNames.begin(); propIter != propEnd; propIter++) {
             Identifier name = *propIter;
-            fprintf(stderr, "%s, ", name.ustring().utf8().data());
+            dataLog("%s, ", name.ustring().utf8().data());
         }
-        fprintf(stderr, "\n");
+        dataLog("\n");
     }
 }
 
 #endif
 
-const ClassInfo ScopeChainNode::s_info = { "ScopeChainNode", 0, 0, 0 };
+const ClassInfo ScopeChainNode::s_info = { "ScopeChainNode", 0, 0, 0, CREATE_METHOD_TABLE(ScopeChainNode) };
 
 int ScopeChainNode::localDepth()
 {
@@ -67,16 +69,17 @@ int ScopeChainNode::localDepth()
     return scopeDepth;
 }
 
-void ScopeChainNode::visitChildren(SlotVisitor& visitor)
+void ScopeChainNode::visitChildren(JSCell* cell, SlotVisitor& visitor)
 {
-    ASSERT_GC_OBJECT_INHERITS(this, &s_info);
+    ScopeChainNode* thisObject = jsCast<ScopeChainNode*>(cell);
+    ASSERT_GC_OBJECT_INHERITS(thisObject, &s_info);
     COMPILE_ASSERT(StructureFlags & OverridesVisitChildren, OverridesVisitChildrenWithoutSettingFlag);
-    ASSERT(structure()->typeInfo().overridesVisitChildren());
-    if (next)
-        visitor.append(&next);
-    visitor.append(&object);
-    visitor.append(&globalObject);
-    visitor.append(&globalThis);
+    ASSERT(thisObject->structure()->typeInfo().overridesVisitChildren());
+    if (thisObject->next)
+        visitor.append(&thisObject->next);
+    visitor.append(&thisObject->object);
+    visitor.append(&thisObject->globalObject);
+    visitor.append(&thisObject->globalThis);
 }
 
 } // namespace JSC

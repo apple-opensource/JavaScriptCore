@@ -30,12 +30,12 @@ namespace JSC {
     class JSGlobalData;
     class JSGlobalObject;
     class JSObject;
-    class MarkStack;
+    class LLIntOffsetsExtractor;
     class ScopeChainIterator;
-    typedef MarkStack SlotVisitor;
+    class SlotVisitor;
     
     class ScopeChainNode : public JSCell {
-    public:
+    private:
         ScopeChainNode(ScopeChainNode* next, JSObject* object, JSGlobalData* globalData, JSGlobalObject* globalObject, JSObject* globalThis)
             : JSCell(*globalData, globalData->scopeChainNodeStructure.get())
             , globalData(globalData)
@@ -44,10 +44,31 @@ namespace JSC {
             , globalObject(*globalData, this, globalObject)
             , globalThis(*globalData, this, globalThis)
         {
-            ASSERT(globalData);
-            ASSERT(globalObject);
         }
 
+    protected:
+        void finishCreation(JSGlobalData* globalData, JSGlobalObject* globalObject)
+        {
+            Base::finishCreation(*globalData);
+            ASSERT_UNUSED(globalObject, globalObject);
+        }
+
+    public:
+        typedef JSCell Base;
+
+        static ScopeChainNode* create(ExecState* exec, ScopeChainNode* next, JSObject* object, JSGlobalData* globalData, JSGlobalObject* globalObject, JSObject* globalThis)
+        {
+            ScopeChainNode* node = new (NotNull, allocateCell<ScopeChainNode>(*exec->heap())) ScopeChainNode(next, object, globalData, globalObject, globalThis);
+            node->finishCreation(globalData, globalObject);
+            return node;
+        }
+        static ScopeChainNode* create(ScopeChainNode* next, JSObject* object, JSGlobalData* globalData, JSGlobalObject* globalObject, JSObject* globalThis)
+        {
+            ScopeChainNode* node = new (NotNull, allocateCell<ScopeChainNode>(globalData->heap)) ScopeChainNode(next, object, globalData, globalObject, globalThis);
+            node->finishCreation(globalData, globalObject);
+            return node;
+        }
+        
         JSGlobalData* globalData;
         WriteBarrier<ScopeChainNode> next;
         WriteBarrier<JSObject> object;
@@ -66,18 +87,20 @@ namespace JSC {
         void print();
 #endif
         
-        static Structure* createStructure(JSGlobalData& globalData, JSValue proto) { return Structure::create(globalData, proto, TypeInfo(CompoundType, StructureFlags), AnonymousSlotCount, &s_info); }
-        virtual void visitChildren(SlotVisitor&);
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue proto) { return Structure::create(globalData, globalObject, proto, TypeInfo(CompoundType, StructureFlags), &s_info); }
+        static void visitChildren(JSCell*, SlotVisitor&);
         static JS_EXPORTDATA const ClassInfo s_info;
 
     private:
+        friend class LLIntOffsetsExtractor;
+        
         static const unsigned StructureFlags = OverridesVisitChildren;
     };
 
     inline ScopeChainNode* ScopeChainNode::push(JSObject* o)
     {
         ASSERT(o);
-        return new (globalData) ScopeChainNode(this, o, globalData, globalObject.get(), globalThis.get());
+        return ScopeChainNode::create(this, o, globalData, globalObject.get(), globalThis.get());
     }
 
     inline ScopeChainNode* ScopeChainNode::pop()

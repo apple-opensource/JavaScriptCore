@@ -45,7 +45,6 @@ namespace JSC {
         macro(op_create_this, 3) \
         macro(op_get_callee, 2) \
         macro(op_convert_this, 2) \
-        macro(op_convert_this_strict, 2) \
         \
         macro(op_new_object, 2) \
         macro(op_new_array, 4) \
@@ -62,6 +61,8 @@ namespace JSC {
         macro(op_nstricteq, 4) \
         macro(op_less, 4) \
         macro(op_lesseq, 4) \
+        macro(op_greater, 4) \
+        macro(op_greatereq, 4) \
         \
         macro(op_pre_inc, 2) \
         macro(op_pre_dec, 2) \
@@ -81,7 +82,6 @@ namespace JSC {
         macro(op_bitand, 5) \
         macro(op_bitxor, 5) \
         macro(op_bitor, 5) \
-        macro(op_bitnot, 3) \
         \
         macro(op_check_has_instance, 2) \
         macro(op_instanceof, 5) \
@@ -94,50 +94,46 @@ namespace JSC {
         macro(op_is_function, 3) \
         macro(op_in, 4) \
         \
-        macro(op_resolve, 3) \
-        macro(op_resolve_skip, 4) \
-        macro(op_resolve_global, 5) \
-        macro(op_resolve_global_dynamic, 6) \
-        macro(op_get_scoped_var, 4) \
+        macro(op_resolve, 4) /* has value profiling */  \
+        macro(op_resolve_skip, 5) /* has value profiling */ \
+        macro(op_resolve_global, 6) /* has value profiling */ \
+        macro(op_resolve_global_dynamic, 7) /* has value profiling */ \
+        macro(op_get_scoped_var, 5) /* has value profiling */ \
         macro(op_put_scoped_var, 4) \
-        macro(op_get_global_var, 3) \
+        macro(op_get_global_var, 4) /* has value profiling */ \
         macro(op_put_global_var, 3) \
-        macro(op_resolve_base, 4) \
+        macro(op_resolve_base, 5) /* has value profiling */ \
         macro(op_ensure_property_exists, 3) \
-        macro(op_resolve_with_base, 4) \
-        macro(op_get_by_id, 8) \
-        macro(op_get_by_id_self, 8) \
-        macro(op_get_by_id_self_list, 8) \
-        macro(op_get_by_id_proto, 8) \
-        macro(op_get_by_id_proto_list, 8) \
-        macro(op_get_by_id_chain, 8) \
-        macro(op_get_by_id_getter_self, 8) \
-        macro(op_get_by_id_getter_self_list, 8) \
-        macro(op_get_by_id_getter_proto, 8) \
-        macro(op_get_by_id_getter_proto_list, 8) \
-        macro(op_get_by_id_getter_chain, 8) \
-        macro(op_get_by_id_custom_self, 8) \
-        macro(op_get_by_id_custom_self_list, 8) \
-        macro(op_get_by_id_custom_proto, 8) \
-        macro(op_get_by_id_custom_proto_list, 8) \
-        macro(op_get_by_id_custom_chain, 8) \
-        macro(op_get_by_id_generic, 8) \
-        macro(op_get_array_length, 8) \
-        macro(op_get_string_length, 8) \
+        macro(op_resolve_with_base, 5) /* has value profiling */ \
+        macro(op_resolve_with_this, 5) /* has value profiling */ \
+        macro(op_get_by_id, 9) /* has value profiling */ \
+        macro(op_get_by_id_self, 9) /* has value profiling */ \
+        macro(op_get_by_id_proto, 9) /* has value profiling */ \
+        macro(op_get_by_id_chain, 9) /* has value profiling */ \
+        macro(op_get_by_id_getter_self, 9) /* has value profiling */ \
+        macro(op_get_by_id_getter_proto, 9) /* has value profiling */ \
+        macro(op_get_by_id_getter_chain, 9) /* has value profiling */ \
+        macro(op_get_by_id_custom_self, 9) /* has value profiling */ \
+        macro(op_get_by_id_custom_proto, 9) /* has value profiling */ \
+        macro(op_get_by_id_custom_chain, 9) /* has value profiling */ \
+        macro(op_get_by_id_generic, 9) /* has value profiling */ \
+        macro(op_get_array_length, 9) /* has value profiling */ \
+        macro(op_get_string_length, 9) /* has value profiling */ \
         macro(op_get_arguments_length, 4) \
         macro(op_put_by_id, 9) \
         macro(op_put_by_id_transition, 9) \
+        macro(op_put_by_id_transition_direct, 9) \
+        macro(op_put_by_id_transition_normal, 9) \
         macro(op_put_by_id_replace, 9) \
         macro(op_put_by_id_generic, 9) \
         macro(op_del_by_id, 4) \
-        macro(op_get_by_val, 4) \
-        macro(op_get_argument_by_val, 4) \
+        macro(op_get_by_val, 5) /* has value profiling */ \
+        macro(op_get_argument_by_val, 5) /* must be the same size as op_get_by_val */ \
         macro(op_get_by_pname, 7) \
         macro(op_put_by_val, 4) \
         macro(op_del_by_val, 4) \
         macro(op_put_by_index, 4) \
-        macro(op_put_getter, 4) \
-        macro(op_put_setter, 4) \
+        macro(op_put_getter_setter, 5) \
         \
         macro(op_jmp, 2) \
         macro(op_jtrue, 3) \
@@ -145,34 +141,40 @@ namespace JSC {
         macro(op_jeq_null, 3) \
         macro(op_jneq_null, 3) \
         macro(op_jneq_ptr, 4) \
-        macro(op_jnless, 4) \
-        macro(op_jnlesseq, 4) \
         macro(op_jless, 4) \
         macro(op_jlesseq, 4) \
+        macro(op_jgreater, 4) \
+        macro(op_jgreatereq, 4) \
+        macro(op_jnless, 4) \
+        macro(op_jnlesseq, 4) \
+        macro(op_jngreater, 4) \
+        macro(op_jngreatereq, 4) \
         macro(op_jmp_scopes, 3) \
         macro(op_loop, 2) \
         macro(op_loop_if_true, 3) \
         macro(op_loop_if_false, 3) \
         macro(op_loop_if_less, 4) \
         macro(op_loop_if_lesseq, 4) \
+        macro(op_loop_if_greater, 4) \
+        macro(op_loop_if_greatereq, 4) \
+        macro(op_loop_hint, 1) \
         macro(op_switch_imm, 4) \
         macro(op_switch_char, 4) \
         macro(op_switch_string, 4) \
         \
         macro(op_new_func, 4) \
         macro(op_new_func_exp, 3) \
-        macro(op_call, 4) \
-        macro(op_call_eval, 4) \
-        macro(op_call_varargs, 4) \
-        macro(op_load_varargs, 4) \
+        macro(op_call, 6) \
+        macro(op_call_eval, 6) \
+        macro(op_call_varargs, 5) \
         macro(op_tear_off_activation, 3) \
         macro(op_tear_off_arguments, 2) \
         macro(op_ret, 2) \
-        macro(op_call_put_result, 2) \
+        macro(op_call_put_result, 3) /* has value profiling */ \
         macro(op_ret_object_or_this, 3) \
         macro(op_method_check, 1) \
         \
-        macro(op_construct, 4) \
+        macro(op_construct, 6) \
         macro(op_strcat, 4) \
         macro(op_to_primitive, 3) \
         \
@@ -187,9 +189,6 @@ namespace JSC {
         macro(op_throw, 2) \
         macro(op_throw_reference_error, 2) \
         \
-        macro(op_jsr, 3) \
-        macro(op_sret, 2) \
-        \
         macro(op_debug, 4) \
         macro(op_profile_will_call, 2) \
         macro(op_profile_did_call, 2) \
@@ -200,6 +199,7 @@ namespace JSC {
         typedef enum { FOR_EACH_OPCODE_ID(OPCODE_ID_ENUM) } OpcodeID;
     #undef OPCODE_ID_ENUM
 
+    const int maxOpcodeLength = 9;
     const int numOpcodeIDs = op_end + 1;
 
     #define OPCODE_ID_LENGTHS(id, length) const int id##_length = length;
@@ -216,7 +216,7 @@ namespace JSC {
         FOR_EACH_OPCODE_ID(VERIFY_OPCODE_ID);
     #undef VERIFY_OPCODE_ID
 
-#if ENABLE(COMPUTED_GOTO_INTERPRETER)
+#if ENABLE(COMPUTED_GOTO_CLASSIC_INTERPRETER) || ENABLE(LLINT)
 #if COMPILER(RVCT) || COMPILER(INTEL)
     typedef void* Opcode;
 #else
@@ -225,8 +225,6 @@ namespace JSC {
 #else
     typedef OpcodeID Opcode;
 #endif
-
-#if ENABLE(OPCODE_SAMPLING) || ENABLE(CODEBLOCK_SAMPLING) || ENABLE(OPCODE_STATS)
 
 #define PADDING_STRING "                                "
 #define PADDING_STRING_LENGTH static_cast<unsigned>(strlen(PADDING_STRING))
@@ -242,8 +240,6 @@ namespace JSC {
 
 #undef PADDING_STRING_LENGTH
 #undef PADDING_STRING
-
-#endif
 
 #if ENABLE(OPCODE_STATS)
 

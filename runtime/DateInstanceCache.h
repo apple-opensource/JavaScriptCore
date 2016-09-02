@@ -26,14 +26,13 @@
 #ifndef DateInstanceCache_h
 #define DateInstanceCache_h
 
-#include <wtf/DateMath.h>
+#include "JSDateMath.h"
+#include <wtf/FixedArray.h>
 #include <wtf/HashFunctions.h>
 #include <wtf/PassRefPtr.h>
 #include <wtf/RefCounted.h>
 
 namespace JSC {
-
-    extern const double NaN;
 
     class DateInstanceData : public RefCounted<DateInstanceData> {
     public:
@@ -46,8 +45,8 @@ namespace JSC {
 
     private:
         DateInstanceData()
-            : m_gregorianDateTimeCachedForMS(NaN)
-            , m_gregorianDateTimeUTCCachedForMS(NaN)
+            : m_gregorianDateTimeCachedForMS(std::numeric_limits<double>::quiet_NaN())
+            , m_gregorianDateTimeUTCCachedForMS(std::numeric_limits<double>::quiet_NaN())
         {
         }
     };
@@ -62,7 +61,7 @@ namespace JSC {
         void reset()
         {
             for (size_t i = 0; i < cacheSize; ++i)
-                m_cache[i].key = NaN;
+                m_cache[i].key = std::numeric_limits<double>::quiet_NaN();
         }
         
         DateInstanceData* add(double d)

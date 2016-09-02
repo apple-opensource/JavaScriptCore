@@ -29,6 +29,7 @@
 
 #include "RegExpCache.h"
 #include "RegExpObject.h"
+#include "StrongInlines.h"
 
 namespace JSC {
 
@@ -38,14 +39,14 @@ RegExp* RegExpCache::lookupOrCreate(const UString& patternString, RegExpFlags fl
     RegExpCacheMap::iterator result = m_weakCache.find(key);
     if (result != m_weakCache.end())
         return result->second.get();
-    RegExp* regExp = new (m_globalData) RegExp(m_globalData, patternString, flags);
+    RegExp* regExp = RegExp::createWithoutCaching(*m_globalData, patternString, flags);
 #if ENABLE(REGEXP_TRACING)
     m_globalData->addRegExpToTrace(regExp);
 #endif
     // We need to do a second lookup to add the RegExp as
     // allocating it may have caused a gc cycle, which in
     // turn may have removed items from the cache.
-    m_weakCache.add(key, Weak<RegExp>(*m_globalData, regExp, this));
+    m_weakCache.add(key, PassWeak<RegExp>(regExp, this));
     return regExp;
 }
 

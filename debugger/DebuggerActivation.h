@@ -30,34 +30,41 @@
 
 namespace JSC {
 
-    class JSActivation;
-
     class DebuggerActivation : public JSNonFinalObject {
     public:
-        DebuggerActivation(JSGlobalData&, JSObject*);
+        typedef JSNonFinalObject Base;
 
-        virtual void visitChildren(SlotVisitor&);
-        virtual UString className() const;
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
-        virtual void put(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
-        virtual void putWithAttributes(ExecState*, const Identifier& propertyName, JSValue, unsigned attributes);
-        virtual bool deleteProperty(ExecState*, const Identifier& propertyName);
-        virtual void getOwnPropertyNames(ExecState*, PropertyNameArray&, EnumerationMode mode = ExcludeDontEnumProperties);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
-        virtual void defineGetter(ExecState*, const Identifier& propertyName, JSObject* getterFunction, unsigned attributes);
-        virtual void defineSetter(ExecState*, const Identifier& propertyName, JSObject* setterFunction, unsigned attributes);
-        virtual JSValue lookupGetter(ExecState*, const Identifier& propertyName);
-        virtual JSValue lookupSetter(ExecState*, const Identifier& propertyName);
-
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype) 
+        static DebuggerActivation* create(JSGlobalData& globalData, JSObject* object)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info); 
+            DebuggerActivation* activation = new (NotNull, allocateCell<DebuggerActivation>(globalData.heap)) DebuggerActivation(globalData);
+            activation->finishCreation(globalData, object);
+            return activation;
+        }
+
+        static void visitChildren(JSCell*, SlotVisitor&);
+        static UString className(const JSObject*);
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier& propertyName, PropertySlot&);
+        static void put(JSCell*, ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        static void putDirectVirtual(JSObject*, ExecState*, const Identifier& propertyName, JSValue, unsigned attributes);
+        static bool deleteProperty(JSCell*, ExecState*, const Identifier& propertyName);
+        static void getOwnPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
+        static bool defineOwnProperty(JSObject*, ExecState*, const Identifier& propertyName, PropertyDescriptor&, bool shouldThrow);
+
+        JS_EXPORTDATA static const ClassInfo s_info;
+
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype) 
+        {
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info); 
         }
 
     protected:
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | OverridesVisitChildren | JSObject::StructureFlags;
 
+        JS_EXPORT_PRIVATE void finishCreation(JSGlobalData&, JSObject* activation);
+
     private:
+        JS_EXPORT_PRIVATE DebuggerActivation(JSGlobalData&);
         WriteBarrier<JSActivation> m_activation;
     };
 

@@ -6,16 +6,20 @@ SET(JavaScriptCore_INCLUDE_DIRECTORIES
     "${JAVASCRIPTCORE_DIR}/assembler"
     "${JAVASCRIPTCORE_DIR}/bytecode"
     "${JAVASCRIPTCORE_DIR}/bytecompiler"
+    "${JAVASCRIPTCORE_DIR}/dfg"
     "${JAVASCRIPTCORE_DIR}/heap"
     "${JAVASCRIPTCORE_DIR}/debugger"
     "${JAVASCRIPTCORE_DIR}/interpreter"
     "${JAVASCRIPTCORE_DIR}/jit"
+    "${JAVASCRIPTCORE_DIR}/llint"
     "${JAVASCRIPTCORE_DIR}/parser"
     "${JAVASCRIPTCORE_DIR}/profiler"
     "${JAVASCRIPTCORE_DIR}/runtime"
+    "${JAVASCRIPTCORE_DIR}/tools"
     "${JAVASCRIPTCORE_DIR}/yarr"
-    "${WTF_INCLUDE_DIRECTORIES}"
-    "${CMAKE_SOURCE_DIR}"
+    "${WTF_DIR}"
+    "${DERIVED_SOURCES_JAVASCRIPTCORE_DIR}"
+    "${CMAKE_SOURCE_DIR}/Source"
 )
 
 SET(JavaScriptCore_SOURCES
@@ -32,38 +36,88 @@ SET(JavaScriptCore_SOURCES
     API/JSWeakObjectMapRefPrivate.cpp
     API/OpaqueJSString.cpp
 
+    bytecode/CallLinkInfo.cpp
+    bytecode/CallLinkStatus.cpp
     bytecode/CodeBlock.cpp
+    bytecode/DFGExitProfile.cpp
+    bytecode/ExecutionCounter.cpp
+    bytecode/GetByIdStatus.cpp
     bytecode/JumpTable.cpp
+    bytecode/LazyOperandValueProfile.cpp
+    bytecode/MethodCallLinkInfo.cpp
+    bytecode/MethodCallLinkStatus.cpp
+    bytecode/MethodOfGettingAValueProfile.cpp
     bytecode/Opcode.cpp
+    bytecode/PolymorphicPutByIdList.cpp
+    bytecode/PredictedType.cpp
+    bytecode/PutByIdStatus.cpp
     bytecode/SamplingTool.cpp
     bytecode/StructureStubInfo.cpp
 
     bytecompiler/BytecodeGenerator.cpp
     bytecompiler/NodesCodegen.cpp
 
-    heap/Heap.cpp
-    heap/HandleHeap.cpp
+    dfg/DFGAbstractState.cpp
+    dfg/DFGAssemblyHelpers.cpp
+    dfg/DFGByteCodeParser.cpp
+    dfg/DFGCapabilities.cpp
+    dfg/DFGCFAPhase.cpp
+    dfg/DFGCorrectableJumpPoint.cpp
+    dfg/DFGCSEPhase.cpp
+    dfg/DFGDriver.cpp
+    dfg/DFGFixupPhase.cpp
+    dfg/DFGGraph.cpp
+    dfg/DFGJITCompiler.cpp
+    dfg/DFGNodeFlags.cpp
+    dfg/DFGOSREntry.cpp
+    dfg/DFGOSRExit.cpp
+    dfg/DFGOSRExitCompiler.cpp
+    dfg/DFGOSRExitCompiler32_64.cpp
+    dfg/DFGOSRExitCompiler64.cpp
+    dfg/DFGOperations.cpp
+    dfg/DFGPhase.cpp
+    dfg/DFGPredictionPropagationPhase.cpp
+    dfg/DFGRedundantPhiEliminationPhase.cpp
+    dfg/DFGRepatch.cpp
+    dfg/DFGSpeculativeJIT.cpp
+    dfg/DFGSpeculativeJIT32_64.cpp
+    dfg/DFGSpeculativeJIT64.cpp
+    dfg/DFGThunks.cpp
+    dfg/DFGVirtualRegisterAllocationPhase.cpp
+
+    heap/BlockAllocator.cpp
+    heap/CopiedSpace.cpp
+    heap/ConservativeRoots.cpp
+    heap/DFGCodeBlocks.cpp
+    heap/HandleSet.cpp
     heap/HandleStack.cpp
+    heap/Heap.cpp
     heap/MachineStackMarker.cpp
+    heap/MarkedAllocator.cpp
     heap/MarkedBlock.cpp
     heap/MarkedSpace.cpp
-    heap/ConservativeRoots.cpp
     heap/MarkStack.cpp
+    heap/WeakSet.cpp
+    heap/WeakHandleOwner.cpp
+    heap/WeakBlock.cpp
 
     debugger/Debugger.cpp
     debugger/DebuggerActivation.cpp
     debugger/DebuggerCallFrame.cpp
-
+    
+    interpreter/AbstractPC.cpp
     interpreter/CallFrame.cpp
     interpreter/Interpreter.cpp
     interpreter/RegisterFile.cpp
 
     jit/ExecutableAllocator.cpp
+    jit/HostCallReturnValue.cpp
     jit/JITArithmetic32_64.cpp
     jit/JITArithmetic.cpp
     jit/JITCall32_64.cpp
     jit/JITCall.cpp
     jit/JIT.cpp
+    jit/JITExceptions.cpp
     jit/JITOpcodes32_64.cpp
     jit/JITOpcodes.cpp
     jit/JITPropertyAccess32_64.cpp
@@ -71,7 +125,6 @@ SET(JavaScriptCore_SOURCES
     jit/JITStubs.cpp
     jit/ThunkGenerators.cpp
 
-    parser/JSParser.cpp
     parser/Lexer.cpp
     parser/Nodes.cpp
     parser/Parser.cpp
@@ -114,24 +167,25 @@ SET(JavaScriptCore_SOURCES
     runtime/JSActivation.cpp
     runtime/JSAPIValueWrapper.cpp
     runtime/JSArray.cpp
-    runtime/JSByteArray.cpp
     runtime/JSCell.cpp
+    runtime/JSDateMath.cpp
     runtime/JSFunction.cpp
+    runtime/JSBoundFunction.cpp
     runtime/JSGlobalData.cpp
     runtime/JSGlobalObject.cpp
     runtime/JSGlobalObjectFunctions.cpp
+    runtime/JSGlobalThis.cpp
     runtime/JSLock.cpp
     runtime/JSNotAnObject.cpp
     runtime/JSObject.cpp
-    runtime/JSObjectWithGlobalObject.cpp
     runtime/JSONObject.cpp
     runtime/JSPropertyNameIterator.cpp
     runtime/JSStaticScopeObject.cpp
     runtime/JSString.cpp
+    runtime/JSStringJoiner.cpp
     runtime/JSValue.cpp
     runtime/JSVariableObject.cpp
     runtime/JSWrapperObject.cpp
-    runtime/JSZombie.cpp
     runtime/LiteralParser.cpp
     runtime/Lookup.cpp
     runtime/MathObject.cpp
@@ -143,15 +197,17 @@ SET(JavaScriptCore_SOURCES
     runtime/ObjectConstructor.cpp
     runtime/ObjectPrototype.cpp
     runtime/Operations.cpp
+    runtime/Options.cpp
     runtime/PropertyDescriptor.cpp
     runtime/PropertyNameArray.cpp
     runtime/PropertySlot.cpp
     runtime/RegExp.cpp
     runtime/RegExpCache.cpp
     runtime/RegExpConstructor.cpp
+    runtime/RegExpCachedResult.cpp
+    runtime/RegExpMatchesArray.cpp
     runtime/RegExpObject.cpp
     runtime/RegExpPrototype.cpp
-    runtime/RopeImpl.cpp
     runtime/ScopeChain.cpp
     runtime/SmallStrings.cpp
     runtime/StrictEvalActivation.cpp
@@ -164,16 +220,15 @@ SET(JavaScriptCore_SOURCES
     runtime/TimeoutChecker.cpp
     runtime/UString.cpp
 
+    tools/CodeProfile.cpp
+    tools/CodeProfiling.cpp
+
+    yarr/YarrCanonicalizeUCS2.cpp
     yarr/YarrPattern.cpp
     yarr/YarrInterpreter.cpp
     yarr/YarrJIT.cpp
     yarr/YarrSyntaxChecker.cpp
-
-    wtf/DateMath.cpp
-    wtf/PageAllocationAligned.cpp
-    wtf/PageBlock.cpp
 )
-SET(JavaScriptCore_HEADERS )
 
 SET(JavaScriptCore_LUT_FILES
     runtime/ArrayConstructor.cpp
@@ -244,10 +299,9 @@ ELSE ()
 ENDIF ()
 
 
-INCLUDE_IF_EXISTS(${JAVASCRIPTCORE_DIR}/CMakeLists${PORT}.txt)
+WEBKIT_INCLUDE_CONFIG_FILES_IF_EXISTS()
 
 
-ADD_SUBDIRECTORY(wtf)
 ADD_SUBDIRECTORY(shell)
 
 WEBKIT_WRAP_SOURCELIST(${JavaScriptCore_SOURCES})
@@ -255,6 +309,8 @@ INCLUDE_DIRECTORIES(${JavaScriptCore_INCLUDE_DIRECTORIES})
 ADD_DEFINITIONS(-DBUILDING_JavaScriptCore)
 ADD_LIBRARY(${JavaScriptCore_LIBRARY_NAME} ${JavaScriptCore_LIBRARY_TYPE} ${JavaScriptCore_HEADERS} ${JavaScriptCore_SOURCES})
 TARGET_LINK_LIBRARIES(${JavaScriptCore_LIBRARY_NAME} ${JavaScriptCore_LIBRARIES})
+SET_TARGET_PROPERTIES(${JavaScriptCore_LIBRARY_NAME} PROPERTIES FOLDER "JavaScriptCore")
+SET_TARGET_PROPERTIES(${JavaScriptCore_LIBRARY_NAME} PROPERTIES LINK_INTERFACE_LIBRARIES "")
 
 IF (JavaScriptCore_LINK_FLAGS)
     ADD_TARGET_PROPERTIES(${JavaScriptCore_LIBRARY_NAME} LINK_FLAGS "${JavaScriptCore_LINK_FLAGS}")
@@ -262,5 +318,5 @@ ENDIF ()
 
 IF (SHARED_CORE)
     SET_TARGET_PROPERTIES(${JavaScriptCore_LIBRARY_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-    INSTALL(TARGETS ${JavaScriptCore_LIBRARY_NAME} DESTINATION lib)
+    INSTALL(TARGETS ${JavaScriptCore_LIBRARY_NAME} DESTINATION "${LIB_INSTALL_DIR}")
 ENDIF ()

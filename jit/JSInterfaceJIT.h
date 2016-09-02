@@ -26,8 +26,10 @@
 #ifndef JSInterfaceJIT_h
 #define JSInterfaceJIT_h
 
+#include "BytecodeConventions.h"
 #include "JITCode.h"
 #include "JITStubs.h"
+#include "JSString.h"
 #include "JSValue.h"
 #include "MacroAssembler.h"
 #include "RegisterFile.h"
@@ -55,6 +57,10 @@ namespace JSC {
         static const RegisterID cachedResultRegister = X86Registers::eax;
         static const RegisterID firstArgumentRegister = X86Registers::edi;
         
+#if ENABLE(VALUE_PROFILER)
+        static const RegisterID bucketCounterRegister = X86Registers::r10;
+#endif
+        
         static const RegisterID timeoutCheckRegister = X86Registers::r12;
         static const RegisterID callFrameRegister = X86Registers::r13;
         static const RegisterID tagTypeNumberRegister = X86Registers::r14;
@@ -76,7 +82,7 @@ namespace JSC {
         // OS X if might make more sense to just use regparm.
         static const RegisterID firstArgumentRegister = X86Registers::ecx;
         
-        static const RegisterID timeoutCheckRegister = X86Registers::esi;
+        static const RegisterID bucketCounterRegister = X86Registers::esi;
         static const RegisterID callFrameRegister = X86Registers::edi;
         
         static const RegisterID regT0 = X86Registers::eax;
@@ -92,7 +98,11 @@ namespace JSC {
         static const RegisterID returnValueRegister = ARMRegisters::r0;
         static const RegisterID cachedResultRegister = ARMRegisters::r0;
         static const RegisterID firstArgumentRegister = ARMRegisters::r0;
-        
+
+#if ENABLE(VALUE_PROFILER)
+        static const RegisterID bucketCounterRegister = ARMRegisters::r7;
+#endif
+
         static const RegisterID regT0 = ARMRegisters::r0;
         static const RegisterID regT1 = ARMRegisters::r1;
         static const RegisterID regT2 = ARMRegisters::r2;
@@ -193,11 +203,6 @@ namespace JSC {
         inline Jump emitLoadInt32(unsigned virtualRegisterIndex, RegisterID dst);
         inline Jump emitLoadDouble(unsigned virtualRegisterIndex, FPRegisterID dst, RegisterID scratch);
 
-        inline void storePtrWithWriteBarrier(TrustedImmPtr ptr, RegisterID /* owner */, Address dest)
-        {
-            storePtr(ptr, dest);
-        }
-
 #if USE(JSVALUE32_64)
         inline Jump emitJumpIfNotJSCell(unsigned virtualRegisterIndex);
         inline Address tagFor(int index, RegisterID base = callFrameRegister);
@@ -216,6 +221,8 @@ namespace JSC {
     };
 
     struct ThunkHelpers {
+        static unsigned stringImplFlagsOffset() { return StringImpl::flagsOffset(); }
+        static unsigned stringImpl8BitFlag() { return StringImpl::flagIs8Bit(); }
         static unsigned stringImplDataOffset() { return StringImpl::dataOffset(); }
         static unsigned jsStringLengthOffset() { return OBJECT_OFFSETOF(JSString, m_length); }
         static unsigned jsStringValueOffset() { return OBJECT_OFFSETOF(JSString, m_value); }
@@ -276,7 +283,8 @@ namespace JSC {
         loadDouble(addressFor(virtualRegisterIndex), dst);
         done.link(this);
         return notInt;
-    }    
+    }
+
 #endif
 
 #if USE(JSVALUE64)
@@ -315,7 +323,7 @@ namespace JSC {
         done.link(this);
         return notNumber;
     }
-    
+
     ALWAYS_INLINE void JSInterfaceJIT::emitFastArithImmToInt(RegisterID)
     {
     }

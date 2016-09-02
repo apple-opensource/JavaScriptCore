@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2003, 2007, 2008 Apple Inc. All Rights Reserved.
+ *  Copyright (C) 2003, 2007, 2008, 2012 Apple Inc. All Rights Reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -21,72 +21,85 @@
 #ifndef RegExpObject_h
 #define RegExpObject_h
 
-#include "JSObjectWithGlobalObject.h"
+#include "JSObject.h"
 #include "RegExp.h"
 
 namespace JSC {
     
-    class RegExpObject : public JSObjectWithGlobalObject {
+    class RegExpObject : public JSNonFinalObject {
     public:
-        typedef JSObjectWithGlobalObject Base;
+        typedef JSNonFinalObject Base;
 
-        RegExpObject(JSGlobalObject*, Structure*, RegExp*);
-        virtual ~RegExpObject();
-
-        void setRegExp(JSGlobalData& globalData, RegExp* r) { d->regExp.set(globalData, this, r); }
-        RegExp* regExp() const { return d->regExp.get(); }
-
-        void setLastIndex(size_t lastIndex)
+        static RegExpObject* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, RegExp* regExp)
         {
-            d->lastIndex.setWithoutWriteBarrier(jsNumber(lastIndex));
+            RegExpObject* object = new (NotNull, allocateCell<RegExpObject>(*exec->heap())) RegExpObject(globalObject, structure, regExp);
+            object->finishCreation(globalObject);
+            return object;
         }
-        void setLastIndex(JSGlobalData& globalData, JSValue lastIndex)
+        
+        static RegExpObject* create(JSGlobalData& globalData, JSGlobalObject* globalObject, Structure* structure, RegExp* regExp)
         {
-            d->lastIndex.set(globalData, this, lastIndex);
+            RegExpObject* object = new (NotNull, allocateCell<RegExpObject>(globalData.heap)) RegExpObject(globalObject, structure, regExp);
+            object->finishCreation(globalObject);
+            return object;
+        }
+
+        void setRegExp(JSGlobalData& globalData, RegExp* r) { m_regExp.set(globalData, this, r); }
+        RegExp* regExp() const { return m_regExp.get(); }
+
+        void setLastIndex(ExecState* exec, size_t lastIndex)
+        {
+            m_lastIndex.setWithoutWriteBarrier(jsNumber(lastIndex));
+            if (LIKELY(m_lastIndexIsWritable))
+                m_lastIndex.setWithoutWriteBarrier(jsNumber(lastIndex));
+            else
+                throwTypeError(exec, StrictModeReadonlyPropertyWriteError);
+        }
+        void setLastIndex(ExecState* exec, JSValue lastIndex, bool shouldThrow)
+        {
+            if (LIKELY(m_lastIndexIsWritable))
+                m_lastIndex.set(exec->globalData(), this, lastIndex);
+            else if (shouldThrow)
+                throwTypeError(exec, StrictModeReadonlyPropertyWriteError);
         }
         JSValue getLastIndex() const
         {
-            return d->lastIndex.get();
+            return m_lastIndex.get();
         }
 
-        JSValue test(ExecState*);
-        JSValue exec(ExecState*);
+        bool test(ExecState* exec, JSString* string) { return match(exec, string); }
+        JSValue exec(ExecState*, JSString*);
 
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier& propertyName, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
-        virtual void put(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier& propertyName, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
+        static void put(JSCell*, ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
 
         static JS_EXPORTDATA const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     protected:
-        static const unsigned StructureFlags = OverridesVisitChildren | OverridesGetOwnPropertySlot | JSObjectWithGlobalObject::StructureFlags;
+        JS_EXPORT_PRIVATE RegExpObject(JSGlobalObject*, Structure*, RegExp*);
+        JS_EXPORT_PRIVATE void finishCreation(JSGlobalObject*);
+
+        static const unsigned StructureFlags = OverridesVisitChildren | OverridesGetOwnPropertySlot | Base::StructureFlags;
+
+        static void visitChildren(JSCell*, SlotVisitor&);
+
+        JS_EXPORT_PRIVATE static bool deleteProperty(JSCell*, ExecState*, const Identifier& propertyName);
+        JS_EXPORT_PRIVATE static void getOwnPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
+        JS_EXPORT_PRIVATE static void getPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
+        JS_EXPORT_PRIVATE static bool defineOwnProperty(JSObject*, ExecState*, const Identifier& propertyName, PropertyDescriptor&, bool shouldThrow);
 
     private:
-        virtual void visitChildren(SlotVisitor&);
+        MatchResult match(ExecState*, JSString*);
 
-        bool match(ExecState*);
-
-        struct RegExpObjectData {
-            WTF_MAKE_FAST_ALLOCATED;
-        public:
-            RegExpObjectData(JSGlobalData& globalData, RegExpObject* owner, RegExp* regExp)
-                : regExp(globalData, owner, regExp)
-            {
-                lastIndex.setWithoutWriteBarrier(jsNumber(0));
-            }
-
-            WriteBarrier<RegExp> regExp;
-            WriteBarrier<Unknown> lastIndex;
-        };
-#if COMPILER(MSVC)
-        friend void WTF::deleteOwnedPtr<RegExpObjectData>(RegExpObjectData*);
-#endif
-        OwnPtr<RegExpObjectData> d;
+        WriteBarrier<RegExp> m_regExp;
+        WriteBarrier<Unknown> m_lastIndex;
+        bool m_lastIndexIsWritable;
     };
 
     RegExpObject* asRegExpObject(JSValue);

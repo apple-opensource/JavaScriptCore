@@ -26,29 +26,38 @@
 #ifndef JSONObject_h
 #define JSONObject_h
 
-#include "JSObjectWithGlobalObject.h"
+#include "JSObject.h"
 
 namespace JSC {
 
     class Stringifier;
 
-    class JSONObject : public JSObjectWithGlobalObject {
+    class JSONObject : public JSNonFinalObject {
     public:
-        JSONObject(JSGlobalObject*, Structure*);
+        typedef JSNonFinalObject Base;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static JSONObject* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            JSONObject* object = new (NotNull, allocateCell<JSONObject>(*exec->heap())) JSONObject(globalObject, structure);
+            object->finishCreation(globalObject);
+            return object;
+        }
+        
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
+        {
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
         
         static const ClassInfo s_info;
 
     protected:
+        void finishCreation(JSGlobalObject*);
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | JSObject::StructureFlags;
 
     private:
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        JSONObject(JSGlobalObject*, Structure*);
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
 
     };
 

@@ -27,12 +27,11 @@
 #include "DFGGraph.h"
 
 #include "CodeBlock.h"
+#include <wtf/BoundsCheckedPointer.h>
 
 #if ENABLE(DFG_JIT)
 
 namespace JSC { namespace DFG {
-
-#ifndef NDEBUG
 
 // Creates an array of stringized names.
 static const char* dfgOpNames[] = {
@@ -41,17 +40,98 @@ static const char* dfgOpNames[] = {
 #undef STRINGIZE_DFG_OP_ENUM
 };
 
-void Graph::dump(NodeIndex nodeIndex, CodeBlock* codeBlock)
+const char *Graph::opName(NodeType op)
+{
+    return dfgOpNames[op];
+}
+
+const char* Graph::nameOfVariableAccessData(VariableAccessData* variableAccessData)
+{
+    // Variables are already numbered. For readability of IR dumps, this returns
+    // an alphabetic name for the variable access data, so that you don't have to
+    // reason about two numbers (variable number and live range number), but instead
+    // a number and a letter.
+    
+    unsigned index = std::numeric_limits<unsigned>::max();
+    for (unsigned i = 0; i < m_variableAccessData.size(); ++i) {
+        if (&m_variableAccessData[i] == variableAccessData) {
+            index = i;
+            break;
+        }
+    }
+    
+    ASSERT(index != std::numeric_limits<unsigned>::max());
+    
+    if (!index)
+        return "A";
+
+    static char buf[10];
+    BoundsCheckedPointer<char> ptr(buf, sizeof(buf));
+    
+    while (index) {
+        *ptr++ = 'A' + (index % 26);
+        index /= 26;
+    }
+    
+    *ptr++ = 0;
+    
+    return buf;
+}
+
+static void printWhiteSpace(unsigned amount)
+{
+    while (amount-- > 0)
+        dataLog(" ");
+}
+
+void Graph::dumpCodeOrigin(NodeIndex prevNodeIndex, NodeIndex nodeIndex)
+{
+    if (prevNodeIndex == NoNode)
+        return;
+    
+    Node& currentNode = at(nodeIndex);
+    Node& previousNode = at(prevNodeIndex);
+    if (previousNode.codeOrigin.inlineCallFrame == currentNode.codeOrigin.inlineCallFrame)
+        return;
+    
+    Vector<CodeOrigin> previousInlineStack = previousNode.codeOrigin.inlineStack();
+    Vector<CodeOrigin> currentInlineStack = currentNode.codeOrigin.inlineStack();
+    unsigned commonSize = std::min(previousInlineStack.size(), currentInlineStack.size());
+    unsigned indexOfDivergence = commonSize;
+    for (unsigned i = 0; i < commonSize; ++i) {
+        if (previousInlineStack[i].inlineCallFrame != currentInlineStack[i].inlineCallFrame) {
+            indexOfDivergence = i;
+            break;
+        }
+    }
+    
+    // Print the pops.
+    for (unsigned i = previousInlineStack.size(); i-- > indexOfDivergence;) {
+        printWhiteSpace(i * 2);
+        dataLog("<-- %p\n", previousInlineStack[i].inlineCallFrame->executable.get());
+    }
+    
+    // Print the pushes.
+    for (unsigned i = indexOfDivergence; i < currentInlineStack.size(); ++i) {
+        printWhiteSpace(i * 2);
+        dataLog("--> %p\n", currentInlineStack[i].inlineCallFrame->executable.get());
+    }
+}
+
+void Graph::dump(NodeIndex nodeIndex)
 {
     Node& node = at(nodeIndex);
-    NodeType op = node.op;
+    NodeType op = node.op();
 
     unsigned refCount = node.refCount();
-    if (!refCount)
-        return;
+    bool skipped = !refCount;
     bool mustGenerate = node.mustGenerate();
-    if (mustGenerate)
+    if (mustGenerate) {
+        ASSERT(refCount);
         --refCount;
+    }
+    
+    printWhiteSpace((node.codeOrigin.inlineDepth() - 1) * 2);
 
     // Example/explanation of dataflow dump output
     //
@@ -70,97 +150,216 @@ void Graph::dump(NodeIndex nodeIndex, CodeBlock* codeBlock)
     //         $#   - the index in the CodeBlock of a constant { for numeric constants the value is displayed | for integers, in both decimal and hex }.
     //         id#  - the index in the CodeBlock of an identifier { if codeBlock is passed to dump(), the string representation is displayed }.
     //         var# - the index of a var on the global object, used by GetGlobalVar/PutGlobalVar operations.
-    printf("% 4d:\t<%c%u:", (int)nodeIndex, mustGenerate ? '!' : ' ', refCount);
-    if (node.hasResult())
-        printf("%u", node.virtualRegister());
+    dataLog("% 4d:%s<%c%u:", (int)nodeIndex, skipped ? "  skipped  " : "           ", mustGenerate ? '!' : ' ', refCount);
+    if (node.hasResult() && !skipped && node.hasVirtualRegister())
+        dataLog("%u", node.virtualRegister());
     else
-        printf("-");
-    printf(">\t%s(", dfgOpNames[op & NodeIdMask]);
-    if (node.child1 != NoNode)
-        printf("@%u", node.child1);
-    if (node.child2 != NoNode)
-        printf(", @%u", node.child2);
-    if (node.child3 != NoNode)
-        printf(", @%u", node.child3);
-    bool hasPrinted = node.child1 != NoNode;
+        dataLog("-");
+    dataLog(">\t%s(", opName(op));
+    bool hasPrinted = false;
+    if (node.flags() & NodeHasVarArgs) {
+        for (unsigned childIdx = node.firstChild(); childIdx < node.firstChild() + node.numChildren(); childIdx++) {
+            if (hasPrinted)
+                dataLog(", ");
+            else
+                hasPrinted = true;
+            dataLog("%s@%u%s",
+                    useKindToString(m_varArgChildren[childIdx].useKind()),
+                    m_varArgChildren[childIdx].index(),
+                    predictionToAbbreviatedString(at(childIdx).prediction()));
+        }
+    } else {
+        if (!!node.child1()) {
+            dataLog("%s@%u%s",
+                    useKindToString(node.child1().useKind()),
+                    node.child1().index(),
+                    predictionToAbbreviatedString(at(node.child1()).prediction()));
+        }
+        if (!!node.child2()) {
+            dataLog(", %s@%u%s",
+                    useKindToString(node.child2().useKind()),
+                    node.child2().index(),
+                    predictionToAbbreviatedString(at(node.child2()).prediction()));
+        }
+        if (!!node.child3()) {
+            dataLog(", %s@%u%s",
+                    useKindToString(node.child3().useKind()),
+                    node.child3().index(),
+                    predictionToAbbreviatedString(at(node.child3()).prediction()));
+        }
+        hasPrinted = !!node.child1();
+    }
 
+    if (node.flags()) {
+        dataLog("%s%s", hasPrinted ? ", " : "", nodeFlagsAsString(node.flags()));
+        hasPrinted = true;
+    }
     if (node.hasVarNumber()) {
-        printf("%svar%u", hasPrinted ? ", " : "", node.varNumber());
+        dataLog("%svar%u", hasPrinted ? ", " : "", node.varNumber());
         hasPrinted = true;
     }
     if (node.hasIdentifier()) {
-        if (codeBlock)
-            printf("%sid%u{%s}", hasPrinted ? ", " : "", node.identifierNumber(), codeBlock->identifier(node.identifierNumber()).ustring().utf8().data());
+        dataLog("%sid%u{%s}", hasPrinted ? ", " : "", node.identifierNumber(), m_codeBlock->identifier(node.identifierNumber()).ustring().utf8().data());
+        hasPrinted = true;
+    }
+    if (node.hasStructureSet()) {
+        for (size_t i = 0; i < node.structureSet().size(); ++i) {
+            dataLog("%sstruct(%p)", hasPrinted ? ", " : "", node.structureSet()[i]);
+            hasPrinted = true;
+        }
+    }
+    if (node.hasStructureTransitionData()) {
+        dataLog("%sstruct(%p -> %p)", hasPrinted ? ", " : "", node.structureTransitionData().previousStructure, node.structureTransitionData().newStructure);
+        hasPrinted = true;
+    }
+    if (node.hasStorageAccessData()) {
+        StorageAccessData& storageAccessData = m_storageAccessData[node.storageAccessDataIndex()];
+        dataLog("%sid%u{%s}", hasPrinted ? ", " : "", storageAccessData.identifierNumber, m_codeBlock->identifier(storageAccessData.identifierNumber).ustring().utf8().data());
+        
+        dataLog(", %lu", static_cast<unsigned long>(storageAccessData.offset));
+        hasPrinted = true;
+    }
+    ASSERT(node.hasVariableAccessData() == node.hasLocal());
+    if (node.hasVariableAccessData()) {
+        VariableAccessData* variableAccessData = node.variableAccessData();
+        int operand = variableAccessData->operand();
+        if (operandIsArgument(operand))
+            dataLog("%sarg%u(%s)", hasPrinted ? ", " : "", operandToArgument(operand), nameOfVariableAccessData(variableAccessData));
         else
-            printf("%sid%u", hasPrinted ? ", " : "", node.identifierNumber());
+            dataLog("%sr%u(%s)", hasPrinted ? ", " : "", operand, nameOfVariableAccessData(variableAccessData));
         hasPrinted = true;
     }
-    if (node.hasLocal()) {
-        int local = node.local();
-        if (operandIsArgument(local))
-            printf("%sarg%u", hasPrinted ? ", " : "", local - codeBlock->thisRegister());
-        else
-            printf("%sr%u", hasPrinted ? ", " : "", local);
-        hasPrinted = true;
-    }
-    if (op == Int32Constant) {
-        printf("%s$%u{%d|0x%08x}", hasPrinted ? ", " : "", node.constantNumber(), node.int32Constant(), node.int32Constant());
-        hasPrinted = true;
-    }
-    if (op == DoubleConstant) {
-        printf("%s$%u{%f})", hasPrinted ? ", " : "", node.constantNumber(), node.numericConstant());
+    if (node.hasConstantBuffer()) {
+        if (hasPrinted)
+            dataLog(", ");
+        dataLog("%u:[", node.startConstant());
+        for (unsigned i = 0; i < node.numConstants(); ++i) {
+            if (i)
+                dataLog(", ");
+            dataLog("%s", m_codeBlock->constantBuffer(node.startConstant())[i].description());
+        }
+        dataLog("]");
         hasPrinted = true;
     }
     if (op == JSConstant) {
-        printf("%s$%u", hasPrinted ? ", " : "", node.constantNumber());
+        dataLog("%s$%u", hasPrinted ? ", " : "", node.constantNumber());
+        JSValue value = valueOfJSConstant(nodeIndex);
+        dataLog(" = %s", value.description());
+        hasPrinted = true;
+    }
+    if (op == WeakJSConstant) {
+        dataLog("%s%p", hasPrinted ? ", " : "", node.weakConstant());
         hasPrinted = true;
     }
     if  (node.isBranch() || node.isJump()) {
-        printf("%sT:#%u", hasPrinted ? ", " : "", blockIndexForBytecodeOffset(node.takenBytecodeOffset()));
+        dataLog("%sT:#%u", hasPrinted ? ", " : "", node.takenBlockIndex());
         hasPrinted = true;
     }
     if  (node.isBranch()) {
-        printf("%sF:#%u", hasPrinted ? ", " : "", blockIndexForBytecodeOffset(node.notTakenBytecodeOffset()));
+        dataLog("%sF:#%u", hasPrinted ? ", " : "", node.notTakenBlockIndex());
         hasPrinted = true;
     }
+    (void)hasPrinted;
+    
+    dataLog(")");
 
-    printf(")\n");
-}
-
-void Graph::dump(CodeBlock* codeBlock)
-{
-    for (size_t b = 0; b < m_blocks.size(); ++b) {
-        printf("Block #%u:\n", (int)b);
-        for (size_t i = m_blocks[b]->begin; i < m_blocks[b]->end; ++i)
-            dump(i, codeBlock);
+    if (!skipped) {
+        if (node.hasVariableAccessData())
+            dataLog("  predicting %s, double ratio %lf%s", predictionToString(node.variableAccessData()->prediction()), node.variableAccessData()->doubleVoteRatio(), node.variableAccessData()->shouldUseDoubleFormat() ? ", forcing double" : "");
+        else if (node.hasHeapPrediction())
+            dataLog("  predicting %s", predictionToString(node.getHeapPrediction()));
     }
-    printf("Phi Nodes:\n");
-    for (size_t i = m_blocks.last()->end; i < size(); ++i)
-        dump(i, codeBlock);
+    
+    dataLog("\n");
 }
 
-#endif
+void Graph::dump()
+{
+    NodeIndex lastNodeIndex = NoNode;
+    for (size_t b = 0; b < m_blocks.size(); ++b) {
+        BasicBlock* block = m_blocks[b].get();
+        dataLog("Block #%u (bc#%u): %s%s\n", (int)b, block->bytecodeBegin, block->isReachable ? "" : " (skipped)", block->isOSRTarget ? " (OSR target)" : "");
+        dataLog("  Phi Nodes:\n");
+        for (size_t i = 0; i < block->phis.size(); ++i) {
+            // Dumping the dead Phi nodes is just annoying!
+            if (at(block->phis[i]).refCount())
+                dump(block->phis[i]);
+        }
+        dataLog("  vars before: ");
+        if (block->cfaHasVisited)
+            dumpOperands(block->valuesAtHead, WTF::dataFile());
+        else
+            dataLog("<empty>");
+        dataLog("\n");
+        dataLog("  var links: ");
+        dumpOperands(block->variablesAtHead, WTF::dataFile());
+        dataLog("\n");
+        for (size_t i = 0; i < block->size(); ++i) {
+            dumpCodeOrigin(lastNodeIndex, block->at(i));
+            dump(block->at(i));
+            lastNodeIndex = block->at(i);
+        }
+        dataLog("  vars after: ");
+        if (block->cfaHasVisited)
+            dumpOperands(block->valuesAtTail, WTF::dataFile());
+        else
+            dataLog("<empty>");
+        dataLog("\n");
+    }
+}
 
-// FIXME: Convert this method to be iterative, not recursive.
+// FIXME: Convert this to be iterative, not recursive.
+#define DO_TO_CHILDREN(node, thingToDo) do {                            \
+        Node& _node = (node);                                           \
+        if (_node.flags() & NodeHasVarArgs) {                           \
+            for (unsigned _childIdx = _node.firstChild();               \
+                 _childIdx < _node.firstChild() + _node.numChildren();  \
+                 _childIdx++)                                           \
+                thingToDo(m_varArgChildren[_childIdx]);                 \
+        } else {                                                        \
+            if (!_node.child1()) {                                      \
+                ASSERT(!_node.child2()                                  \
+                       && !_node.child3());                             \
+                break;                                                  \
+            }                                                           \
+            thingToDo(_node.child1());                                  \
+                                                                        \
+            if (!_node.child2()) {                                      \
+                ASSERT(!_node.child3());                                \
+                break;                                                  \
+            }                                                           \
+            thingToDo(_node.child2());                                  \
+                                                                        \
+            if (!_node.child3())                                        \
+                break;                                                  \
+            thingToDo(_node.child3());                                  \
+        }                                                               \
+    } while (false)
+
 void Graph::refChildren(NodeIndex op)
 {
-    Node& node = at(op);
+    DO_TO_CHILDREN(at(op), ref);
+}
 
-    if (node.child1 == NoNode) {
-        ASSERT(node.child2 == NoNode && node.child3 == NoNode);
-        return;
+void Graph::derefChildren(NodeIndex op)
+{
+    DO_TO_CHILDREN(at(op), deref);
+}
+
+void Graph::predictArgumentTypes()
+{
+    ASSERT(m_codeBlock->numParameters() >= 1);
+    for (size_t arg = 0; arg < static_cast<size_t>(m_codeBlock->numParameters()); ++arg) {
+        ValueProfile* profile = m_profiledBlock->valueProfileForArgument(arg);
+        if (!profile)
+            continue;
+        
+        at(m_arguments[arg]).variableAccessData()->predict(profile->computeUpdatedPrediction());
+        
+#if DFG_ENABLE(DEBUG_VERBOSE)
+        dataLog("Argument [%zu] prediction: %s\n", arg, predictionToString(at(m_arguments[arg]).variableAccessData()->prediction()));
+#endif
     }
-    ref(node.child1);
-
-    if (node.child2 == NoNode) {
-        ASSERT(node.child3 == NoNode);
-        return;
-    }
-    ref(node.child2);
-
-    if (node.child3 == NoNode)
-        return;
-    ref(node.child3);
 }
 
 } } // namespace JSC::DFG

@@ -31,9 +31,12 @@
 
 #include "AssemblerBuffer.h"
 #include "AssemblerBufferWithConstantPool.h"
+#include "JITCompilationEffort.h"
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <wtf/Assertions.h>
+#include <wtf/DataLog.h>
 #include <wtf/Vector.h>
 
 #ifndef NDEBUG
@@ -151,6 +154,7 @@ enum {
     TST_OPCODE = 0x2008,
     TSTIMM_OPCODE = 0xc800,
     TSTB_OPCODE = 0xcc00,
+    EXTUB_OPCODE = 0x600c,
     EXTUW_OPCODE = 0x600d,
     XOR_OPCODE = 0x200a,
     XORIMM_OPCODE = 0xca00,
@@ -320,6 +324,10 @@ public:
         padForAlign8 = 0x00,
         padForAlign16 = 0x0009,
         padForAlign32 = 0x00090009,
+    };
+
+    enum JumpType { JumpFar,
+                    JumpNear
     };
 
     SH4Assembler()
@@ -757,6 +765,12 @@ public:
         oneShortOp(opc);
     }
 
+    void extub(RegisterID src, RegisterID dst)
+    {
+        uint16_t opc = getOpcodeGroup1(EXTUB_OPCODE, dst, src);
+        oneShortOp(opc);
+    }
+    
     void extuw(RegisterID src, RegisterID dst)
     {
         uint16_t opc = getOpcodeGroup1(EXTUW_OPCODE, dst, src);
@@ -1063,6 +1077,11 @@ public:
         oneShortOp(getOpcodeGroup4(MOVL_READ_OFFRM_OPCODE, dst, base, offset));
     }
 
+    void movlMemRegCompact(int offset, RegisterID base, RegisterID dst)
+    {
+        oneShortOp(getOpcodeGroup4(MOVL_READ_OFFRM_OPCODE, dst, base, offset));
+    }
+
     void movbMemReg(int offset, RegisterID base, RegisterID dst)
     {
         ASSERT(dst == SH4Registers::r0);
@@ -1173,6 +1192,13 @@ public:
         return label;
     }
 
+    void extraInstrForBranch(RegisterID dst)
+    {
+        loadConstantUnReusable(0x0, dst);
+        nop();
+        nop();
+    }
+
     AssemblerLabel jmp(RegisterID dst)
     {
         jmpReg(dst);
@@ -1197,6 +1223,13 @@ public:
     {
         AssemblerLabel label = m_buffer.label();
         branch(BT_OPCODE, 0);
+        return label;
+    }
+
+    AssemblerLabel bra()
+    {
+        AssemblerLabel label = m_buffer.label();
+        branch(BRA_OPCODE, 0);
         return label;
     }
 
@@ -1232,7 +1265,7 @@ public:
         uint32_t address = (offset << 2) + ((reinterpret_cast<uint32_t>(instructionPtr) + 4) &(~0x3));
         *reinterpret_cast<uint32_t*>(address) = newAddress;
     }
-    
+
     static uint32_t readPCrelativeAddress(int offset, uint16_t* instructionPtr)
     {
         uint32_t address = (offset << 2) + ((reinterpret_cast<uint32_t>(instructionPtr) + 4) &(~0x3));
@@ -1354,7 +1387,7 @@ public:
 
     static void* readPointer(void* code)
     {
-        return static_cast<void*>(readInt32(code));
+        return reinterpret_cast<void*>(readInt32(code));
     }
 
     static void repatchInt32(void* where, int32_t value)
@@ -1365,7 +1398,10 @@ public:
 
     static void repatchCompact(void* where, int32_t value)
     {
-        repatchInt32(where, value);
+        ASSERT(value >= 0);
+        ASSERT(value <= 60);
+        *reinterpret_cast<uint16_t*>(where) = ((*reinterpret_cast<uint16_t*>(where) & 0xfff0) | (value >> 2));
+        cacheFlush(reinterpret_cast<uint16_t*>(where), sizeof(uint16_t));
     }
 
     static void relinkCall(void* from, void* to)
@@ -1406,7 +1442,7 @@ public:
 
     // Linking & patching
 
-    void linkJump(AssemblerLabel from, AssemblerLabel to)
+    void linkJump(AssemblerLabel from, AssemblerLabel to, JumpType type = JumpFar)
     {
         ASSERT(to.isSet());
         ASSERT(from.isSet());
@@ -1414,6 +1450,14 @@ public:
         uint16_t* instructionPtr = getInstructionPtr(data(), from.m_offset);
         uint16_t instruction = *instructionPtr;
         int offsetBits;
+
+        if (type == JumpNear) {
+            ASSERT((instruction ==  BT_OPCODE) || (instruction == BF_OPCODE) || (instruction == BRA_OPCODE));
+            int offset = (codeSize() - from.m_offset) - 4;
+            *instructionPtr++ = instruction | (offset >> 1);
+            printInstr(*instructionPtr, from.m_offset + 2);
+            return;
+        }
 
         if (((instruction & 0xff00) == BT_OPCODE) || ((instruction & 0xff00) == BF_OPCODE)) {
             /* BT label => BF 2
@@ -1490,9 +1534,27 @@ public:
         return readPCrelativeAddress((*(reinterpret_cast<uint16_t*>(code)) & 0xff), reinterpret_cast<uint16_t*>(code));
     }
 
-    void* executableCopy(JSGlobalData& globalData, ExecutablePool* allocator)
+    static void* readCallTarget(void* from)
     {
-        return m_buffer.executableCopy(globalData, allocator);
+        uint16_t* instructionPtr = static_cast<uint16_t*>(from);
+        instructionPtr -= 3;
+        return reinterpret_cast<void*>(readPCrelativeAddress((*instructionPtr & 0xff), instructionPtr));
+    }
+
+    PassRefPtr<ExecutableMemoryHandle> executableCopy(JSGlobalData& globalData, void* ownerUID, JITCompilationEffort effort)
+    {
+        return m_buffer.executableCopy(globalData, ownerUID, effort);
+    }
+
+    static void cacheFlush(void* code, size_t size)
+    {
+#if !OS(LINUX)
+#error "The cacheFlush support is missing on this platform."
+#elif defined CACHEFLUSH_D_L2
+        syscall(__NR_cacheflush, reinterpret_cast<unsigned>(code), size, CACHEFLUSH_D_WB | CACHEFLUSH_I | CACHEFLUSH_D_L2);
+#else
+        syscall(__NR_cacheflush, reinterpret_cast<unsigned>(code), size, CACHEFLUSH_D_WB | CACHEFLUSH_I);
+#endif
     }
 
     void prefix(uint16_t pre)
@@ -1801,6 +1863,9 @@ public:
         case MOVW_READ_R0RM_OPCODE:
             format = "    MOV.W @(R0, R%d), R%d\n";
             break;
+        case EXTUB_OPCODE:
+            format = "    EXTU.B R%d, R%d\n";
+            break;
         case EXTUW_OPCODE:
             format = "    EXTU.W R%d, R%d\n";
             break;
@@ -1999,7 +2064,7 @@ public:
     static void vprintfStdoutInstr(const char* format, va_list args)
     {
         if (getenv("JavaScriptCoreDumpJIT"))
-            vfprintf(stdout, format, args);
+            WTF::dataLogV(format, args);
     }
 
     static void printBlockInstr(uint16_t* first, unsigned int offset, int nbInstr)

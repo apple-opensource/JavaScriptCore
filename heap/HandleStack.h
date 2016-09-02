@@ -26,8 +26,8 @@
 #ifndef HandleStack_h
 #define HandleStack_h
 
-#include "Assertions.h"
-#include "BlockStack.h"
+#include <wtf/Assertions.h>
+#include <wtf/BlockStack.h>
 #include "Handle.h"
 
 #include <wtf/UnusedParam.h>
@@ -52,7 +52,7 @@ public:
 
     HandleSlot push();
 
-    void mark(HeapRootVisitor&);
+    void visit(HeapRootVisitor&);
 
 private:
     void grow();

@@ -130,9 +130,9 @@ bool JSValueIsObjectOfClass(JSContextRef ctx, JSValueRef value, JSClassRef jsCla
     
     if (JSObject* o = jsValue.getObject()) {
         if (o->inherits(&JSCallbackObject<JSGlobalObject>::s_info))
-            return static_cast<JSCallbackObject<JSGlobalObject>*>(o)->inherits(jsClass);
-        if (o->inherits(&JSCallbackObject<JSObjectWithGlobalObject>::s_info))
-            return static_cast<JSCallbackObject<JSObjectWithGlobalObject>*>(o)->inherits(jsClass);
+            return jsCast<JSCallbackObject<JSGlobalObject>*>(o)->inherits(jsClass);
+        if (o->inherits(&JSCallbackObject<JSNonFinalObject>::s_info))
+            return jsCast<JSCallbackObject<JSNonFinalObject>*>(o)->inherits(jsClass);
     }
     return false;
 }
@@ -175,7 +175,7 @@ bool JSValueIsInstanceOfConstructor(JSContextRef ctx, JSValueRef value, JSObject
     JSObject* jsConstructor = toJS(constructor);
     if (!jsConstructor->structure()->typeInfo().implementsHasInstance())
         return false;
-    bool result = jsConstructor->hasInstance(exec, jsValue, jsConstructor->get(exec, exec->propertyNames().prototype)); // false if an exception is thrown
+    bool result = jsConstructor->methodTable()->hasInstance(jsConstructor, exec, jsValue, jsConstructor->get(exec, exec->propertyNames().prototype)); // false if an exception is thrown
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec, exec->exception());
@@ -217,7 +217,7 @@ JSValueRef JSValueMakeNumber(JSContextRef ctx, double value)
     // generated internally to JavaScriptCore naturally have that representation,
     // but an external NaN might not.
     if (isnan(value))
-        value = NaN;
+        value = std::numeric_limits<double>::quiet_NaN();
 
     return toRef(exec, jsNumber(value));
 }
@@ -235,7 +235,11 @@ JSValueRef JSValueMakeFromJSONString(JSContextRef ctx, JSStringRef string)
     ExecState* exec = toJS(ctx);
     APIEntryShim entryShim(exec);
     UString str = string->ustring();
-    LiteralParser parser(exec, str.characters(), str.length(), LiteralParser::StrictJSON);
+    if (str.is8Bit()) {
+        LiteralParser<LChar> parser(exec, str.characters8(), str.length(), StrictJSON);
+        return toRef(exec, parser.tryLiteralParse());
+    }
+    LiteralParser<UChar> parser(exec, str.characters16(), str.length(), StrictJSON);
     return toRef(exec, parser.tryLiteralParse());
 }
 
@@ -277,7 +281,7 @@ double JSValueToNumber(JSContextRef ctx, JSValueRef value, JSValueRef* exception
         if (exception)
             *exception = toRef(exec, exec->exception());
         exec->clearException();
-        number = NaN;
+        number = std::numeric_limits<double>::quiet_NaN();
     }
     return number;
 }
@@ -289,7 +293,7 @@ JSStringRef JSValueToStringCopy(JSContextRef ctx, JSValueRef value, JSValueRef* 
 
     JSValue jsValue = toJS(exec, value);
     
-    RefPtr<OpaqueJSString> stringRef(OpaqueJSString::create(jsValue.toString(exec)));
+    RefPtr<OpaqueJSString> stringRef(OpaqueJSString::create(jsValue.toString(exec)->value(exec)));
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec, exec->exception());

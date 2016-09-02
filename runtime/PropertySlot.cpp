@@ -33,8 +33,8 @@ JSValue PropertySlot::functionGetter(ExecState* exec) const
         return exec->exception();
 
     CallData callData;
-    CallType callType = m_data.getterFunc->getCallData(callData);
-    return call(exec, m_data.getterFunc, callType, callData, thisValue(), exec->emptyList());
+    CallType callType = m_data.getterFunc->methodTable()->getCallData(m_data.getterFunc, callData);
+    return call(exec, m_data.getterFunc, callType, callData, m_thisValue.isObject() ? m_thisValue.toThisObject(exec) : m_thisValue, exec->emptyList());
 }
 
 } // namespace JSC

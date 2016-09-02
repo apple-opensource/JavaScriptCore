@@ -26,11 +26,29 @@
 #include "config.h"
 #include "ConservativeRoots.h"
 
+#include "CopiedSpace.h"
+#include "CopiedSpaceInlineMethods.h"
+#include "CodeBlock.h"
+#include "DFGCodeBlocks.h"
+#include "JSCell.h"
+#include "JSObject.h"
+#include "Structure.h"
+
 namespace JSC {
 
-inline bool isPointerAligned(void* p)
+ConservativeRoots::ConservativeRoots(const MarkedBlockSet* blocks, CopiedSpace* copiedSpace)
+    : m_roots(m_inlineRoots)
+    , m_size(0)
+    , m_capacity(inlineCapacity)
+    , m_blocks(blocks)
+    , m_copiedSpace(copiedSpace)
 {
-    return !((intptr_t)(p) & (sizeof(char*) - 1));
+}
+
+ConservativeRoots::~ConservativeRoots()
+{
+    if (m_roots != m_inlineRoots)
+        OSAllocator::decommitAndRelease(m_roots, m_capacity * sizeof(JSCell*));
 }
 
 void ConservativeRoots::grow()
@@ -44,15 +62,63 @@ void ConservativeRoots::grow()
     m_roots = newRoots;
 }
 
-void ConservativeRoots::add(void* begin, void* end)
+class DummyMarkHook {
+public:
+    void mark(void*) { }
+};
+
+template<typename MarkHook>
+inline void ConservativeRoots::genericAddPointer(void* p, TinyBloomFilter filter, MarkHook& markHook)
+{
+    markHook.mark(p);
+    
+    CopiedBlock* block;
+    if (m_copiedSpace->contains(p, block))
+        m_copiedSpace->pin(block);
+    
+    MarkedBlock* candidate = MarkedBlock::blockFor(p);
+    if (filter.ruleOut(reinterpret_cast<Bits>(candidate))) {
+        ASSERT(!candidate || !m_blocks->set().contains(candidate));
+        return;
+    }
+
+    if (!MarkedBlock::isAtomAligned(p))
+        return;
+
+    if (!m_blocks->set().contains(candidate))
+        return;
+
+    if (!candidate->isLiveCell(p))
+        return;
+
+    if (m_size == m_capacity)
+        grow();
+
+    m_roots[m_size++] = static_cast<JSCell*>(p);
+}
+
+template<typename MarkHook>
+void ConservativeRoots::genericAddSpan(void* begin, void* end, MarkHook& markHook)
 {
     ASSERT(begin <= end);
     ASSERT((static_cast<char*>(end) - static_cast<char*>(begin)) < 0x1000000);
     ASSERT(isPointerAligned(begin));
     ASSERT(isPointerAligned(end));
 
+    TinyBloomFilter filter = m_blocks->filter(); // Make a local copy of filter to show the compiler it won't alias, and can be register-allocated.
     for (char** it = static_cast<char**>(begin); it != static_cast<char**>(end); ++it)
-        add(*it);
+        genericAddPointer(*it, filter, markHook);
+}
+
+void ConservativeRoots::add(void* begin, void* end)
+{
+    DummyMarkHook hook;
+    genericAddSpan(begin, end, hook);
+}
+
+void ConservativeRoots::add(void* begin, void* end, DFGCodeBlocks& dfgCodeBlocks)
+{
+    genericAddSpan(begin, end, dfgCodeBlocks);
 }
 
 } // namespace JSC

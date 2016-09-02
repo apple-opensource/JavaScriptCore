@@ -16,17 +16,18 @@ nodist_EXTRA_libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_M
 nodist_libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_SOURCES = \
 	$(javascriptcore_built_sources)
 
-libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_ladir = $(prefix)/include/webkit-@WEBKITGTK_API_VERSION@/JavaScriptCore
+libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_ladir = $(libwebkitgtkincludedir)/JavaScriptCore
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_HEADERS = $(javascriptcore_h_api)
 
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_SOURCES = \
 	$(javascriptcore_sources)
 
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_LIBADD = \
+	-lpthread \
+	libWTF.la \
 	$(UNICODE_LIBS) \
 	$(GLIB_LIBS) \
-	$(WINMM_LIBS) \
-	-lpthread
+	$(WINMM_LIBS)
 
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_CXXFLAGS = \
 	$(global_cxxflags) \
@@ -35,51 +36,57 @@ libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_CFLAGS = \
 	-fstrict-aliasing \
 	-O3 \
-	$(global_cflags) \
-	$(GLIB_CFLAGS) \
-	$(UNICODE_CFLAGS)
+	$(javascriptcore_cflags)
 
 libjavascriptcoregtk_@WEBKITGTK_API_MAJOR_VERSION@_@WEBKITGTK_API_MINOR_VERSION@_la_CPPFLAGS = \
 	$(global_cppflags) \
 	$(javascriptcore_cppflags)
 
 javascriptcore_cppflags += \
+	$(JSC_CPPFLAGS) \
 	-I$(srcdir)/Source \
 	-I$(srcdir)/Source/JavaScriptCore \
 	-I$(srcdir)/Source/JavaScriptCore/API \
 	-I$(srcdir)/Source/JavaScriptCore/assembler \
 	-I$(srcdir)/Source/JavaScriptCore/bytecode \
 	-I$(srcdir)/Source/JavaScriptCore/bytecompiler \
+	-I$(srcdir)/Source/JavaScriptCore/dfg \
 	-I$(srcdir)/Source/JavaScriptCore/heap \
 	-I$(srcdir)/Source/JavaScriptCore/debugger \
 	-I$(srcdir)/Source/JavaScriptCore/ForwardingHeaders \
 	-I$(srcdir)/Source/JavaScriptCore/interpreter \
 	-I$(srcdir)/Source/JavaScriptCore/jit \
 	-I$(srcdir)/Source/JavaScriptCore/jit \
+	-I$(srcdir)/Source/JavaScriptCore/llint \
 	-I$(srcdir)/Source/JavaScriptCore/parser \
 	-I$(srcdir)/Source/JavaScriptCore/profiler \
 	-I$(srcdir)/Source/JavaScriptCore/runtime \
-	-I$(srcdir)/Source/JavaScriptCore/wtf \
-	-I$(srcdir)/Source/JavaScriptCore/wtf \
-	-I$(srcdir)/Source/JavaScriptCore/wtf/gobject \
-	-I$(srcdir)/Source/JavaScriptCore/wtf/gtk \
-	-I$(srcdir)/Source/JavaScriptCore/wtf/text \
-	-I$(srcdir)/Source/JavaScriptCore/wtf/unicode \
+	-I$(srcdir)/Source/JavaScriptCore/tools \
 	-I$(srcdir)/Source/JavaScriptCore/yarr \
-	-I$(top_builddir)/Source/JavaScriptCore \
-	-I$(top_builddir)/Source/JavaScriptCore/parser \
-	-I$(top_builddir)/Source/JavaScriptCore/runtime
+	-I$(top_builddir)/DerivedSources/JavaScriptCore
 
-Source/JavaScriptCore/Lexer.lut.h: $(srcdir)/Source/JavaScriptCore/create_hash_table $(srcdir)/Source/JavaScriptCore/parser/Keywords.table
+javascriptcore_cppflags += \
+	-I$(srcdir)/Source/WTF
+
+javascriptcore_cflags += \
+	$(global_cflags) \
+	$(GLIB_CFLAGS) \
+	$(UNICODE_CFLAGS)
+
+pkgconfig_DATA += Source/JavaScriptCore/javascriptcoregtk-@WEBKITGTK_API_VERSION@.pc
+
+$(shell mkdir -p DerivedSources/JavaScriptCore)
+
+DerivedSources/JavaScriptCore/Lexer.lut.h: $(srcdir)/Source/JavaScriptCore/create_hash_table $(srcdir)/Source/JavaScriptCore/parser/Keywords.table
 	$(AM_V_GEN)$(PERL) $^ > $@
 
-Source/JavaScriptCore/%.lut.h: $(srcdir)/Source/JavaScriptCore/create_hash_table $(srcdir)/Source/JavaScriptCore/%.cpp
+DerivedSources/JavaScriptCore/%.lut.h: $(srcdir)/Source/JavaScriptCore/create_hash_table $(srcdir)/Source/JavaScriptCore/runtime/%.cpp
 	$(AM_V_GEN)$(PERL) $^ -i > $@
 
-Source/JavaScriptCore/RegExpJitTables.h: $(srcdir)/Source/JavaScriptCore/create_regex_tables
+DerivedSources/JavaScriptCore/RegExpJitTables.h: $(srcdir)/Source/JavaScriptCore/create_regex_tables
 	$(AM_V_GEN)$(PYTHON) $^ > $@
 
-Source/JavaScriptCore/KeywordLookup.h: $(srcdir)/Source/JavaScriptCore/KeywordLookupGenerator.py $(srcdir)/Source/JavaScriptCore/parser/Keywords.table
+DerivedSources/JavaScriptCore/KeywordLookup.h: $(srcdir)/Source/JavaScriptCore/KeywordLookupGenerator.py $(srcdir)/Source/JavaScriptCore/parser/Keywords.table
 	$(AM_V_GEN)$(PYTHON) $^ > $@
 
 jsc: $(javascriptcore_built_nosources) Programs/jsc$(EXEEXT)
@@ -142,32 +149,15 @@ EXTRA_DIST += \
 	Source/JavaScriptCore/create_regex_tables \
 	Source/JavaScriptCore/icu/LICENSE \
 	Source/JavaScriptCore/icu/README \
+	Source/JavaScriptCore/KeywordLookupGenerator.py \
 	Source/JavaScriptCore/parser/Keywords.table \
 	Source/JavaScriptCore/THANKS
 
-# Clean rules for JavaScriptCore
-# FIXME: Should this list be generated from javascriptcore_built_nosources?
 CLEANFILES += \
-	Source/JavaScriptCore/Lexer.lut.h \
-	Source/JavaScriptCore/RegExpJitTables.h \
-        Source/JavaScriptCore/runtime/ArrayConstructor.lut.h \
-        Source/JavaScriptCore/runtime/ArrayPrototype.lut.h \
-        Source/JavaScriptCore/runtime/BooleanPrototype.lut.h \
-        Source/JavaScriptCore/runtime/DateConstructor.lut.h \
-        Source/JavaScriptCore/runtime/DatePrototype.lut.h \
-        Source/JavaScriptCore/runtime/ErrorPrototype.lut.h \
-        Source/JavaScriptCore/runtime/JSGlobalObject.lut.h \
-        Source/JavaScriptCore/runtime/JSONObject.lut.h \
-        Source/JavaScriptCore/runtime/MathObject.lut.h \
-        Source/JavaScriptCore/runtime/NumberConstructor.lut.h \
-        Source/JavaScriptCore/runtime/NumberPrototype.lut.h \
-        Source/JavaScriptCore/runtime/ObjectConstructor.lut.h \
-        Source/JavaScriptCore/runtime/ObjectPrototype.lut.h \
-        Source/JavaScriptCore/runtime/RegExpConstructor.lut.h \
-        Source/JavaScriptCore/runtime/RegExpObject.lut.h \
-        Source/JavaScriptCore/runtime/RegExpPrototype.lut.h \
-        Source/JavaScriptCore/runtime/StringConstructor.lut.h \
-        Source/JavaScriptCore/runtime/StringPrototype.lut.h \
+	$(javascriptcore_built_nosources) \
 	Programs/jsc \
 	Programs/jsc-@WEBKITGTK_API_MAJOR_VERSION@ \
 	Programs/minidom
+
+DISTCLEANFILES += \
+	$(top_builddir)/Source/JavaScriptCore/javascriptcoregtk-@WEBKITGTK_API_VERSION@.pc

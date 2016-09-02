@@ -89,7 +89,7 @@ struct JSCallbackObjectData : WeakHandleOwner {
         void setPrivateProperty(JSGlobalData& globalData, JSCell* owner, const Identifier& propertyName, JSValue value)
         {
             WriteBarrier<Unknown> empty;
-            m_propertyMap.add(propertyName.impl(), empty).first->second.set(globalData, owner, value);
+            m_propertyMap.add(propertyName.impl(), empty).iterator->second.set(globalData, owner, value);
         }
         
         void deletePrivateProperty(const Identifier& propertyName)
@@ -114,11 +114,31 @@ struct JSCallbackObjectData : WeakHandleOwner {
 };
 
     
-template <class Base>
-class JSCallbackObject : public Base {
-public:
-    JSCallbackObject(ExecState*, JSGlobalObject*, Structure*, JSClassRef, void* data);
+template <class Parent>
+class JSCallbackObject : public Parent {
+protected:
+    JSCallbackObject(ExecState*, Structure*, JSClassRef, void* data);
     JSCallbackObject(JSGlobalData&, JSClassRef, Structure*);
+
+    void finishCreation(ExecState*);
+    void finishCreation(JSGlobalData&);
+
+public:
+    typedef Parent Base;
+
+    static JSCallbackObject* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, JSClassRef classRef, void* data)
+    {
+        ASSERT_UNUSED(globalObject, !structure->globalObject() || structure->globalObject() == globalObject);
+        JSCallbackObject* callbackObject = new (NotNull, allocateCell<JSCallbackObject>(*exec->heap())) JSCallbackObject(exec, structure, classRef, data);
+        callbackObject->finishCreation(exec);
+        return callbackObject;
+    }
+    static JSCallbackObject* create(JSGlobalData& globalData, JSClassRef classRef, Structure* structure)
+    {
+        JSCallbackObject* callbackObject = new (NotNull, allocateCell<JSCallbackObject>(globalData.heap)) JSCallbackObject(globalData, classRef, structure);
+        callbackObject->finishCreation(globalData);
+        return callbackObject;
+    }
 
     void setPrivate(void* data);
     void* getPrivate();
@@ -128,10 +148,7 @@ public:
     JSClassRef classRef() const { return m_callbackObjectData->jsClass; }
     bool inherits(JSClassRef) const;
 
-    static Structure* createStructure(JSGlobalData& globalData, JSValue proto) 
-    { 
-        return Structure::create(globalData, proto, TypeInfo(ObjectType, StructureFlags), Base::AnonymousSlotCount, &s_info); 
-    }
+    static Structure* createStructure(JSGlobalData&, JSGlobalObject*, JSValue);
     
     JSValue getPrivateProperty(const Identifier& propertyName) const
     {
@@ -148,34 +165,41 @@ public:
         m_callbackObjectData->deletePrivateProperty(propertyName);
     }
 
+    using Parent::methodTable;
+
 protected:
-    static const unsigned StructureFlags = ProhibitsPropertyCaching | OverridesGetOwnPropertySlot | ImplementsHasInstance | OverridesHasInstance | OverridesVisitChildren | OverridesGetPropertyNames | Base::StructureFlags;
+    static const unsigned StructureFlags = ProhibitsPropertyCaching | OverridesGetOwnPropertySlot | ImplementsHasInstance | OverridesHasInstance | OverridesVisitChildren | OverridesGetPropertyNames | Parent::StructureFlags;
 
 private:
-    virtual UString className() const;
+    static UString className(const JSObject*);
 
-    virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-    virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+    static void destroy(JSCell*);
+
+    static JSValue defaultValue(const JSObject*, ExecState*, PreferredPrimitiveType);
+
+    static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+    static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
     
-    virtual void put(ExecState*, const Identifier&, JSValue, PutPropertySlot&);
+    static void put(JSCell*, ExecState*, const Identifier&, JSValue, PutPropertySlot&);
 
-    virtual bool deleteProperty(ExecState*, const Identifier&);
-    virtual bool deleteProperty(ExecState*, unsigned);
+    static bool deleteProperty(JSCell*, ExecState*, const Identifier&);
+    static bool deletePropertyByIndex(JSCell*, ExecState*, unsigned);
 
-    virtual bool hasInstance(ExecState* exec, JSValue value, JSValue proto);
+    static bool hasInstance(JSObject*, ExecState*, JSValue, JSValue proto);
 
-    virtual void getOwnPropertyNames(ExecState*, PropertyNameArray&, EnumerationMode mode = ExcludeDontEnumProperties);
+    static void getOwnPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
 
-    virtual double toNumber(ExecState*) const;
-    virtual UString toString(ExecState*) const;
+    static ConstructType getConstructData(JSCell*, ConstructData&);
+    static CallType getCallData(JSCell*, CallData&);
 
-    virtual ConstructType getConstructData(ConstructData&);
-    virtual CallType getCallData(CallData&);
-
-    virtual void visitChildren(SlotVisitor& visitor)
+    static void visitChildren(JSCell* cell, SlotVisitor& visitor)
     {
-        Base::visitChildren(visitor);
-        m_callbackObjectData->visitChildren(visitor);
+        JSCallbackObject* thisObject = jsCast<JSCallbackObject*>(cell);
+        ASSERT_GC_OBJECT_INHERITS((static_cast<Parent*>(thisObject)), &JSCallbackObject<Parent>::s_info);
+        COMPILE_ASSERT(StructureFlags & OverridesVisitChildren, OverridesVisitChildrenWithoutSettingFlag);
+        ASSERT(thisObject->Parent::structure()->typeInfo().overridesVisitChildren());
+        Parent::visitChildren(thisObject, visitor);
+        thisObject->m_callbackObjectData->visitChildren(visitor);
     }
 
     void init(ExecState*);

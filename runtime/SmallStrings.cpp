@@ -26,6 +26,7 @@
 #include "config.h"
 #include "SmallStrings.h"
 
+#include "HeapRootVisitor.h"
 #include "JSGlobalObject.h"
 #include "JSString.h"
 #include <wtf/Noncopyable.h>
@@ -33,9 +34,11 @@
 
 namespace JSC {
 
-static inline bool isMarked(JSCell* string)
+static inline void finalize(JSString*& string)
 {
-    return string && Heap::isMarked(string);
+    if (!string || Heap::isMarked(string))
+        return;
+    string = 0;
 }
 
 class SmallStringsStorage {
@@ -56,7 +59,7 @@ private:
 
 SmallStringsStorage::SmallStringsStorage()
 {
-    UChar* characterBuffer = 0;
+    LChar* characterBuffer = 0;
     RefPtr<StringImpl> baseString = StringImpl::createUninitialized(singleCharacterStringCount, characterBuffer);
     for (unsigned i = 0; i < singleCharacterStringCount; ++i) {
         characterBuffer[i] = i;
@@ -65,67 +68,35 @@ SmallStringsStorage::SmallStringsStorage()
 }
 
 SmallStrings::SmallStrings()
+    : m_emptyString(0)
+#define JSC_COMMON_STRINGS_ATTRIBUTE_INITIALIZE(name) , m_##name(0)
+    JSC_COMMON_STRINGS_EACH_NAME(JSC_COMMON_STRINGS_ATTRIBUTE_INITIALIZE)
+#undef JSC_COMMON_STRINGS_ATTRIBUTE_INITIALIZE
 {
     COMPILE_ASSERT(singleCharacterStringCount == sizeof(m_singleCharacterStrings) / sizeof(m_singleCharacterStrings[0]), IsNumCharactersConstInSyncWithClassUsage);
-    clear();
+
+    for (unsigned i = 0; i < singleCharacterStringCount; ++i)
+        m_singleCharacterStrings[i] = 0;
 }
 
 SmallStrings::~SmallStrings()
 {
 }
 
-void SmallStrings::visitChildren(HeapRootVisitor& heapRootMarker)
+void SmallStrings::finalizeSmallStrings()
 {
-    /*
-       Our hypothesis is that small strings are very common. So, we cache them
-       to avoid GC churn. However, in cases where this hypothesis turns out to
-       be false -- including the degenerate case where all JavaScript execution
-       has terminated -- we don't want to waste memory.
-
-       To test our hypothesis, we check if any small string has been marked. If
-       so, it's probably reasonable to mark the rest. If not, we clear the cache.
-     */
-
-    bool isAnyStringMarked = isMarked(m_emptyString);
-    for (unsigned i = 0; i < singleCharacterStringCount && !isAnyStringMarked; ++i)
-        isAnyStringMarked = isMarked(m_singleCharacterStrings[i]);
-    
-    if (!isAnyStringMarked) {
-        clear();
-        return;
-    }
-    
-    if (m_emptyString)
-        heapRootMarker.mark(&m_emptyString);
-    for (unsigned i = 0; i < singleCharacterStringCount; ++i) {
-        if (m_singleCharacterStrings[i])
-            heapRootMarker.mark(&m_singleCharacterStrings[i]);
-    }
-}
-
-void SmallStrings::clear()
-{
-    m_emptyString = 0;
+    finalize(m_emptyString);
     for (unsigned i = 0; i < singleCharacterStringCount; ++i)
-        m_singleCharacterStrings[i] = 0;
-}
-
-unsigned SmallStrings::count() const
-{
-    unsigned count = 0;
-    if (m_emptyString)
-        ++count;
-    for (unsigned i = 0; i < singleCharacterStringCount; ++i) {
-        if (m_singleCharacterStrings[i])
-            ++count;
-    }
-    return count;
+        finalize(m_singleCharacterStrings[i]);
+#define JSC_COMMON_STRINGS_ATTRIBUTE_FINALIZE(name) finalize(m_##name);
+    JSC_COMMON_STRINGS_EACH_NAME(JSC_COMMON_STRINGS_ATTRIBUTE_FINALIZE)
+#undef JSC_COMMON_STRINGS_ATTRIBUTE_FINALIZE
 }
 
 void SmallStrings::createEmptyString(JSGlobalData* globalData)
 {
     ASSERT(!m_emptyString);
-    m_emptyString = new (globalData) JSString(globalData, "", JSString::HasOtherOwner);
+    m_emptyString = JSString::createHasOtherOwner(*globalData, StringImpl::empty());
 }
 
 void SmallStrings::createSingleCharacterString(JSGlobalData* globalData, unsigned char character)
@@ -133,7 +104,7 @@ void SmallStrings::createSingleCharacterString(JSGlobalData* globalData, unsigne
     if (!m_storage)
         m_storage = adoptPtr(new SmallStringsStorage);
     ASSERT(!m_singleCharacterStrings[character]);
-    m_singleCharacterStrings[character] = new (globalData) JSString(globalData, PassRefPtr<StringImpl>(m_storage->rep(character)), JSString::HasOtherOwner);
+    m_singleCharacterStrings[character] = JSString::createHasOtherOwner(*globalData, PassRefPtr<StringImpl>(m_storage->rep(character)));
 }
 
 StringImpl* SmallStrings::singleCharacterStringRep(unsigned char character)
@@ -141,6 +112,11 @@ StringImpl* SmallStrings::singleCharacterStringRep(unsigned char character)
     if (!m_storage)
         m_storage = adoptPtr(new SmallStringsStorage);
     return m_storage->rep(character);
+}
+
+void SmallStrings::initialize(JSGlobalData* globalData, JSString*& string, const char* value) const
+{
+    string = JSString::create(*globalData, StringImpl::create(value));
 }
 
 } // namespace JSC

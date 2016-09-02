@@ -34,7 +34,6 @@ namespace JSC {
 ParserArena::ParserArena()
     : m_freeableMemory(0)
     , m_freeablePoolEnd(0)
-    , m_identifierArena(adoptPtr(new IdentifierArena))
 {
 }
 
@@ -46,19 +45,16 @@ inline void* ParserArena::freeablePool()
 
 inline void ParserArena::deallocateObjects()
 {
+    size_t size = m_deletableObjects.size();
+    for (size_t i = 0; i < size; ++i)
+        m_deletableObjects[i]->~ParserArenaDeletable();
+
     if (m_freeablePoolEnd)
         fastFree(freeablePool());
 
-    size_t size = m_freeablePools.size();
+    size = m_freeablePools.size();
     for (size_t i = 0; i < size; ++i)
         fastFree(m_freeablePools[i]);
-
-    size = m_deletableObjects.size();
-    for (size_t i = 0; i < size; ++i) {
-        ParserArenaDeletable* object = m_deletableObjects[i];
-        object->~ParserArenaDeletable();
-        fastFree(object);
-    }
 }
 
 ParserArena::~ParserArena()
@@ -91,7 +87,8 @@ void ParserArena::reset()
 
     m_freeableMemory = 0;
     m_freeablePoolEnd = 0;
-    m_identifierArena->clear();
+    if (m_identifierArena)
+        m_identifierArena->clear();
     m_freeablePools.clear();
     m_deletableObjects.clear();
     m_refCountedObjects.clear();
@@ -111,7 +108,7 @@ void ParserArena::allocateFreeablePool()
 bool ParserArena::isEmpty() const
 {
     return !m_freeablePoolEnd
-        && m_identifierArena->isEmpty()
+        && (!m_identifierArena || m_identifierArena->isEmpty())
         && m_freeablePools.isEmpty()
         && m_deletableObjects.isEmpty()
         && m_refCountedObjects.isEmpty();

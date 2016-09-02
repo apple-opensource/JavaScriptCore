@@ -28,14 +28,12 @@
 #include <stdint.h>
 #include <wtf/AlwaysInline.h>
 #include <wtf/Assertions.h>
+#include <wtf/HashMap.h>
 #include <wtf/HashTraits.h>
 #include <wtf/MathExtras.h>
 #include <wtf/StdLibExtras.h>
 
 namespace JSC {
-
-    extern const double NaN;
-    extern const double Inf;
 
     class ExecState;
     class Identifier;
@@ -47,9 +45,23 @@ namespace JSC {
     class PropertySlot;
     class PutPropertySlot;
     class UString;
+#if ENABLE(DFG_JIT)
+    namespace DFG {
+        class AssemblyHelpers;
+        class JITCompiler;
+        class JITCodeGenerator;
+        class JSValueSource;
+        class OSRExitCompiler;
+        class SpeculativeJIT;
+    }
+#endif
+    namespace LLInt {
+        class Data;
+    }
 
     struct ClassInfo;
     struct Instruction;
+    struct MethodTable;
 
     template <class T> class WriteBarrierBase;
 
@@ -83,10 +95,8 @@ namespace JSC {
 #endif
     };
 
-    double nonInlineNaN();
-
     // This implements ToInt32, defined in ECMA-262 9.5.
-    int32_t toInt32(double);
+    JS_EXPORT_PRIVATE int32_t toInt32(double);
 
     // This implements ToUInt32, defined in ECMA-262 9.6.
     inline uint32_t toUInt32(double number)
@@ -103,6 +113,15 @@ namespace JSC {
         friend class JITStubCall;
         friend class JSInterfaceJIT;
         friend class SpecializedThunkJIT;
+#if ENABLE(DFG_JIT)
+        friend class DFG::AssemblyHelpers;
+        friend class DFG::JITCompiler;
+        friend class DFG::JITCodeGenerator;
+        friend class DFG::JSValueSource;
+        friend class DFG::OSRExitCompiler;
+        friend class DFG::SpeculativeJIT;
+#endif
+        friend class LLInt::Data;
 
     public:
         static EncodedJSValue encode(JSValue);
@@ -149,23 +168,24 @@ namespace JSC {
         int32_t asInt32() const;
         uint32_t asUInt32() const;
         double asDouble() const;
+        bool asBoolean() const;
+        double asNumber() const;
 
         // Querying the type.
+        bool isEmpty() const;
+        bool isFunction() const;
         bool isUndefined() const;
         bool isNull() const;
         bool isUndefinedOrNull() const;
         bool isBoolean() const;
         bool isNumber() const;
         bool isString() const;
+        bool isPrimitive() const;
         bool isGetterSetter() const;
         bool isObject() const;
         bool inherits(const ClassInfo*) const;
         
         // Extracting the value.
-        bool getBoolean(bool&) const;
-        bool getBoolean() const; // false if not a boolean
-        bool getNumber(double&) const;
-        double uncheckedGetNumber() const;
         bool getString(ExecState* exec, UString&) const;
         UString getString(ExecState* exec) const; // null string if not a string
         JSObject* getObject() const; // 0 if not an object
@@ -182,21 +202,17 @@ namespace JSC {
         // toNumber conversion is expected to be side effect free if an exception has
         // been set in the ExecState already.
         double toNumber(ExecState*) const;
-        JSValue toJSNumber(ExecState*) const; // Fast path for when you expect that the value is an immediate number.
-        UString toString(ExecState*) const;
-        UString toPrimitiveString(ExecState*) const;
+        JSString* toString(ExecState*) const;
+        UString toUString(ExecState*) const;
+        UString toUStringInline(ExecState*) const;
         JSObject* toObject(ExecState*) const;
         JSObject* toObject(ExecState*, JSGlobalObject*) const;
 
         // Integer conversions.
-        double toInteger(ExecState*) const;
+        JS_EXPORT_PRIVATE double toInteger(ExecState*) const;
         double toIntegerPreserveNaN(ExecState*) const;
         int32_t toInt32(ExecState*) const;
         uint32_t toUInt32(ExecState*) const;
-
-#if ENABLE(JSC_ZOMBIES)
-        bool isZombie() const;
-#endif
 
         // Floating point conversions (this is a convenience method for webcore;
         // signle precision float is not a representation used in JS or JSC).
@@ -208,14 +224,10 @@ namespace JSC {
         JSValue get(ExecState*, unsigned propertyName) const;
         JSValue get(ExecState*, unsigned propertyName, PropertySlot&) const;
         void put(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
-        void putDirect(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
-        void put(ExecState*, unsigned propertyName, JSValue);
+        void putToPrimitive(ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+        void putByIndex(ExecState*, unsigned propertyName, JSValue, bool shouldThrow);
 
-        bool needsThisConversion() const;
         JSObject* toThisObject(ExecState*) const;
-        JSValue toStrictThisObject(ExecState*) const;
-        UString toThisString(ExecState*) const;
-        JSString* toThisJSString(ExecState*) const;
 
         static bool equal(ExecState* exec, JSValue v1, JSValue v2);
         static bool equalSlowCase(ExecState* exec, JSValue v1, JSValue v2);
@@ -224,15 +236,13 @@ namespace JSC {
         static bool strictEqualSlowCase(ExecState* exec, JSValue v1, JSValue v2);
         static bool strictEqualSlowCaseInline(ExecState* exec, JSValue v1, JSValue v2);
 
-        JSValue getJSNumber(); // JSValue() if this is not a JSNumber or number object
-
         bool isCell() const;
         JSCell* asCell() const;
-        bool isValidCallee();
+        JS_EXPORT_PRIVATE bool isValidCallee();
 
-#ifndef NDEBUG
         char* description();
-#endif
+
+        JS_EXPORT_PRIVATE JSObject* synthesizePrototype(ExecState*) const;
 
     private:
         template <class T> JSValue(WriteBarrierBase<T>);
@@ -241,11 +251,11 @@ namespace JSC {
         JSValue(HashTableDeletedValueTag);
 
         inline const JSValue asValue() const { return *this; }
-        JSObject* toObjectSlowCase(ExecState*, JSGlobalObject*) const;
-        JSObject* toThisObjectSlowCase(ExecState*) const;
-
-        JSObject* synthesizePrototype(ExecState*) const;
-        JSObject* synthesizeObject(ExecState*) const;
+        JS_EXPORT_PRIVATE double toNumberSlowCase(ExecState*) const;
+        JS_EXPORT_PRIVATE JSString* toStringSlowCase(ExecState*) const;
+        JS_EXPORT_PRIVATE UString toUStringSlowCase(ExecState*) const;
+        JS_EXPORT_PRIVATE JSObject* toObjectSlowCase(ExecState*, JSGlobalObject*) const;
+        JS_EXPORT_PRIVATE JSObject* toThisObjectSlowCase(ExecState*) const;
 
 #if USE(JSVALUE32_64)
         /*
@@ -382,6 +392,8 @@ namespace JSC {
     };
 #endif
 
+    typedef HashMap<EncodedJSValue, unsigned, EncodedJSValueHash, EncodedJSValueHashTraits> JSValueMap;
+
     // Stand-alone helper functions.
     inline JSValue jsNull()
     {
@@ -465,8 +477,6 @@ namespace JSC {
 
     inline bool operator!=(const JSValue a, const JSCell* b) { return a != JSValue(b); }
     inline bool operator!=(const JSCell* a, const JSValue b) { return JSValue(a) != b; }
-
-    bool isZombie(const JSCell*);
 
 } // namespace JSC
 

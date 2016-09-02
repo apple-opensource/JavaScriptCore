@@ -69,6 +69,7 @@ public:
     }
     
     void clear() { clear(0); }
+    void clearToMaxUnsigned() { clear(reinterpret_cast<void*>(-1)); }
 
 protected:
     JITWriteBarrierBase()
@@ -120,6 +121,10 @@ public:
         validateCell(owner);
         validateCell(value);
         JITWriteBarrierBase::set(globalData, location, owner, value);
+    }
+    void set(JSGlobalData& globalData, JSCell* owner, T* value)
+    {
+        set(globalData, location(), owner, value);
     }
     T* get() const
     {

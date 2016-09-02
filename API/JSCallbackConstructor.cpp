@@ -36,13 +36,18 @@
 
 namespace JSC {
 
-const ClassInfo JSCallbackConstructor::s_info = { "CallbackConstructor", &JSObjectWithGlobalObject::s_info, 0, 0 };
+const ClassInfo JSCallbackConstructor::s_info = { "CallbackConstructor", &JSNonFinalObject::s_info, 0, 0, CREATE_METHOD_TABLE(JSCallbackConstructor) };
 
 JSCallbackConstructor::JSCallbackConstructor(JSGlobalObject* globalObject, Structure* structure, JSClassRef jsClass, JSObjectCallAsConstructorCallback callback)
-    : JSObjectWithGlobalObject(globalObject, structure)
+    : JSNonFinalObject(globalObject->globalData(), structure)
     , m_class(jsClass)
     , m_callback(callback)
 {
+}
+
+void JSCallbackConstructor::finishCreation(JSGlobalObject* globalObject, JSClassRef jsClass)
+{
+    Base::finishCreation(globalObject->globalData());
     ASSERT(inherits(&s_info));
     if (m_class)
         JSClassRetain(jsClass);
@@ -54,13 +59,18 @@ JSCallbackConstructor::~JSCallbackConstructor()
         JSClassRelease(m_class);
 }
 
+void JSCallbackConstructor::destroy(JSCell* cell)
+{
+    jsCast<JSCallbackConstructor*>(cell)->JSCallbackConstructor::~JSCallbackConstructor();
+}
+
 static EncodedJSValue JSC_HOST_CALL constructJSCallback(ExecState* exec)
 {
     JSObject* constructor = exec->callee();
     JSContextRef ctx = toRef(exec);
     JSObjectRef constructorRef = toRef(constructor);
 
-    JSObjectCallAsConstructorCallback callback = static_cast<JSCallbackConstructor*>(constructor)->callback();
+    JSObjectCallAsConstructorCallback callback = jsCast<JSCallbackConstructor*>(constructor)->callback();
     if (callback) {
         int argumentCount = static_cast<int>(exec->argumentCount());
         Vector<JSValueRef, 16> arguments(argumentCount);
@@ -75,13 +85,16 @@ static EncodedJSValue JSC_HOST_CALL constructJSCallback(ExecState* exec)
         }
         if (exception)
             throwError(exec, toJS(exec, exception));
+        // result must be a valid JSValue.
+        if (!result)
+            return throwVMTypeError(exec);
         return JSValue::encode(toJS(result));
     }
     
-    return JSValue::encode(toJS(JSObjectMake(ctx, static_cast<JSCallbackConstructor*>(constructor)->classRef(), 0)));
+    return JSValue::encode(toJS(JSObjectMake(ctx, jsCast<JSCallbackConstructor*>(constructor)->classRef(), 0)));
 }
 
-ConstructType JSCallbackConstructor::getConstructData(ConstructData& constructData)
+ConstructType JSCallbackConstructor::getConstructData(JSCell*, ConstructData& constructData)
 {
     constructData.native.function = constructJSCallback;
     return ConstructTypeHost;

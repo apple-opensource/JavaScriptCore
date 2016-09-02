@@ -39,13 +39,19 @@
 namespace JSC {
 
 ASSERT_CLASS_FITS_IN_CELL(JSCallbackFunction);
+ASSERT_HAS_TRIVIAL_DESTRUCTOR(JSCallbackFunction);
 
-const ClassInfo JSCallbackFunction::s_info = { "CallbackFunction", &InternalFunction::s_info, 0, 0 };
+const ClassInfo JSCallbackFunction::s_info = { "CallbackFunction", &InternalFunction::s_info, 0, 0, CREATE_METHOD_TABLE(JSCallbackFunction) };
 
-JSCallbackFunction::JSCallbackFunction(ExecState* exec, JSGlobalObject* globalObject, JSObjectCallAsFunctionCallback callback, const Identifier& name)
-    : InternalFunction(&exec->globalData(), globalObject, globalObject->callbackFunctionStructure(), name)
+JSCallbackFunction::JSCallbackFunction(JSGlobalObject* globalObject, JSObjectCallAsFunctionCallback callback)
+    : InternalFunction(globalObject, globalObject->callbackFunctionStructure())
     , m_callback(callback)
 {
+}
+
+void JSCallbackFunction::finishCreation(JSGlobalData& globalData, const Identifier& name)
+{
+    Base::finishCreation(globalData, name);
     ASSERT(inherits(&s_info));
 }
 
@@ -64,15 +70,19 @@ EncodedJSValue JSCallbackFunction::call(ExecState* exec)
     JSValueRef result;
     {
         APICallbackShim callbackShim(exec);
-        result = static_cast<JSCallbackFunction*>(toJS(functionRef))->m_callback(execRef, functionRef, thisObjRef, argumentCount, arguments.data(), &exception);
+        result = jsCast<JSCallbackFunction*>(toJS(functionRef))->m_callback(execRef, functionRef, thisObjRef, argumentCount, arguments.data(), &exception);
     }
     if (exception)
         throwError(exec, toJS(exec, exception));
 
+    // result must be a valid JSValue.
+    if (!result)
+        return JSValue::encode(jsUndefined());
+
     return JSValue::encode(toJS(exec, result));
 }
 
-CallType JSCallbackFunction::getCallData(CallData& callData)
+CallType JSCallbackFunction::getCallData(JSCell*, CallData& callData)
 {
     callData.native.function = call;
     return CallTypeHost;

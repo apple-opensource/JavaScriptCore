@@ -27,22 +27,31 @@ namespace JSC {
 
     class BooleanPrototype : public BooleanObject {
     public:
-        BooleanPrototype(ExecState*, JSGlobalObject*, Structure*);
+        typedef BooleanObject Base;
 
+        static BooleanPrototype* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure)
+        {
+            BooleanPrototype* prototype = new (NotNull, allocateCell<BooleanPrototype>(*exec->heap())) BooleanPrototype(exec, structure);
+            prototype->finishCreation(exec, globalObject);
+            return prototype;
+        }
+        
         static const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     protected:
+        void finishCreation(ExecState*, JSGlobalObject*);
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | BooleanObject::StructureFlags;
-        static const unsigned AnonymousSlotCount = BooleanObject::AnonymousSlotCount + 1;
 
     private:
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        BooleanPrototype(ExecState*, Structure*);
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
     };
 
 } // namespace JSC

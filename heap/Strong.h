@@ -26,14 +26,13 @@
 #ifndef Strong_h
 #define Strong_h
 
-#include "Assertions.h"
+#include <wtf/Assertions.h>
 #include "Handle.h"
-#include "HandleHeap.h"
+#include "HandleSet.h"
 
 namespace JSC {
 
 class JSGlobalData;
-HandleSlot allocateGlobalHandle(JSGlobalData&);
 
 // A strongly referenced handle that prevents the object it points to from being garbage collected.
 template <typename T> class Strong : public Handle<T> {
@@ -48,24 +47,16 @@ public:
     {
     }
     
-    Strong(JSGlobalData& globalData, ExternalType value = ExternalType())
-        : Handle<T>(allocateGlobalHandle(globalData))
-    {
-        set(value);
-    }
+    Strong(JSGlobalData&, ExternalType = ExternalType());
 
-    Strong(JSGlobalData& globalData, Handle<T> handle)
-        : Handle<T>(allocateGlobalHandle(globalData))
-    {
-        set(handle.get());
-    }
+    Strong(JSGlobalData&, Handle<T>);
     
     Strong(const Strong& other)
         : Handle<T>()
     {
         if (!other.slot())
             return;
-        setSlot(HandleHeap::heapFor(other.slot())->allocate());
+        setSlot(HandleSet::heapFor(other.slot())->allocate());
         set(other.get());
     }
 
@@ -74,7 +65,7 @@ public:
     {
         if (!other.slot())
             return;
-        setSlot(HandleHeap::heapFor(other.slot())->allocate());
+        setSlot(HandleSet::heapFor(other.slot())->allocate());
         set(other.get());
     }
     
@@ -90,17 +81,20 @@ public:
         clear();
     }
 
+    bool operator!() const { return !slot() || !*slot(); }
+
+    // This conversion operator allows implicit conversion to bool but not to other integer types.
+    typedef JSValue (HandleBase::*UnspecifiedBoolType);
+    operator UnspecifiedBoolType*() const { return !!*this ? reinterpret_cast<UnspecifiedBoolType*>(1) : 0; }
+
     void swap(Strong& other)
     {
         Handle<T>::swap(other);
     }
 
-    void set(JSGlobalData& globalData, ExternalType value)
-    {
-        if (!slot())
-            setSlot(allocateGlobalHandle(globalData));
-        set(value);
-    }
+    ExternalType get() const { return HandleTypes<T>::getFromSlot(this->slot()); }
+
+    void set(JSGlobalData&, ExternalType);
 
     template <typename U> Strong& operator=(const Strong<U>& other)
     {
@@ -109,7 +103,7 @@ public:
             return *this;
         }
 
-        set(*HandleHeap::heapFor(other.slot())->globalData(), other.get());
+        set(*HandleSet::heapFor(other.slot())->globalData(), other.get());
         return *this;
     }
     
@@ -120,7 +114,7 @@ public:
             return *this;
         }
 
-        set(*HandleHeap::heapFor(other.slot())->globalData(), other.get());
+        set(*HandleSet::heapFor(other.slot())->globalData(), other.get());
         return *this;
     }
 
@@ -128,7 +122,7 @@ public:
     {
         if (!slot())
             return;
-        HandleHeap::heapFor(slot())->deallocate(slot());
+        HandleSet::heapFor(slot())->deallocate(slot());
         setSlot(0);
     }
 
@@ -139,7 +133,7 @@ private:
     {
         ASSERT(slot());
         JSValue value = HandleTypes<T>::toJSValue(externalType);
-        HandleHeap::heapFor(slot())->writeBarrier(slot(), value);
+        HandleSet::heapFor(slot())->writeBarrier(slot(), value);
         *slot() = value;
     }
 };

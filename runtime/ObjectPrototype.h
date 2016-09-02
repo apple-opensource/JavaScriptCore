@@ -27,29 +27,40 @@ namespace JSC {
 
     class ObjectPrototype : public JSNonFinalObject {
     public:
-        ObjectPrototype(ExecState*, JSGlobalObject*, Structure*);
+        typedef JSNonFinalObject Base;
+
+        static ObjectPrototype* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure)
+        {
+            ObjectPrototype* prototype = new (NotNull, allocateCell<ObjectPrototype>(*exec->heap())) ObjectPrototype(exec, structure);
+            prototype->finishCreation(exec->globalData(), globalObject);
+            return prototype;
+        }
 
         static const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     protected:
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | JSNonFinalObject::StructureFlags;
-        static const unsigned AnonymousSlotCount = JSNonFinalObject::AnonymousSlotCount + 1;
+
+        void finishCreation(JSGlobalData&, JSGlobalObject*);
 
     private:
-        virtual void put(ExecState*, const Identifier&, JSValue, PutPropertySlot&);
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertySlot(ExecState*, unsigned propertyName, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        ObjectPrototype(ExecState*, Structure*);
+        static void put(JSCell*, ExecState*, const Identifier&, JSValue, PutPropertySlot&);
+        static bool defineOwnProperty(JSObject*, ExecState*, const Identifier& propertyName, PropertyDescriptor&, bool shouldThrow);
+
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+        static bool getOwnPropertySlotByIndex(JSCell*, ExecState*, unsigned propertyName, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
 
         bool m_hasNoPropertiesWithUInt32Names;
     };
 
-    EncodedJSValue JSC_HOST_CALL objectProtoFuncToString(ExecState*);
+    JS_EXPORT_PRIVATE EncodedJSValue JSC_HOST_CALL objectProtoFuncToString(ExecState*);
 
 } // namespace JSC
 

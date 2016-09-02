@@ -22,24 +22,32 @@
 #ifndef RegExp_h
 #define RegExp_h
 
-#include "UString.h"
 #include "ExecutableAllocator.h"
-#include "Structure.h"
+#include "MatchResult.h"
 #include "RegExpKey.h"
+#include "Structure.h"
+#include "UString.h"
+#include "yarr/Yarr.h"
 #include <wtf/Forward.h>
 #include <wtf/RefCounted.h>
+
+#if ENABLE(YARR_JIT)
+#include "yarr/YarrJIT.h"
+#endif
 
 namespace JSC {
 
     struct RegExpRepresentation;
     class JSGlobalData;
 
-    RegExpFlags regExpFlags(const UString&);
+    JS_EXPORT_PRIVATE RegExpFlags regExpFlags(const UString&);
 
     class RegExp : public JSCell {
     public:
-        static RegExp* create(JSGlobalData*, const UString& pattern, RegExpFlags);
-        ~RegExp();
+        typedef JSCell Base;
+
+        JS_EXPORT_PRIVATE static RegExp* create(JSGlobalData&, const UString& pattern, RegExpFlags);
+        static void destroy(JSCell*);
 
         bool global() const { return m_flags & FlagGlobal; }
         bool ignoreCase() const { return m_flags & FlagIgnoreCase; }
@@ -50,12 +58,13 @@ namespace JSC {
         bool isValid() const { return !m_constructionError && m_flags != InvalidFlags; }
         const char* errorMessage() const { return m_constructionError; }
 
-        int match(JSGlobalData&, const UString&, int startOffset, Vector<int, 32>* ovector = 0);
+        JS_EXPORT_PRIVATE int match(JSGlobalData&, const UString&, unsigned startOffset, Vector<int, 32>& ovector);
+        MatchResult match(JSGlobalData&, const UString&, unsigned startOffset);
         unsigned numSubpatterns() const { return m_numSubpatterns; }
 
         bool hasCode()
         {
-            return m_representation;
+            return m_state != NotCompiled;
         }
 
         void invalidateCode();
@@ -64,34 +73,36 @@ namespace JSC {
         void printTraceData();
 #endif
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(LeafType, 0), 0, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(LeafType, 0), &s_info);
         }
         
-        static JS_EXPORTDATA const ClassInfo s_info;
+        static const ClassInfo s_info;
 
         RegExpKey key() { return RegExpKey(m_flags, m_patternString); }
 
+    protected:
+        void finishCreation(JSGlobalData&);
+
     private:
         friend class RegExpCache;
-        RegExp(JSGlobalData* globalData, const UString& pattern, RegExpFlags);
+        RegExp(JSGlobalData&, const UString&, RegExpFlags);
+
+        static RegExp* createWithoutCaching(JSGlobalData&, const UString&, RegExpFlags);
 
         enum RegExpState {
             ParseError,
             JITCode,
             ByteCode,
-            NotCompiled,
-            Compiling
+            NotCompiled
         } m_state;
 
-        void compile(JSGlobalData*);
-        void compileIfNecessary(JSGlobalData& globalData)
-        {
-            if (m_representation)
-                return;
-            compile(&globalData);
-        }
+        void compile(JSGlobalData*, Yarr::YarrCharSize);
+        void compileIfNecessary(JSGlobalData&, Yarr::YarrCharSize);
+
+        void compileMatchOnly(JSGlobalData*, Yarr::YarrCharSize);
+        void compileIfNecessaryMatchOnly(JSGlobalData&, Yarr::YarrCharSize);
 
 #if ENABLE(YARR_JIT_DEBUG)
         void matchCompareWithInterpreter(const UString&, int startOffset, int* offsetVector, int jitResult);
@@ -106,7 +117,10 @@ namespace JSC {
         unsigned m_rtMatchFoundCount;
 #endif
 
-        OwnPtr<RegExpRepresentation> m_representation;
+#if ENABLE(YARR_JIT)
+        Yarr::YarrCodeBlock m_regExpJITCode;
+#endif
+        OwnPtr<Yarr::BytecodePattern> m_regExpBytecode;
     };
 
 } // namespace JSC

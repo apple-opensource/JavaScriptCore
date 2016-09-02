@@ -29,6 +29,7 @@
 
 #include <runtime/UString.h>
 #include <wtf/CheckedArithmetic.h>
+#include <wtf/RefCounted.h>
 #include <wtf/Vector.h>
 #include <wtf/unicode/Unicode.h>
 
@@ -315,7 +316,7 @@ struct TermChain {
 };
 
 struct YarrPattern {
-    YarrPattern(const UString& pattern, bool ignoreCase, bool multiline, const char** error);
+    JS_EXPORT_PRIVATE YarrPattern(const UString& pattern, bool ignoreCase, bool multiline, const char** error);
 
     ~YarrPattern()
     {

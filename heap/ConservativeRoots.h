@@ -33,17 +33,16 @@
 namespace JSC {
 
 class JSCell;
+class DFGCodeBlocks;
 class Heap;
-
-// May contain duplicates.
 
 class ConservativeRoots {
 public:
-    ConservativeRoots(Heap*);
+    ConservativeRoots(const MarkedBlockSet*, CopiedSpace*);
     ~ConservativeRoots();
 
-    void add(void*);
     void add(void* begin, void* end);
+    void add(void* begin, void* end, DFGCodeBlocks&);
     
     size_t size();
     JSCell** roots();
@@ -52,39 +51,21 @@ private:
     static const size_t inlineCapacity = 128;
     static const size_t nonInlineCapacity = 8192 / sizeof(JSCell*);
     
+    template<typename MarkHook>
+    void genericAddPointer(void*, TinyBloomFilter, MarkHook&);
+
+    template<typename MarkHook>
+    void genericAddSpan(void*, void* end, MarkHook&);
+    
     void grow();
 
-    Heap* m_heap;
     JSCell** m_roots;
     size_t m_size;
     size_t m_capacity;
+    const MarkedBlockSet* m_blocks;
+    CopiedSpace* m_copiedSpace;
     JSCell* m_inlineRoots[inlineCapacity];
 };
-
-inline ConservativeRoots::ConservativeRoots(Heap* heap)
-    : m_heap(heap)
-    , m_roots(m_inlineRoots)
-    , m_size(0)
-    , m_capacity(inlineCapacity)
-{
-}
-
-inline ConservativeRoots::~ConservativeRoots()
-{
-    if (m_roots != m_inlineRoots)
-        OSAllocator::decommitAndRelease(m_roots, m_capacity * sizeof(JSCell*));
-}
-
-inline void ConservativeRoots::add(void* p)
-{
-    if (!m_heap->contains(p))
-        return;
-
-    if (m_size == m_capacity)
-        grow();
-
-    m_roots[m_size++] = reinterpret_cast<JSCell*>(p);
-}
 
 inline size_t ConservativeRoots::size()
 {

@@ -28,7 +28,7 @@
 
 #if ENABLE(DFG_JIT)
 
-#include <dfg/DFGNode.h>
+#include <dfg/DFGCommon.h>
 
 namespace JSC { namespace DFG {
 
@@ -77,6 +77,26 @@ public:
     RegisterBank()
         : m_lastAllocated(NUM_REGS - 1)
     {
+    }
+
+    // Attempt to allocate a register - this function finds an unlocked
+    // register, locks it, and returns it. If none can be found, this
+    // returns -1 (InvalidGPRReg or InvalidFPRReg).
+    RegID tryAllocate()
+    {
+        VirtualRegister ignored;
+        
+        for (uint32_t i = m_lastAllocated + 1; i < NUM_REGS; ++i) {
+            if (!m_data[i].lockCount && m_data[i].name == InvalidVirtualRegister)
+                return allocateInternal(i, ignored);
+        }
+        // Loop over the remaining entries.
+        for (uint32_t i = 0; i <= m_lastAllocated; ++i) {
+            if (!m_data[i].lockCount && m_data[i].name == InvalidVirtualRegister)
+                return allocateInternal(i, ignored);
+        }
+        
+        return (RegID)-1;
     }
 
     // Allocate a register - this function finds an unlocked register,
@@ -139,6 +159,19 @@ public:
         return allocateInternal(currentLowest, spillMe);
     }
 
+    // Allocates the given register, even if this will force a spill.
+    VirtualRegister allocateSpecific(RegID reg)
+    {
+        unsigned index = BankInfo::toIndex(reg);
+
+        ++m_data[index].lockCount;
+        VirtualRegister name = nameAtIndex(index);
+        if (name != InvalidVirtualRegister)
+            releaseAtIndex(index);
+        
+        return name;
+    }
+
     // retain/release - these methods are used to associate/disassociate names
     // with values in registers. retain should only be called on locked registers.
     void retain(RegID reg, VirtualRegister name, SpillHint spillOrder)
@@ -199,11 +232,11 @@ public:
         // For each register, print the VirtualRegister 'name'.
         for (uint32_t i =0; i < NUM_REGS; ++i) {
             if (m_data[i].name != InvalidVirtualRegister)
-                fprintf(stderr, "[%02d]", m_data[i].name);
+                dataLog("[%02d]", m_data[i].name);
             else
-                fprintf(stderr, "[--]");
+                dataLog("[--]");
         }
-        fprintf(stderr, "\n");
+        dataLog("\n");
     }
 #endif
 

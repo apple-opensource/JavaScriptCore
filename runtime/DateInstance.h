@@ -30,11 +30,31 @@ namespace WTF {
 namespace JSC {
 
     class DateInstance : public JSWrapperObject {
-    public:
-        DateInstance(ExecState*, Structure*, double);
-        explicit DateInstance(ExecState*, Structure*);
+    protected:
+        JS_EXPORT_PRIVATE DateInstance(ExecState*, Structure*);
+        void finishCreation(JSGlobalData&);
+        JS_EXPORT_PRIVATE void finishCreation(JSGlobalData&, double);
 
-        double internalNumber() const { return internalValue().uncheckedGetNumber(); }
+        static void destroy(JSCell*);
+ 
+    public:
+        typedef JSWrapperObject Base;
+
+        static DateInstance* create(ExecState* exec, Structure* structure, double date)
+        {
+            DateInstance* instance = new (NotNull, allocateCell<DateInstance>(*exec->heap())) DateInstance(exec, structure);
+            instance->finishCreation(exec->globalData(), date);
+            return instance;
+        }
+
+        static DateInstance* create(ExecState* exec, Structure* structure)
+        {
+            DateInstance* instance = new (NotNull, allocateCell<DateInstance>(*exec->heap())) DateInstance(exec, structure);
+            instance->finishCreation(exec->globalData());
+            return instance;
+        }
+
+        double internalNumber() const { return internalValue().asNumber(); }
 
         static JS_EXPORTDATA const ClassInfo s_info;
 
@@ -52,9 +72,9 @@ namespace JSC {
             return calculateGregorianDateTimeUTC(exec);
         }
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     private:

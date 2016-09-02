@@ -38,21 +38,30 @@ namespace JSC {
 
     class Identifier;
     class JSObject;
+    class LLIntOffsetsExtractor;
 
     class JSPropertyNameIterator : public JSCell {
         friend class JIT;
 
     public:
+        typedef JSCell Base;
+
         static JSPropertyNameIterator* create(ExecState*, JSObject*);
-        
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static JSPropertyNameIterator* create(ExecState* exec, PropertyNameArrayData* propertyNameArrayData, size_t numCacheableSlot)
         {
-            return Structure::create(globalData, prototype, TypeInfo(CompoundType, OverridesVisitChildren), AnonymousSlotCount, &s_info);
+            JSPropertyNameIterator* iterator = new (NotNull, allocateCell<JSPropertyNameIterator>(*exec->heap())) JSPropertyNameIterator(exec, propertyNameArrayData, numCacheableSlot);
+            iterator->finishCreation(exec, propertyNameArrayData);
+            return iterator;
         }
 
-        virtual bool isPropertyNameIterator() const { return true; }
+        static void destroy(JSCell*);
+       
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
+        {
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(CompoundType, OverridesVisitChildren), &s_info);
+        }
 
-        virtual void visitChildren(SlotVisitor&);
+        static void visitChildren(JSCell*, SlotVisitor&);
 
         bool getOffset(size_t i, int& offset)
         {
@@ -78,7 +87,18 @@ namespace JSC {
         
         static const ClassInfo s_info;
 
+    protected:
+        void finishCreation(ExecState* exec, PropertyNameArrayData* propertyNameArrayData)
+        {
+            Base::finishCreation(exec->globalData());
+            PropertyNameArrayData::PropertyNameVector& propertyNameVector = propertyNameArrayData->propertyNameVector();
+            for (size_t i = 0; i < m_jsStringsSize; ++i)
+                m_jsStrings[i].set(exec->globalData(), this, jsOwnedString(exec, propertyNameVector[i].ustring()));
+        }
+
     private:
+        friend class LLIntOffsetsExtractor;
+        
         JSPropertyNameIterator(ExecState*, PropertyNameArrayData* propertyNameArrayData, size_t numCacheableSlot);
 
         WriteBarrier<Structure> m_cachedStructure;
@@ -101,7 +121,7 @@ namespace JSC {
 
     ALWAYS_INLINE JSPropertyNameIterator* Register::propertyNameIterator() const
     {
-        return static_cast<JSPropertyNameIterator*>(jsValue().asCell());
+        return jsCast<JSPropertyNameIterator*>(jsValue().asCell());
     }
 
 } // namespace JSC

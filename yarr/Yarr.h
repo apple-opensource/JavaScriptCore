@@ -43,6 +43,7 @@ namespace JSC { namespace Yarr {
 #define YarrStackSpaceForBackTrackInfoParentheses 2
 
 static const unsigned quantifyInfinite = UINT_MAX;
+static const unsigned offsetNoMatch = (unsigned)-1;
 
 // The below limit restricts the number of "recursive" match calls in order to
 // avoid spending exponential time on complex regular expressions.
@@ -57,8 +58,10 @@ enum JSRegExpResult {
     JSRegExpErrorInternal = -4
 };
 
-PassOwnPtr<BytecodePattern> byteCompile(YarrPattern&, BumpPointerAllocator*);
-int interpret(BytecodePattern*, const UChar* input, unsigned start, unsigned length, int* output);
+enum YarrCharSize {
+    Char8,
+    Char16
+};
 
 } } // namespace JSC::Yarr
 

@@ -29,24 +29,33 @@ namespace JSC {
 
     class ObjectConstructor : public InternalFunction {
     public:
-        ObjectConstructor(ExecState*, JSGlobalObject*, Structure*, ObjectPrototype*);
+        typedef InternalFunction Base;
 
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        static ObjectConstructor* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, ObjectPrototype* objectPrototype)
+        {
+            ObjectConstructor* constructor = new (NotNull, allocateCell<ObjectConstructor>(*exec->heap())) ObjectConstructor(globalObject, structure);
+            constructor->finishCreation(exec, objectPrototype);
+            return constructor;
+        }
+
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
 
         static const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype)
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype)
         {
-            return Structure::create(globalData, prototype, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info);
+            return Structure::create(globalData, globalObject, prototype, TypeInfo(ObjectType, StructureFlags), &s_info);
         }
 
     protected:
+        void finishCreation(ExecState*, ObjectPrototype*);
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | InternalFunction::StructureFlags;
 
     private:
-        virtual ConstructType getConstructData(ConstructData&);
-        virtual CallType getCallData(CallData&);
+        ObjectConstructor(JSGlobalObject*, Structure*);
+        static ConstructType getConstructData(JSCell*, ConstructData&);
+        static CallType getCallData(JSCell*, CallData&);
     };
 
 } // namespace JSC

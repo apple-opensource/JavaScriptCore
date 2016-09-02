@@ -30,6 +30,7 @@
 #if ENABLE(ASSEMBLER) && CPU(ARM_TRADITIONAL)
 
 #include "AssemblerBufferWithConstantPool.h"
+#include "JITCompilationEffort.h"
 #include <wtf/Assertions.h>
 namespace JSC {
 
@@ -161,7 +162,6 @@ namespace JSC {
             VMOV_ARM = 0x0e100a10,
             VCVT_F64_S32 = 0x0eb80bc0,
             VCVT_S32_F64 = 0x0ebd0b40,
-            VCVTR_S32_F64 = 0x0ebd0bc0,
             VMRS_APSR = 0x0ef1fa10,
 #if WTF_ARM_ARCH_AT_LEAST(5)
             CLZ = 0x016f0f10,
@@ -173,6 +173,7 @@ namespace JSC {
             MOVW = 0x03000000,
             MOVT = 0x03400000,
 #endif
+            NOP = 0xe1a00000,
         };
 
         enum {
@@ -545,12 +546,6 @@ namespace JSC {
             emitDoublePrecisionInst(static_cast<ARMWord>(cc) | VCVT_S32_F64, (sd >> 1), 0, dm);
         }
 
-        void vcvtr_s32_f64_r(int sd, int dm, Condition cc = AL)
-        {
-            ASSERT(!(sd & 0x1)); // sd must be divisible by 2
-            emitDoublePrecisionInst(static_cast<ARMWord>(cc) | VCVTR_S32_F64, (sd >> 1), 0, dm);
-        }
-
         void vmrs_apsr(Condition cc = AL)
         {
             m_buffer.putInt(static_cast<ARMWord>(cc) | VMRS_APSR);
@@ -576,6 +571,11 @@ namespace JSC {
         void nop()
         {
             m_buffer.putInt(OP_NOP_T2);
+        }
+
+        void nop()
+        {
+            m_buffer.putInt(NOP);
         }
 
         void bx(int rm, Condition cc = AL)
@@ -686,11 +686,9 @@ namespace JSC {
             return loadBranchTarget(ARMRegisters::pc, cc, useConstantPool);
         }
 
-        void* executableCopy(JSGlobalData&, ExecutablePool* allocator);
+        PassRefPtr<ExecutableMemoryHandle> executableCopy(JSGlobalData&, void* ownerUID, JITCompilationEffort);
 
-#ifndef NDEBUG
         unsigned debugOffset() { return m_buffer.debugOffset(); }
-#endif
 
         // Patching helpers
 
@@ -743,8 +741,8 @@ namespace JSC {
         static void* readPointer(void* from)
         {
             ARMWord* insn = reinterpret_cast<ARMWord*>(from);
-            void* addr = reinterpret_cast<void*>(getLdrImmAddress(insn));
-            return *addr;
+            ARMWord* addr = getLdrImmAddress(insn);
+            return *reinterpret_cast<void**>(addr);
         }
         
         // Patch pointers
@@ -802,6 +800,11 @@ namespace JSC {
             patchPointerInternal(getAbsoluteJumpAddress(from), to);
         }
 
+        static void* readCallTarget(void* from)
+        {
+            return reinterpret_cast<void*>(readPointer(reinterpret_cast<void*>(getAbsoluteJumpAddress(from))));
+        }
+
         // Address operations
 
         static void* getRelocatedAddress(void* code, AssemblerLabel label)
@@ -855,7 +858,7 @@ namespace JSC {
         // Memory load/store helpers
 
         void dataTransfer32(bool isLoad, RegisterID srcDst, RegisterID base, int32_t offset, bool bytes = false);
-        void baseIndexTransfer32(bool isLoad, RegisterID srcDst, RegisterID base, RegisterID index, int scale, int32_t offset);
+        void baseIndexTransfer32(bool isLoad, RegisterID srcDst, RegisterID base, RegisterID index, int scale, int32_t offset, bool bytes = false);
         void doubleTransfer(bool isLoad, FPRegisterID srcDst, RegisterID base, int32_t offset);
 
         // Constant pool hnadlers
@@ -866,6 +869,42 @@ namespace JSC {
             ASSERT((offset <= BOFFSET_MAX && offset >= BOFFSET_MIN));
             return AL | B | (offset & BRANCH_MASK);
         }
+
+#if OS(LINUX) && COMPILER(RVCT)
+        static __asm void cacheFlush(void* code, size_t);
+#else
+        static void cacheFlush(void* code, size_t size)
+        {
+#if OS(LINUX) && COMPILER(GCC)
+            uintptr_t currentPage = reinterpret_cast<uintptr_t>(code) & ~(pageSize() - 1);
+            uintptr_t lastPage = (reinterpret_cast<uintptr_t>(code) + size) & ~(pageSize() - 1);
+            do {
+                asm volatile(
+                    "push    {r7}\n"
+                    "mov     r0, %0\n"
+                    "mov     r1, %1\n"
+                    "mov     r7, #0xf0000\n"
+                    "add     r7, r7, #0x2\n"
+                    "mov     r2, #0x0\n"
+                    "svc     0x0\n"
+                    "pop     {r7}\n"
+                    :
+                    : "r" (currentPage), "r" (currentPage + pageSize())
+                    : "r0", "r1", "r2");
+                currentPage += pageSize();
+            } while (lastPage >= currentPage);
+#elif OS(WINCE)
+            CacheRangeFlush(code, size, CACHE_SYNC_ALL);
+#elif OS(QNX) && ENABLE(ASSEMBLER_WX_EXCLUSIVE)
+            UNUSED_PARAM(code);
+            UNUSED_PARAM(size);
+#elif OS(QNX)
+            msync(code, size, MS_INVALIDATE_ICACHE);
+#else
+#error "The cacheFlush support is missing on this platform."
+#endif
+        }
+#endif
 
     private:
         ARMWord RM(int reg)

@@ -28,7 +28,8 @@
 
 #if ENABLE(DFG_JIT)
 
-#include <dfg/DFGGraph.h>
+#include "DFGGraph.h"
+#include <wtf/BitVector.h>
 #include <wtf/Vector.h>
 
 namespace JSC { namespace DFG {
@@ -42,25 +43,42 @@ namespace JSC { namespace DFG {
 // another node.
 class ScoreBoard {
 public:
-    ScoreBoard(Graph& graph, uint32_t firstTemporary)
+    ScoreBoard(Graph& graph, const BitVector& usedVars)
         : m_graph(graph)
-        , m_firstTemporary(firstTemporary)
+        , m_highWatermark(0)
     {
+        m_used.fill(0, usedVars.size());
+        m_free.reserveCapacity(usedVars.size());
+        for (size_t i = usedVars.size(); i-- > 0;) {
+            if (usedVars.get(i)) {
+                m_used[i] = max(); // This is mostly for debugging and sanity.
+                m_highWatermark = std::max(m_highWatermark, static_cast<unsigned>(i) + 1);
+            } else
+                m_free.append(i);
+        }
     }
 
-#if DFG_CONSISTENCY_CHECK
     ~ScoreBoard()
     {
-        // Every VirtualRegister that was allocated should now be free.
-        ASSERT(m_used.size() == m_free.size());
-        // Every entry in the used list should be available in the free list.
-        for (size_t i = 0; i < m_used.size(); ++i)
-            ASSERT(m_free.contains(i));
-        // For every entry in the used list the use count of the virtual register should be zero.
-        for (size_t i = 0; i < m_free.size(); ++i)
-            ASSERT(!m_used[i]);
+        assertClear();
     }
+    
+    void assertClear()
+    {
+#if !ASSERT_DISABLED
+        // For every entry in the used list the use count of the virtual register should be zero, or max, due to it being a preserved local.
+        for (size_t i = 0; i < m_used.size(); ++i)
+            ASSERT(!m_used[i] || m_used[i] == max());
+        // For every entry in the free list, the use count should be zero.
+        for (size_t i = 0; i < m_free.size(); ++i)
+            ASSERT(!m_used[m_free[i]]);
+        // There must not be duplicates in the free list.
+        for (size_t i = 0; i < m_free.size(); ++i) {
+            for (size_t j = i + 1; j < m_free.size(); ++j)
+                ASSERT(m_free[i] != m_free[j]);
+        }
 #endif
+    }
 
     VirtualRegister allocate()
     {
@@ -71,13 +89,15 @@ public:
             m_free.removeLast();
             // Use count must have hit zero for it to have been added to the free list!
             ASSERT(!m_used[index]);
-            return (VirtualRegister)(m_firstTemporary + index);
+            m_highWatermark = std::max(m_highWatermark, static_cast<unsigned>(index) + 1);
+            return (VirtualRegister)index;
         }
 
         // Allocate a new VirtualRegister, and add a corresponding entry to m_used.
-        size_t next = allocatedCount();
+        size_t next = m_used.size();
         m_used.append(0);
-        return (VirtualRegister)(m_firstTemporary + next);
+        m_highWatermark = std::max(m_highWatermark, static_cast<unsigned>(next) + 1);
+        return (VirtualRegister)next;
     }
 
     // Increment the usecount for the VirtualRegsiter associated with 'child',
@@ -89,8 +109,12 @@ public:
 
         // Find the virtual register number for this child, increment its use count.
         Node& node = m_graph[child];
-        uint32_t index = node.virtualRegister() - m_firstTemporary;
+        uint32_t index = node.virtualRegister();
+        ASSERT(m_used[index] != max());
         if (node.refCount() == ++m_used[index]) {
+#if DFG_ENABLE(DEBUG_PROPAGATION_VERBOSE)
+            dataLog(" Freeing virtual register %u.", index);
+#endif
             // If the use count in the scoreboard reaches the use count for the node,
             // then this was its last use; the virtual register is now free.
             // Clear the use count & add to the free list.
@@ -98,40 +122,51 @@ public:
             m_free.append(index);
         }
     }
-
-    unsigned allocatedCount()
+    void use(Edge child)
     {
-        // m_used contains an entry for every allocated VirtualRegister.
-        return m_used.size();
+        use(child.indexUnchecked());
     }
 
+    unsigned highWatermark()
+    {
+        return m_highWatermark;
+    }
+    
 #ifndef NDEBUG
     void dump()
     {
-        printf("    USED: [ ");
+        dataLog("    USED: [ ");
         for (unsigned i = 0; i < m_used.size(); ++i) {
-            if (!m_free.contains(i))
-                printf("%d:%d ", m_firstTemporary + i, m_used[i]);
-        }
-        printf("]\n");
-
-        printf("    FREE: [ ");
-        for (unsigned i = 0; i < m_used.size(); ++i) {
-            if (m_free.contains(i)) {
-                ASSERT(!m_used[i]);
-                printf("%d ", m_firstTemporary + i);
+            if (!m_free.contains(i)) {
+                dataLog("%d:", i);
+                if (m_used[i] == max())
+                    dataLog("local ");
+                else
+                    dataLog("%d ", m_used[i]);
             }
         }
-        printf("]\n");
+        dataLog("]\n");
+
+        dataLog("    FREE: [ ");
+        for (unsigned i = 0; i < m_used.size(); ++i) {
+            if (m_free.contains(i) && m_used[i] != max()) {
+                ASSERT(!m_used[i]);
+                dataLog("%d ", i);
+            }
+        }
+        dataLog("]\n");
     }
 
 #endif
 
 private:
+    static uint32_t max() { return std::numeric_limits<uint32_t>::max(); }
+    
     // The graph, so we can get refCounts for nodes, to determine when values are dead.
     Graph& m_graph;
-    // The first VirtualRegsiter to be used as a temporary.
-    uint32_t m_firstTemporary;
+    
+    // The size of the span of virtual registers that this code block will use.
+    unsigned m_highWatermark;
     
     // For every virtual register that has been allocated (either currently alive, or in
     // the free list), we keep a count of the number of remaining uses until it is dead

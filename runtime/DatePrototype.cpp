@@ -27,6 +27,8 @@
 #include "DateConversion.h"
 #include "DateInstance.h"
 #include "Error.h"
+#include "JSDateMath.h"
+#include "JSGlobalObject.h"
 #include "JSString.h"
 #include "JSStringBuilder.h"
 #include "Lookup.h"
@@ -42,7 +44,6 @@
 #include <stdlib.h>
 #include <time.h>
 #include <wtf/Assertions.h>
-#include <wtf/DateMath.h>
 #include <wtf/MathExtras.h>
 #include <wtf/StringExtras.h>
 #include <wtf/UnusedParam.h>
@@ -125,7 +126,6 @@ namespace JSC {
 
 enum LocaleDateTimeFormat { LocaleDateAndTime, LocaleDate, LocaleTime };
  
-
 // FIXME: Since this is superior to the strftime-based version, why limit this to PLATFORM(MAC)?
 // Instead we should consider using this whenever USE(CF) is true.
 
@@ -150,13 +150,13 @@ static JSCell* formatLocaleDate(ExecState* exec, DateInstance*, double timeInMil
     bool useCustomFormat = false;
     UString customFormatString;
 
-    UString arg0String = exec->argument(0).toString(exec);
+    UString arg0String = exec->argument(0).toString(exec)->value(exec);
     if (arg0String == "custom" && !exec->argument(1).isUndefined()) {
         useCustomFormat = true;
-        customFormatString = exec->argument(1).toString(exec);
+        customFormatString = exec->argument(1).toString(exec)->value(exec);
     } else if (format == LocaleDateAndTime && !exec->argument(1).isUndefined()) {
         dateStyle = styleFromArgString(arg0String, dateStyle);
-        timeStyle = styleFromArgString(exec->argument(1).toString(exec), timeStyle);
+        timeStyle = styleFromArgString(exec->argument(1).toString(exec)->value(exec), timeStyle);
     } else if (format != LocaleTime && !exec->argument(0).isUndefined())
         dateStyle = styleFromArgString(arg0String, dateStyle);
     else if (format != LocaleDate && !exec->argument(0).isUndefined())
@@ -190,7 +190,6 @@ static JSCell* formatLocaleDate(ExecState* exec, DateInstance*, double timeInMil
 
     return jsNontrivialString(exec, UString(buffer, length));
 }
-
 
 // Converts a list of arguments sent to a Date member function into milliseconds, updating
 // ms (representing milliseconds) and t (representing the rest of the date structure) appropriately.
@@ -283,7 +282,7 @@ static bool fillStructuresUsingDateArgs(ExecState *exec, int maxArgs, double *ms
     return ok;
 }
 
-const ClassInfo DatePrototype::s_info = {"Date", &DateInstance::s_info, 0, ExecState::dateTable};
+const ClassInfo DatePrototype::s_info = {"Date", &DateInstance::s_info, 0, ExecState::dateTable, CREATE_METHOD_TABLE(DatePrototype)};
 
 /* Source for DatePrototype.lut.h
 @begin dateTable
@@ -338,24 +337,27 @@ const ClassInfo DatePrototype::s_info = {"Date", &DateInstance::s_info, 0, ExecS
 
 // ECMA 15.9.4
 
-DatePrototype::DatePrototype(ExecState* exec, JSGlobalObject* globalObject, Structure* structure)
+DatePrototype::DatePrototype(ExecState* exec, Structure* structure)
     : DateInstance(exec, structure)
 {
+}
+
+void DatePrototype::finishCreation(ExecState* exec, JSGlobalObject*)
+{
+    Base::finishCreation(exec->globalData());
     ASSERT(inherits(&s_info));
 
     // The constructor will be added later, after DateConstructor has been built.
-    putAnonymousValue(exec->globalData(), 0, globalObject);
 }
 
-bool DatePrototype::getOwnPropertySlot(ExecState* exec, const Identifier& propertyName, PropertySlot& slot)
+bool DatePrototype::getOwnPropertySlot(JSCell* cell, ExecState* exec, const Identifier& propertyName, PropertySlot& slot)
 {
-    return getStaticFunctionSlot<JSObject>(exec, ExecState::dateTable(exec), this, propertyName, slot);
+    return getStaticFunctionSlot<JSObject>(exec, ExecState::dateTable(exec), jsCast<DatePrototype*>(cell), propertyName, slot);
 }
 
-
-bool DatePrototype::getOwnPropertyDescriptor(ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
+bool DatePrototype::getOwnPropertyDescriptor(JSObject* object, ExecState* exec, const Identifier& propertyName, PropertyDescriptor& descriptor)
 {
-    return getStaticFunctionDescriptor<JSObject>(exec, ExecState::dateTable(exec), this, propertyName, descriptor);
+    return getStaticFunctionDescriptor<JSObject>(exec, ExecState::dateTable(exec), jsCast<DatePrototype*>(object), propertyName, descriptor);
 }
 
 // Functions
@@ -403,14 +405,23 @@ EncodedJSValue JSC_HOST_CALL dateProtoFuncToISOString(ExecState* exec)
         return throwVMTypeError(exec);
     
     DateInstance* thisDateObj = asDateInstance(thisValue); 
-    
+    if (!isfinite(thisDateObj->internalNumber()))
+        return throwVMError(exec, createRangeError(exec, "Invalid Date"));
+
     const GregorianDateTime* gregorianDateTime = thisDateObj->gregorianDateTimeUTC(exec);
     if (!gregorianDateTime)
         return JSValue::encode(jsNontrivialString(exec, "Invalid Date"));
-    // Maximum amount of space we need in buffer: 6 (max. digits in year) + 2 * 5 (2 characters each for month, day, hour, minute, second) + 4 (. + 3 digits for milliseconds)
-    // 6 for formatting and one for null termination = 27.  We add one extra character to allow us to force null termination.
-    char buffer[28];
-    snprintf(buffer, sizeof(buffer) - 1, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", 1900 + gregorianDateTime->year, gregorianDateTime->month + 1, gregorianDateTime->monthDay, gregorianDateTime->hour, gregorianDateTime->minute, gregorianDateTime->second, static_cast<int>(fmod(thisDateObj->internalNumber(), 1000)));
+    // Maximum amount of space we need in buffer: 7 (max. digits in year) + 2 * 5 (2 characters each for month, day, hour, minute, second) + 4 (. + 3 digits for milliseconds)
+    // 6 for formatting and one for null termination = 28. We add one extra character to allow us to force null termination.
+    char buffer[29];
+    // If the year is outside the bounds of 0 and 9999 inclusive we want to use the extended year format (ES 15.9.1.15.1).
+    int ms = static_cast<int>(fmod(thisDateObj->internalNumber(), msPerSecond));
+    if (ms < 0)
+        ms += msPerSecond;
+    if (gregorianDateTime->year > 8099 || gregorianDateTime->year < -1900)
+        snprintf(buffer, sizeof(buffer) - 1, "%+07d-%02d-%02dT%02d:%02d:%02d.%03dZ", 1900 + gregorianDateTime->year, gregorianDateTime->month + 1, gregorianDateTime->monthDay, gregorianDateTime->hour, gregorianDateTime->minute, gregorianDateTime->second, ms);
+    else
+        snprintf(buffer, sizeof(buffer) - 1, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", 1900 + gregorianDateTime->year, gregorianDateTime->month + 1, gregorianDateTime->monthDay, gregorianDateTime->hour, gregorianDateTime->minute, gregorianDateTime->second, ms);
     buffer[sizeof(buffer) - 1] = 0;
     return JSValue::encode(jsNontrivialString(exec, buffer));
 }

@@ -29,42 +29,43 @@
 #include "config.h"
 #include "InitializeThreading.h"
 
+#include "ExecutableAllocator.h"
 #include "Heap.h"
-#include "dtoa.h"
+#include "Options.h"
 #include "Identifier.h"
+#include "JSDateMath.h"
 #include "JSGlobalObject.h"
 #include "UString.h"
-#include <wtf/DateMath.h>
+#include "WriteBarrier.h"
+#include <wtf/dtoa.h>
 #include <wtf/Threading.h>
-#include <wtf/WTFThreadData.h>
+#include <wtf/dtoa/cached-powers.h>
 
 using namespace WTF;
 
 namespace JSC {
 
-#if OS(DARWIN) && ENABLE(JSC_MULTIPLE_THREADS)
+#if OS(DARWIN)
 static pthread_once_t initializeThreadingKeyOnce = PTHREAD_ONCE_INIT;
 #endif
 
 static void initializeThreadingOnce()
 {
-    // StringImpl::empty() does not construct its static string in a threadsafe fashion,
-    // so ensure it has been initialized from here.
-    StringImpl::empty();
-
+    WTF::double_conversion::initialize();
     WTF::initializeThreading();
-    wtfThreadData();
-    JSGlobalData::storeVPtrs();
-#if ENABLE(JSC_MULTIPLE_THREADS)
-    s_dtoaP5Mutex = new Mutex;
-    initializeDates();
-    RegisterFile::initializeThreading();
+    Options::initializeOptions();
+#if ENABLE(WRITE_BARRIER_PROFILING)
+    WriteBarrierCounters::initialize();
 #endif
+#if ENABLE(ASSEMBLER)
+    ExecutableAllocator::initializeAllocator();
+#endif
+    RegisterFile::initializeThreading();
 }
 
 void initializeThreading()
 {
-#if OS(DARWIN) && ENABLE(JSC_MULTIPLE_THREADS)
+#if OS(DARWIN)
     pthread_once(&initializeThreadingKeyOnce, initializeThreadingOnce);
 #else
     static bool initializedThreading = false;

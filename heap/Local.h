@@ -57,13 +57,13 @@ private:
 };
 
 template <typename T> inline Local<T>::Local(JSGlobalData& globalData, ExternalType value)
-    : Handle<T>(globalData.allocateLocalHandle())
+    : Handle<T>(globalData.heap.handleStack()->push())
 {
     set(value);
 }
 
 template <typename T> inline Local<T>::Local(JSGlobalData& globalData, Handle<T> other)
-    : Handle<T>(globalData.allocateLocalHandle())
+    : Handle<T>(globalData.heap.handleStack()->push())
 {
     set(other.get());
 }
@@ -94,7 +94,6 @@ template <typename T> inline Local<T>& Local<T>::operator=(Handle<T> other)
 template <typename T> inline void Local<T>::set(ExternalType externalType)
 {
     ASSERT(slot());
-    ASSERT(!HandleTypes<T>::toJSValue(externalType) || !HandleTypes<T>::toJSValue(externalType).isCell() || Heap::isMarked(HandleTypes<T>::toJSValue(externalType).asCell()));
     *slot() = externalType;
 }
 
@@ -103,7 +102,7 @@ template <typename T, unsigned inlineCapacity = 0> class LocalStack {
     typedef typename Handle<T>::ExternalType ExternalType;
 public:
     LocalStack(JSGlobalData& globalData)
-        : m_globalData(&globalData)
+        : m_globalData(globalData)
         , m_count(0)
     {
     }
@@ -123,7 +122,7 @@ public:
     void push(ExternalType value)
     {
         if (m_count == m_stack.size())
-            m_stack.append(Local<T>(*m_globalData, value));
+            m_stack.append(Local<T>(m_globalData, value));
         else
             m_stack[m_count] = value;
         m_count++;
@@ -133,7 +132,7 @@ public:
     unsigned size() const { return m_count; }
 
 private:
-    RefPtr<JSGlobalData> m_globalData;
+    JSGlobalData& m_globalData;
     Vector<Local<T>, inlineCapacity> m_stack;
     unsigned m_count;
 };

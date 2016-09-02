@@ -42,9 +42,15 @@ class Heap;
 
 class GCActivityCallback {
 public:
-    virtual ~GCActivityCallback() {}
-    virtual void operator()() {}
-    virtual void synchronize() {}
+    virtual ~GCActivityCallback() { }
+    virtual void didAllocate(size_t) { }
+    virtual void willCollect() { }
+    virtual void synchronize() { }
+    virtual void cancel() { }
+    virtual void didStartVMShutdown() { }
+    virtual void invalidate() { }
+
+    static bool s_shouldCreateGCTimer;
 
 protected:
     GCActivityCallback() {}
@@ -54,17 +60,21 @@ struct DefaultGCActivityCallbackPlatformData;
 
 class DefaultGCActivityCallback : public GCActivityCallback {
 public:
-    static PassOwnPtr<DefaultGCActivityCallback> create(Heap*);
+    static DefaultGCActivityCallback* create(Heap*);
 
     DefaultGCActivityCallback(Heap*);
-    ~DefaultGCActivityCallback();
+    JS_EXPORT_PRIVATE virtual ~DefaultGCActivityCallback();
 
-    void operator()();
-    void synchronize();
+    JS_EXPORT_PRIVATE virtual void didAllocate(size_t);
+    JS_EXPORT_PRIVATE virtual void willCollect();
+    JS_EXPORT_PRIVATE virtual void synchronize();
+    JS_EXPORT_PRIVATE virtual void cancel();
+    JS_EXPORT_PRIVATE virtual void didStartVMShutdown();
+    JS_EXPORT_PRIVATE virtual void invalidate();
 
 #if USE(CF)
 protected:
-    DefaultGCActivityCallback(Heap*, CFRunLoopRef);
+    JS_EXPORT_PRIVATE DefaultGCActivityCallback(Heap*, CFRunLoopRef);
     void commonConstructor(Heap*, CFRunLoopRef);
 #endif
 
@@ -72,9 +82,12 @@ private:
     OwnPtr<DefaultGCActivityCallbackPlatformData> d;
 };
 
-inline PassOwnPtr<DefaultGCActivityCallback> DefaultGCActivityCallback::create(Heap* heap)
+inline DefaultGCActivityCallback* DefaultGCActivityCallback::create(Heap* heap)
 {
-    return adoptPtr(new DefaultGCActivityCallback(heap));
+    // Big hack.
+    if (GCActivityCallback::s_shouldCreateGCTimer)
+        return new DefaultGCActivityCallback(heap);
+    return 0;
 }
 
 }

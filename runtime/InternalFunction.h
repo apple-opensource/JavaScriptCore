@@ -24,38 +24,36 @@
 #ifndef InternalFunction_h
 #define InternalFunction_h
 
-#include "JSObjectWithGlobalObject.h"
+#include "JSObject.h"
 #include "Identifier.h"
 
 namespace JSC {
 
     class FunctionPrototype;
 
-    class InternalFunction : public JSObjectWithGlobalObject {
+    class InternalFunction : public JSNonFinalObject {
     public:
+        typedef JSNonFinalObject Base;
+
         static JS_EXPORTDATA const ClassInfo s_info;
 
-        const UString& name(ExecState*);
+        JS_EXPORT_PRIVATE const UString& name(ExecState*);
         const UString displayName(ExecState*);
         const UString calculatedDisplayName(ExecState*);
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue proto) 
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue proto) 
         { 
-            return Structure::create(globalData, proto, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info); 
+            return Structure::create(globalData, globalObject, proto, TypeInfo(ObjectType, StructureFlags), &s_info); 
         }
 
     protected:
         static const unsigned StructureFlags = ImplementsHasInstance | JSObject::StructureFlags;
 
-        // Only used to allow us to determine the JSFunction vptr
-        InternalFunction(VPtrStealingHackType);
+        JS_EXPORT_PRIVATE InternalFunction(JSGlobalObject*, Structure*);
 
-        InternalFunction(JSGlobalData*, JSGlobalObject*, Structure*, const Identifier&);
+        JS_EXPORT_PRIVATE void finishCreation(JSGlobalData&, const Identifier& name);
 
-    private:
-        virtual CallType getCallData(CallData&) = 0;
-
-        virtual void vtableAnchor();
+        static CallType getCallData(JSCell*, CallData&);
     };
 
     InternalFunction* asInternalFunction(JSValue);

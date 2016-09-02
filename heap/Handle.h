@@ -48,7 +48,7 @@ template<typename KeyType, typename MappedType, typename FinalizerCallback, type
 
 class HandleBase {
     template <typename T> friend class Weak;
-    friend class HandleHeap;
+    friend class HandleSet;
     friend struct JSCallbackObjectData;
     template <typename KeyType, typename MappedType, typename FinalizerCallback, typename HashArg, typename KeyTraitsArg> friend class WeakGCMap;
 
@@ -59,6 +59,8 @@ public:
     typedef JSValue (HandleBase::*UnspecifiedBoolType);
     operator UnspecifiedBoolType*() const { return (m_slot && *m_slot) ? reinterpret_cast<UnspecifiedBoolType*>(1) : 0; }
 
+    HandleSlot slot() const { return m_slot; }
+
 protected:
     HandleBase(HandleSlot slot)
         : m_slot(slot)
@@ -67,7 +69,6 @@ protected:
     
     void swap(HandleBase& other) { std::swap(m_slot, other.m_slot); }
 
-    HandleSlot slot() const { return m_slot; }
     void setSlot(HandleSlot slot)
     {
         m_slot = slot;
@@ -80,31 +81,19 @@ private:
 template <typename Base, typename T> struct HandleConverter {
     T* operator->()
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!static_cast<const Base*>(this)->get() || !static_cast<const Base*>(this)->get()->isZombie());
-#endif
         return static_cast<Base*>(this)->get();
     }
     const T* operator->() const
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!static_cast<const Base*>(this)->get() || !static_cast<const Base*>(this)->get()->isZombie());
-#endif
         return static_cast<const Base*>(this)->get();
     }
 
     T* operator*()
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!static_cast<const Base*>(this)->get() || !static_cast<const Base*>(this)->get()->isZombie());
-#endif
         return static_cast<Base*>(this)->get();
     }
     const T* operator*() const
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!static_cast<const Base*>(this)->get() || !static_cast<const Base*>(this)->get()->isZombie());
-#endif
         return static_cast<const Base*>(this)->get();
     }
 };
@@ -119,9 +108,6 @@ template <typename Base> struct HandleConverter<Base, Unknown> {
 private:
     JSValue jsValue() const
     {
-#if ENABLE(JSC_ZOMBIES)
-        ASSERT(!static_cast<const Base*>(this)->get() || !static_cast<const Base*>(this)->get().isZombie());
-#endif
         return static_cast<const Base*>(this)->get();
     }
 };
@@ -147,7 +133,8 @@ protected:
     }
     
 private:
-    friend class HandleHeap;
+    friend class HandleSet;
+    friend class WeakBlock;
 
     static Handle<T> wrapSlot(HandleSlot slot)
     {

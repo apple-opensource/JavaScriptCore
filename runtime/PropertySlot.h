@@ -212,15 +212,13 @@ namespace JSC {
 
         unsigned index() const { return m_data.index; }
 
-        JSValue thisValue() const { return m_thisValue; }
-
         GetValueFunc customGetter() const
         {
             ASSERT(m_cachedPropertyType == Custom);
             return m_getValue;
         }
     private:
-        JSValue functionGetter(ExecState*) const;
+        JS_EXPORT_PRIVATE JSValue functionGetter(ExecState*) const;
 
         GetValueFunc m_getValue;
         GetIndexValueFunc m_getIndexValue;

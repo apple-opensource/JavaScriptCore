@@ -27,6 +27,7 @@
 #define StructureChain_h
 
 #include "JSCell.h"
+#include "JSObject.h"
 #include "Structure.h"
 
 #include <wtf/OwnArrayPtr.h>
@@ -36,23 +37,48 @@
 
 namespace JSC {
 
+    class LLIntOffsetsExtractor;
     class Structure;
 
     class StructureChain : public JSCell {
         friend class JIT;
 
     public:
-        static StructureChain* create(JSGlobalData& globalData, Structure* head) { return new (&globalData) StructureChain(globalData, globalData.structureChainStructure.get(), head); }
-        WriteBarrier<Structure>* head() { return m_vector.get(); }
-        void visitChildren(SlotVisitor&);
+        typedef JSCell Base;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue prototype) { return Structure::create(globalData, prototype, TypeInfo(CompoundType, OverridesVisitChildren), 0, &s_info); }
+        static StructureChain* create(JSGlobalData& globalData, Structure* head)
+        { 
+            StructureChain* chain = new (NotNull, allocateCell<StructureChain>(globalData.heap)) StructureChain(globalData, globalData.structureChainStructure.get());
+            chain->finishCreation(globalData, head);
+            return chain;
+        }
+        WriteBarrier<Structure>* head() { return m_vector.get(); }
+        static void visitChildren(JSCell*, SlotVisitor&);
+
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue prototype) { return Structure::create(globalData, globalObject, prototype, TypeInfo(CompoundType, OverridesVisitChildren), &s_info); }
         
         static ClassInfo s_info;
 
+    protected:
+        void finishCreation(JSGlobalData& globalData, Structure* head)
+        {
+            Base::finishCreation(globalData);
+            size_t size = 0;
+            for (Structure* current = head; current; current = current->storedPrototype().isNull() ? 0 : asObject(current->storedPrototype())->structure())
+                ++size;
+    
+            m_vector = adoptArrayPtr(new WriteBarrier<Structure>[size + 1]);
+
+            size_t i = 0;
+            for (Structure* current = head; current; current = current->storedPrototype().isNull() ? 0 : asObject(current->storedPrototype())->structure())
+                m_vector[i++].set(globalData, this, current);
+        }
+
     private:
-        StructureChain(JSGlobalData&, Structure*, Structure* head);
-        ~StructureChain();
+        friend class LLIntOffsetsExtractor;
+        
+        StructureChain(JSGlobalData&, Structure*);
+        static void destroy(JSCell*);
         OwnArrayPtr<WriteBarrier<Structure> > m_vector;
     };
 

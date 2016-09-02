@@ -29,7 +29,6 @@
 
 #include "APICast.h"
 #include "APIShims.h"
-#include "Completion.h"
 #include "OpaqueJSString.h"
 #include "SourceCode.h"
 #include <interpreter/CallFrame.h>
@@ -51,18 +50,20 @@ JSValueRef JSEvaluateScript(JSContextRef ctx, JSStringRef script, JSObjectRef th
 
     // evaluate sets "this" to the global object if it is NULL
     JSGlobalObject* globalObject = exec->dynamicGlobalObject();
-    SourceCode source = makeSource(script->ustring(), sourceURL->ustring(), startingLineNumber);
-    Completion completion = evaluate(globalObject->globalExec(), globalObject->globalScopeChain(), source, jsThisObject);
+    SourceCode source = makeSource(script->ustring(), sourceURL->ustring(), TextPosition(OrdinalNumber::fromOneBasedInt(startingLineNumber), OrdinalNumber::first()));
 
-    if (completion.complType() == Throw) {
+    JSValue evaluationException;
+    JSValue returnValue = evaluate(globalObject->globalExec(), globalObject->globalScopeChain(), source, jsThisObject, &evaluationException);
+
+    if (evaluationException) {
         if (exception)
-            *exception = toRef(exec, completion.value());
+            *exception = toRef(exec, evaluationException);
         return 0;
     }
 
-    if (completion.value())
-        return toRef(exec, completion.value());
-    
+    if (returnValue)
+        return toRef(exec, returnValue);
+
     // happens, for example, when the only statement is an empty (';') statement
     return toRef(exec, jsUndefined());
 }
@@ -72,14 +73,17 @@ bool JSCheckScriptSyntax(JSContextRef ctx, JSStringRef script, JSStringRef sourc
     ExecState* exec = toJS(ctx);
     APIEntryShim entryShim(exec);
 
-    SourceCode source = makeSource(script->ustring(), sourceURL->ustring(), startingLineNumber);
-    Completion completion = checkSyntax(exec->dynamicGlobalObject()->globalExec(), source);
-    if (completion.complType() == Throw) {
+    SourceCode source = makeSource(script->ustring(), sourceURL->ustring(), TextPosition(OrdinalNumber::fromOneBasedInt(startingLineNumber), OrdinalNumber::first()));
+    
+    JSValue syntaxException;
+    bool isValidSyntax = checkSyntax(exec->dynamicGlobalObject()->globalExec(), source, &syntaxException);
+
+    if (!isValidSyntax) {
         if (exception)
-            *exception = toRef(exec, completion.value());
+            *exception = toRef(exec, syntaxException);
         return false;
     }
-    
+
     return true;
 }
 
@@ -96,13 +100,7 @@ void JSGarbageCollect(JSContextRef ctx)
     ExecState* exec = toJS(ctx);
     APIEntryShim entryShim(exec, false);
 
-    JSGlobalData& globalData = exec->globalData();
-    if (!globalData.heap.isBusy())
-        globalData.heap.collectAllGarbage();
-
-    // FIXME: Perhaps we should trigger a second mark and sweep
-    // once the garbage collector is done if this is called when
-    // the collector is busy.
+    exec->globalData().heap.reportAbandonedObjectGraph();
 }
 
 void JSReportExtraMemoryCost(JSContextRef ctx, size_t size)
@@ -110,4 +108,9 @@ void JSReportExtraMemoryCost(JSContextRef ctx, size_t size)
     ExecState* exec = toJS(ctx);
     APIEntryShim entryShim(exec);
     exec->globalData().heap.reportExtraMemoryCost(size);
+}
+
+void JSDisableGCTimer(void)
+{
+    GCActivityCallback::s_shouldCreateGCTimer = false;
 }

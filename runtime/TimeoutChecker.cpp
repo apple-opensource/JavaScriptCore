@@ -38,11 +38,7 @@
 #elif OS(WINDOWS)
 #include <windows.h>
 #else
-#include "CurrentTime.h"
-#endif
-
-#if PLATFORM(BREWMP)
-#include <AEEStdLib.h>
+#include <wtf/CurrentTime.h>
 #endif
 
 using namespace std;
@@ -84,18 +80,6 @@ static inline unsigned getCPUTime()
     GetThreadTimes(GetCurrentThread(), &creationTime, &exitTime, &kernelTime.fileTime, &userTime.fileTime);
     
     return userTime.fileTimeAsLong / 10000 + kernelTime.fileTimeAsLong / 10000;
-#elif OS(SYMBIAN)
-    RThread current;
-    TTimeIntervalMicroSeconds cpuTime;
-
-    TInt err = current.GetCpuTime(cpuTime);
-    ASSERT_WITH_MESSAGE(err == KErrNone, "GetCpuTime failed with %d", err);
-    return cpuTime.Int64() / 1000;
-#elif PLATFORM(BREWMP)
-    // This function returns a continuously and linearly increasing millisecond
-    // timer from the time the device was powered on.
-    // There is only one thread in BREW, so this is enough.
-    return GETUPTIMEMS();
 #else
     // FIXME: We should return the time the current thread has spent executing.
 
@@ -145,11 +129,11 @@ bool TimeoutChecker::didTimeOut(ExecState* exec)
     if (m_ticksUntilNextCheck == 0)
         m_ticksUntilNextCheck = ticksUntilFirstCheck;
     
-    if (exec->dynamicGlobalObject()->shouldInterruptScriptBeforeTimeout())
+    if (exec->dynamicGlobalObject()->globalObjectMethodTable()->shouldInterruptScriptBeforeTimeout(exec->dynamicGlobalObject()))
         return true;
 
     if (m_timeoutInterval && m_timeExecuting > m_timeoutInterval) {
-        if (exec->dynamicGlobalObject()->shouldInterruptScript())
+        if (exec->dynamicGlobalObject()->globalObjectMethodTable()->shouldInterruptScript(exec->dynamicGlobalObject()))
             return true;
         
         reset();

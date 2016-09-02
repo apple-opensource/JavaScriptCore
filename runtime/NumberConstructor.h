@@ -29,27 +29,38 @@ namespace JSC {
 
     class NumberConstructor : public InternalFunction {
     public:
-        NumberConstructor(ExecState*, JSGlobalObject*, Structure*, NumberPrototype*);
+        typedef InternalFunction Base;
 
-        virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
-        virtual bool getOwnPropertyDescriptor(ExecState*, const Identifier&, PropertyDescriptor&);
+        static NumberConstructor* create(ExecState* exec, JSGlobalObject* globalObject, Structure* structure, NumberPrototype* numberPrototype)
+        {
+            NumberConstructor* constructor = new (NotNull, allocateCell<NumberConstructor>(*exec->heap())) NumberConstructor(globalObject, structure);
+            constructor->finishCreation(exec, numberPrototype);
+            return constructor;
+        }
+
+        static void put(JSCell*, ExecState*, const Identifier& propertyName, JSValue, PutPropertySlot&);
+
+        static bool getOwnPropertySlot(JSCell*, ExecState*, const Identifier&, PropertySlot&);
+        static bool getOwnPropertyDescriptor(JSObject*, ExecState*, const Identifier&, PropertyDescriptor&);
         JSValue getValueProperty(ExecState*, int token) const;
 
         static const ClassInfo s_info;
 
-        static Structure* createStructure(JSGlobalData& globalData, JSValue proto) 
+        static Structure* createStructure(JSGlobalData& globalData, JSGlobalObject* globalObject, JSValue proto) 
         { 
-            return Structure::create(globalData, proto, TypeInfo(ObjectType, StructureFlags), AnonymousSlotCount, &s_info); 
+            return Structure::create(globalData, globalObject, proto, TypeInfo(ObjectType, StructureFlags), &s_info); 
         }
 
         enum { NaNValue, NegInfinity, PosInfinity, MaxValue, MinValue };
 
     protected:
+        void finishCreation(ExecState*, NumberPrototype*);
         static const unsigned StructureFlags = OverridesGetOwnPropertySlot | ImplementsHasInstance | InternalFunction::StructureFlags;
 
     private:
-        virtual ConstructType getConstructData(ConstructData&);
-        virtual CallType getCallData(CallData&);
+        NumberConstructor(JSGlobalObject*, Structure*);
+        static ConstructType getConstructData(JSCell*, ConstructData&);
+        static CallType getCallData(JSCell*, CallData&);
     };
 
 } // namespace JSC

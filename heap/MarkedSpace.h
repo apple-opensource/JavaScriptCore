@@ -23,8 +23,10 @@
 #define MarkedSpace_h
 
 #include "MachineStackMarker.h"
+#include "MarkedAllocator.h"
 #include "MarkedBlock.h"
-#include "PageAllocationAligned.h"
+#include "MarkedBlockSet.h"
+#include <wtf/PageAllocationAligned.h>
 #include <wtf/Bitmap.h>
 #include <wtf/DoublyLinkedList.h>
 #include <wtf/FixedArray.h>
@@ -32,156 +34,156 @@
 #include <wtf/Noncopyable.h>
 #include <wtf/Vector.h>
 
-#define ASSERT_CLASS_FITS_IN_CELL(class) COMPILE_ASSERT(sizeof(class) < MarkedSpace::maxCellSize, class_fits_in_cell)
+#define ASSERT_CLASS_FITS_IN_CELL(class) COMPILE_ASSERT(sizeof(class) <= MarkedSpace::maxCellSize, class_fits_in_cell)
 
 namespace JSC {
 
-    class Heap;
-    class JSCell;
-    class JSGlobalData;
-    class LiveObjectIterator;
-    class MarkStack;
-    class WeakGCHandle;
-    typedef MarkStack SlotVisitor;
+class Heap;
+class JSCell;
+class LiveObjectIterator;
+class LLIntOffsetsExtractor;
+class WeakGCHandle;
+class SlotVisitor;
 
-    class MarkedSpace {
-        WTF_MAKE_NONCOPYABLE(MarkedSpace);
-    public:
-        // Currently public for use in assertions.
-        static const size_t maxCellSize = 1024;
+class MarkedSpace {
+    WTF_MAKE_NONCOPYABLE(MarkedSpace);
+public:
+    static const size_t maxCellSize = 2048;
 
-        static Heap* heap(JSCell*);
+    MarkedSpace(Heap*);
 
-        static bool isMarked(const JSCell*);
-        static bool testAndSetMarked(const JSCell*);
-        static void setMarked(const JSCell*);
+    MarkedAllocator& firstAllocator();
+    MarkedAllocator& allocatorFor(size_t);
+    MarkedAllocator& allocatorFor(MarkedBlock*);
+    MarkedAllocator& destructorAllocatorFor(size_t);
+    void* allocateWithDestructor(size_t);
+    void* allocateWithoutDestructor(size_t);
+    
+    void resetAllocators();
 
-        MarkedSpace(JSGlobalData*);
-        void destroy();
+    MarkedBlockSet& blocks() { return m_blocks; }
+    
+    void canonicalizeCellLivenessData();
 
-        JSGlobalData* globalData();
+    typedef HashSet<MarkedBlock*>::iterator BlockIterator;
+    
+    template<typename Functor> typename Functor::ReturnType forEachCell(Functor&);
+    template<typename Functor> typename Functor::ReturnType forEachCell();
+    template<typename Functor> typename Functor::ReturnType forEachBlock(Functor&);
+    template<typename Functor> typename Functor::ReturnType forEachBlock();
+    
+    void shrink();
+    void freeBlocks(MarkedBlock* head);
 
-        size_t highWaterMark();
-        void setHighWaterMark(size_t);
+    void didAddBlock(MarkedBlock*);
+    void didConsumeFreeList(MarkedBlock*);
 
-        void* allocate(size_t);
+    bool isPagedOut(double deadline);
 
-        void clearMarks();
-        void markRoots();
-        void reset();
-        void sweep();
-        void shrink();
+private:
+    friend class LLIntOffsetsExtractor;
+    
+    // [ 32... 256 ]
+    static const size_t preciseStep = MarkedBlock::atomSize;
+    static const size_t preciseCutoff = 256;
+    static const size_t preciseCount = preciseCutoff / preciseStep;
 
-        size_t size() const;
-        size_t capacity() const;
-        size_t objectCount() const;
+    // [ 512... 2048 ]
+    static const size_t impreciseStep = preciseCutoff;
+    static const size_t impreciseCutoff = maxCellSize;
+    static const size_t impreciseCount = impreciseCutoff / impreciseStep;
 
-        bool contains(const void*);
-
-        template<typename Functor> void forEach(Functor&);
-
-    private:
-        // [ 8, 16... 128 )
-        static const size_t preciseStep = MarkedBlock::atomSize;
-        static const size_t preciseCutoff = 128;
-        static const size_t preciseCount = preciseCutoff / preciseStep - 1;
-
-        // [ 128, 256... 1024 )
-        static const size_t impreciseStep = preciseCutoff;
-        static const size_t impreciseCutoff = maxCellSize;
-        static const size_t impreciseCount = impreciseCutoff / impreciseStep - 1;
-
-        typedef HashSet<MarkedBlock*>::iterator BlockIterator;
-
-        struct SizeClass {
-            SizeClass();
-            void reset();
-
-            MarkedBlock* nextBlock;
-            DoublyLinkedList<MarkedBlock> blockList;
-            size_t cellSize;
-        };
-
-        MarkedBlock* allocateBlock(SizeClass&);
-        void freeBlocks(DoublyLinkedList<MarkedBlock>&);
-
-        SizeClass& sizeClassFor(size_t);
-        void* allocateFromSizeClass(SizeClass&);
-
-        void clearMarks(MarkedBlock*);
-
-        SizeClass m_preciseSizeClasses[preciseCount];
-        SizeClass m_impreciseSizeClasses[impreciseCount];
-        HashSet<MarkedBlock*> m_blocks;
-        size_t m_waterMark;
-        size_t m_highWaterMark;
-        JSGlobalData* m_globalData;
+    struct Subspace {
+        FixedArray<MarkedAllocator, preciseCount> preciseAllocators;
+        FixedArray<MarkedAllocator, impreciseCount> impreciseAllocators;
     };
 
-    inline Heap* MarkedSpace::heap(JSCell* cell)
-    {
-        return MarkedBlock::blockFor(cell)->heap();
+    Subspace m_destructorSpace;
+    Subspace m_normalSpace;
+
+    Heap* m_heap;
+    MarkedBlockSet m_blocks;
+};
+
+template<typename Functor> inline typename Functor::ReturnType MarkedSpace::forEachCell(Functor& functor)
+{
+    canonicalizeCellLivenessData();
+
+    BlockIterator end = m_blocks.set().end();
+    for (BlockIterator it = m_blocks.set().begin(); it != end; ++it)
+        (*it)->forEachCell(functor);
+    return functor.returnValue();
+}
+
+template<typename Functor> inline typename Functor::ReturnType MarkedSpace::forEachCell()
+{
+    Functor functor;
+    return forEachCell(functor);
+}
+
+inline MarkedAllocator& MarkedSpace::firstAllocator()
+{
+    return m_normalSpace.preciseAllocators[0];
+}
+
+inline MarkedAllocator& MarkedSpace::allocatorFor(size_t bytes)
+{
+    ASSERT(bytes && bytes <= maxCellSize);
+    if (bytes <= preciseCutoff)
+        return m_normalSpace.preciseAllocators[(bytes - 1) / preciseStep];
+    return m_normalSpace.impreciseAllocators[(bytes - 1) / impreciseStep];
+}
+
+inline MarkedAllocator& MarkedSpace::allocatorFor(MarkedBlock* block)
+{
+    if (block->cellsNeedDestruction())
+        return destructorAllocatorFor(block->cellSize());
+    return allocatorFor(block->cellSize());
+}
+
+inline MarkedAllocator& MarkedSpace::destructorAllocatorFor(size_t bytes)
+{
+    ASSERT(bytes && bytes <= maxCellSize);
+    if (bytes <= preciseCutoff)
+        return m_destructorSpace.preciseAllocators[(bytes - 1) / preciseStep];
+    return m_destructorSpace.impreciseAllocators[(bytes - 1) / impreciseStep];
+}
+
+inline void* MarkedSpace::allocateWithoutDestructor(size_t bytes)
+{
+    return allocatorFor(bytes).allocate();
+}
+
+inline void* MarkedSpace::allocateWithDestructor(size_t bytes)
+{
+    return destructorAllocatorFor(bytes).allocate();
+}
+
+template <typename Functor> inline typename Functor::ReturnType MarkedSpace::forEachBlock(Functor& functor)
+{
+    for (size_t i = 0; i < preciseCount; ++i) {
+        m_normalSpace.preciseAllocators[i].forEachBlock(functor);
+        m_destructorSpace.preciseAllocators[i].forEachBlock(functor);
     }
 
-    inline bool MarkedSpace::isMarked(const JSCell* cell)
-    {
-        return MarkedBlock::blockFor(cell)->isMarked(cell);
+    for (size_t i = 0; i < impreciseCount; ++i) {
+        m_normalSpace.impreciseAllocators[i].forEachBlock(functor);
+        m_destructorSpace.impreciseAllocators[i].forEachBlock(functor);
     }
 
-    inline bool MarkedSpace::testAndSetMarked(const JSCell* cell)
-    {
-        return MarkedBlock::blockFor(cell)->testAndSetMarked(cell);
-    }
+    return functor.returnValue();
+}
 
-    inline void MarkedSpace::setMarked(const JSCell* cell)
-    {
-        MarkedBlock::blockFor(cell)->setMarked(cell);
-    }
+template <typename Functor> inline typename Functor::ReturnType MarkedSpace::forEachBlock()
+{
+    Functor functor;
+    return forEachBlock(functor);
+}
 
-    inline bool MarkedSpace::contains(const void* x)
-    {
-        if (!MarkedBlock::isAtomAligned(x))
-            return false;
-
-        MarkedBlock* block = MarkedBlock::blockFor(x);
-        if (!block || !m_blocks.contains(block))
-            return false;
-
-        return block->contains(x);
-    }
-
-    template <typename Functor> inline void MarkedSpace::forEach(Functor& functor)
-    {
-        BlockIterator end = m_blocks.end();
-        for (BlockIterator it = m_blocks.begin(); it != end; ++it)
-            (*it)->forEach(functor);
-    }
-
-    inline JSGlobalData* MarkedSpace::globalData()
-    {
-        return m_globalData;
-    }
-
-    inline size_t MarkedSpace::highWaterMark()
-    {
-        return m_highWaterMark;
-    }
-
-    inline void MarkedSpace::setHighWaterMark(size_t highWaterMark)
-    {
-        m_highWaterMark = highWaterMark;
-    }
-
-    inline MarkedSpace::SizeClass::SizeClass()
-        : nextBlock(0)
-        , cellSize(0)
-    {
-    }
-
-    inline void MarkedSpace::SizeClass::reset()
-    {
-        nextBlock = blockList.head();
-    }
+inline void MarkedSpace::didAddBlock(MarkedBlock* block)
+{
+    m_blocks.add(block);
+}
 
 } // namespace JSC
 

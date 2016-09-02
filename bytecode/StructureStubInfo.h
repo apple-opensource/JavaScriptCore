@@ -26,8 +26,11 @@
 #ifndef StructureStubInfo_h
 #define StructureStubInfo_h
 
+#include <wtf/Platform.h>
+
 #if ENABLE(JIT)
 
+#include "CodeOrigin.h"
 #include "Instruction.h"
 #include "MacroAssembler.h"
 #include "Opcode.h"
@@ -35,25 +38,59 @@
 
 namespace JSC {
 
+    class PolymorphicPutByIdList;
+
     enum AccessType {
         access_get_by_id_self,
         access_get_by_id_proto,
         access_get_by_id_chain,
         access_get_by_id_self_list,
         access_get_by_id_proto_list,
-        access_put_by_id_transition,
+        access_put_by_id_transition_normal,
+        access_put_by_id_transition_direct,
         access_put_by_id_replace,
-        access_get_by_id,
-        access_put_by_id,
+        access_put_by_id_list,
+        access_unset,
         access_get_by_id_generic,
         access_put_by_id_generic,
         access_get_array_length,
         access_get_string_length,
     };
 
+    inline bool isGetByIdAccess(AccessType accessType)
+    {
+        switch (accessType) {
+        case access_get_by_id_self:
+        case access_get_by_id_proto:
+        case access_get_by_id_chain:
+        case access_get_by_id_self_list:
+        case access_get_by_id_proto_list:
+        case access_get_by_id_generic:
+        case access_get_array_length:
+        case access_get_string_length:
+            return true;
+        default:
+            return false;
+        }
+    }
+    
+    inline bool isPutByIdAccess(AccessType accessType)
+    {
+        switch (accessType) {
+        case access_put_by_id_transition_normal:
+        case access_put_by_id_transition_direct:
+        case access_put_by_id_replace:
+        case access_put_by_id_list:
+        case access_put_by_id_generic:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     struct StructureStubInfo {
-        StructureStubInfo(AccessType accessType)
-            : accessType(accessType)
+        StructureStubInfo()
+            : accessType(access_unset)
             , seen(false)
         {
         }
@@ -85,8 +122,8 @@ namespace JSC {
         {
             accessType = access_get_by_id_self_list;
 
-            u.getByIdProtoList.structureList = structureList;
-            u.getByIdProtoList.listSize = listSize;
+            u.getByIdSelfList.structureList = structureList;
+            u.getByIdSelfList.listSize = listSize;
         }
 
         void initGetByIdProtoList(PolymorphicAccessStructureList* structureList, int listSize)
@@ -99,9 +136,12 @@ namespace JSC {
 
         // PutById*
 
-        void initPutByIdTransition(JSGlobalData& globalData, JSCell* owner, Structure* previousStructure, Structure* structure, StructureChain* chain)
+        void initPutByIdTransition(JSGlobalData& globalData, JSCell* owner, Structure* previousStructure, Structure* structure, StructureChain* chain, bool isDirect)
         {
-            accessType = access_put_by_id_transition;
+            if (isDirect)
+                accessType = access_put_by_id_transition_direct;
+            else
+                accessType = access_put_by_id_transition_normal;
 
             u.putByIdTransition.previousStructure.set(globalData, owner, previousStructure);
             u.putByIdTransition.structure.set(globalData, owner, structure);
@@ -114,10 +154,24 @@ namespace JSC {
     
             u.putByIdReplace.baseObjectStructure.set(globalData, owner, baseObjectStructure);
         }
+        
+        void initPutByIdList(PolymorphicPutByIdList* list)
+        {
+            accessType = access_put_by_id_list;
+            u.putByIdList.list = list;
+        }
+        
+        void reset()
+        {
+            deref();
+            accessType = access_unset;
+            stubRoutine = MacroAssemblerCodeRef();
+        }
 
         void deref();
-        void visitAggregate(SlotVisitor&);
 
+        bool visitWeakReferences();
+        
         bool seenOnce()
         {
             return seen;
@@ -127,11 +181,70 @@ namespace JSC {
         {
             seen = true;
         }
+        
+        unsigned bytecodeIndex;
 
-        int accessType : 31;
-        int seen : 1;
+        int8_t accessType;
+        int8_t seen;
+
+#if ENABLE(DFG_JIT)
+        CodeOrigin codeOrigin;
+#endif // ENABLE(DFG_JIT)
 
         union {
+            struct {
+                int8_t registersFlushed;
+                int8_t baseGPR;
+#if USE(JSVALUE32_64)
+                int8_t valueTagGPR;
+#endif
+                int8_t valueGPR;
+                int8_t scratchGPR;
+                int16_t deltaCallToDone;
+                int16_t deltaCallToStructCheck;
+                int16_t deltaCallToSlowCase;
+                int16_t deltaCheckImmToCall;
+#if USE(JSVALUE64)
+                int16_t deltaCallToLoadOrStore;
+#else
+                int16_t deltaCallToTagLoadOrStore;
+                int16_t deltaCallToPayloadLoadOrStore;
+#endif
+            } dfg;
+            struct {
+                union {
+                    struct {
+                        int16_t structureToCompare;
+                        int16_t structureCheck;
+#if USE(JSVALUE64)
+                        int16_t displacementLabel;
+#else
+                        int16_t displacementLabel1;
+                        int16_t displacementLabel2;
+#endif
+                        int16_t putResult;
+                        int16_t coldPathBegin;
+                    } get;
+                    struct {
+                        int16_t structureToCompare;
+#if USE(JSVALUE64)
+                        int16_t displacementLabel;
+#else
+                        int16_t displacementLabel1;
+                        int16_t displacementLabel2;
+#endif
+                    } put;
+                } u;
+                int16_t methodCheckProtoObj;
+                int16_t methodCheckProtoStructureToCompare;
+                int16_t methodCheckPutFunction;
+            } baseline;
+        } patch;
+
+        union {
+            struct {
+                // It would be unwise to put anything here, as it will surely be overwritten.
+            } unset;
             struct {
                 WriteBarrierBase<Structure> baseObjectStructure;
             } getByIdSelf;
@@ -159,15 +272,28 @@ namespace JSC {
             struct {
                 WriteBarrierBase<Structure> baseObjectStructure;
             } putByIdReplace;
+            struct {
+                PolymorphicPutByIdList* list;
+            } putByIdList;
         } u;
 
-        CodeLocationLabel stubRoutine;
+        MacroAssemblerCodeRef stubRoutine;
         CodeLocationCall callReturnLocation;
         CodeLocationLabel hotPathBegin;
     };
 
+    inline void* getStructureStubInfoReturnLocation(StructureStubInfo* structureStubInfo)
+    {
+        return structureStubInfo->callReturnLocation.executableAddress();
+    }
+
+    inline unsigned getStructureStubInfoBytecodeIndex(StructureStubInfo* structureStubInfo)
+    {
+        return structureStubInfo->bytecodeIndex;
+    }
+
 } // namespace JSC
 
-#endif
+#endif // ENABLE(JIT)
 
 #endif // StructureStubInfo_h

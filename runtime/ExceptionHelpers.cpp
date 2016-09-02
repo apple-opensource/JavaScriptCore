@@ -41,39 +41,59 @@
 
 namespace JSC {
 
-class InterruptedExecutionError : public JSNonFinalObject {
-public:
-    InterruptedExecutionError(JSGlobalData* globalData)
-        : JSNonFinalObject(*globalData, globalData->interruptedExecutionErrorStructure.get())
-    {
-    }
+ASSERT_HAS_TRIVIAL_DESTRUCTOR(InterruptedExecutionError);
 
-    virtual ComplType exceptionType() const { return Interrupted; }
+const ClassInfo InterruptedExecutionError::s_info = { "InterruptedExecutionError", &Base::s_info, 0, 0, CREATE_METHOD_TABLE(InterruptedExecutionError) };
 
-    virtual UString toString(ExecState*) const { return "JavaScript execution exceeded timeout."; }
-};
+JSValue InterruptedExecutionError::defaultValue(const JSObject*, ExecState* exec, PreferredPrimitiveType hint)
+{
+    if (hint == PreferString)
+        return jsNontrivialString(exec, "JavaScript execution exceeded timeout.");
+    return JSValue(std::numeric_limits<double>::quiet_NaN());
+}
 
 JSObject* createInterruptedExecutionException(JSGlobalData* globalData)
 {
-    return new (globalData) InterruptedExecutionError(globalData);
+    return InterruptedExecutionError::create(*globalData);
 }
 
-class TerminatedExecutionError : public JSNonFinalObject {
-public:
-    TerminatedExecutionError(JSGlobalData* globalData)
-        : JSNonFinalObject(*globalData, globalData->terminatedExecutionErrorStructure.get())
-    {
-    }
+bool isInterruptedExecutionException(JSObject* object)
+{
+    return object->inherits(&InterruptedExecutionError::s_info);
+}
 
-    virtual ComplType exceptionType() const { return Terminated; }
+bool isInterruptedExecutionException(JSValue value)
+{
+    return value.inherits(&InterruptedExecutionError::s_info);
+}
 
-    virtual UString toString(ExecState*) const { return "JavaScript execution terminated."; }
-};
+
+ASSERT_HAS_TRIVIAL_DESTRUCTOR(TerminatedExecutionError);
+
+const ClassInfo TerminatedExecutionError::s_info = { "TerminatedExecutionError", &Base::s_info, 0, 0, CREATE_METHOD_TABLE(TerminatedExecutionError) };
+
+JSValue TerminatedExecutionError::defaultValue(const JSObject*, ExecState* exec, PreferredPrimitiveType hint)
+{
+    if (hint == PreferString)
+        return jsNontrivialString(exec, "JavaScript execution terminated.");
+    return JSValue(std::numeric_limits<double>::quiet_NaN());
+}
 
 JSObject* createTerminatedExecutionException(JSGlobalData* globalData)
 {
-    return new (globalData) TerminatedExecutionError(globalData);
+    return TerminatedExecutionError::create(*globalData);
 }
+
+bool isTerminatedExecutionException(JSObject* object)
+{
+    return object->inherits(&TerminatedExecutionError::s_info);
+}
+
+bool isTerminatedExecutionException(JSValue value)
+{
+    return value.inherits(&TerminatedExecutionError::s_info);
+}
+
 
 JSObject* createStackOverflowError(ExecState* exec)
 {
@@ -93,7 +113,7 @@ JSObject* createUndefinedVariableError(ExecState* exec, const Identifier& ident)
     
 JSObject* createInvalidParamError(ExecState* exec, const char* op, JSValue value)
 {
-    UString errorMessage = makeUString("'", value.toString(exec), "' is not a valid argument for '", op, "'");
+    UString errorMessage = makeUString("'", value.toString(exec)->value(exec), "' is not a valid argument for '", op, "'");
     JSObject* exception = createTypeError(exec, errorMessage);
     ASSERT(exception->isErrorInstance());
     static_cast<ErrorInstance*>(exception)->setAppendSourceToMessage();
@@ -102,7 +122,7 @@ JSObject* createInvalidParamError(ExecState* exec, const char* op, JSValue value
 
 JSObject* createNotAConstructorError(ExecState* exec, JSValue value)
 {
-    UString errorMessage = makeUString("'", value.toString(exec), "' is not a constructor");
+    UString errorMessage = makeUString("'", value.toString(exec)->value(exec), "' is not a constructor");
     JSObject* exception = createTypeError(exec, errorMessage);
     ASSERT(exception->isErrorInstance());
     static_cast<ErrorInstance*>(exception)->setAppendSourceToMessage();
@@ -111,7 +131,7 @@ JSObject* createNotAConstructorError(ExecState* exec, JSValue value)
 
 JSObject* createNotAFunctionError(ExecState* exec, JSValue value)
 {
-    UString errorMessage = makeUString("'", value.toString(exec), "' is not a function");
+    UString errorMessage = makeUString("'", value.toString(exec)->value(exec), "' is not a function");
     JSObject* exception = createTypeError(exec, errorMessage);
     ASSERT(exception->isErrorInstance());
     static_cast<ErrorInstance*>(exception)->setAppendSourceToMessage();
@@ -120,7 +140,7 @@ JSObject* createNotAFunctionError(ExecState* exec, JSValue value)
 
 JSObject* createNotAnObjectError(ExecState* exec, JSValue value)
 {
-    UString errorMessage = makeUString("'", value.toString(exec), "' is not an object");
+    UString errorMessage = makeUString("'", value.toString(exec)->value(exec), "' is not an object");
     JSObject* exception = createTypeError(exec, errorMessage);
     ASSERT(exception->isErrorInstance());
     static_cast<ErrorInstance*>(exception)->setAppendSourceToMessage();

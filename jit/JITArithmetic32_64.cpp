@@ -84,12 +84,8 @@ void JIT::emitSlow_op_negate(Instruction* currentInstruction, Vector<SlowCaseEnt
     stubCall.call(dst);
 }
 
-void JIT::emit_op_jnless(Instruction* currentInstruction)
+void JIT::emit_compareAndJump(OpcodeID opcode, unsigned op1, unsigned op2, unsigned target, RelationalCondition condition)
 {
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-
     JumpList notInt32Op1;
     JumpList notInt32Op2;
 
@@ -100,7 +96,7 @@ void JIT::emit_op_jnless(Instruction* currentInstruction)
         JumpList failures;
         emitLoadCharacterString(regT0, regT0, failures);
         addSlowCase(failures);
-        addJump(branch32(LessThanOrEqual, regT0, Imm32(asString(getConstantOperand(op1))->tryGetValue()[0])), target);
+        addJump(branch32(commute(condition), regT0, Imm32(asString(getConstantOperand(op1))->tryGetValue()[0])), target);
         return;
     }
     if (isOperandConstantImmediateChar(op2)) {
@@ -109,111 +105,22 @@ void JIT::emit_op_jnless(Instruction* currentInstruction)
         JumpList failures;
         emitLoadCharacterString(regT0, regT0, failures);
         addSlowCase(failures);
-        addJump(branch32(GreaterThanOrEqual, regT0, Imm32(asString(getConstantOperand(op2))->tryGetValue()[0])), target);
-        return;
-    }
-    if (isOperandConstantImmediateInt(op1)) {
-        // Int32 less.
-        emitLoad(op2, regT3, regT2);
-        notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(LessThanOrEqual, regT2, Imm32(getConstantOperand(op1).asInt32())), target);
-    } else if (isOperandConstantImmediateInt(op2)) {
-        emitLoad(op1, regT1, regT0);
-        notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(GreaterThanOrEqual, regT0, Imm32(getConstantOperand(op2).asInt32())), target);
-    } else {
-        emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
-        notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(GreaterThanOrEqual, regT0, regT2), target);
-    }
-
-    if (!supportsFloatingPoint()) {
-        addSlowCase(notInt32Op1);
-        addSlowCase(notInt32Op2);
-        return;
-    }
-    Jump end = jump();
-
-    // Double less.
-    emitBinaryDoubleOp(op_jnless, target, op1, op2, OperandTypes(), notInt32Op1, notInt32Op2, !isOperandConstantImmediateInt(op1), isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2));
-    end.link(this);
-}
-
-void JIT::emitSlow_op_jnless(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
-{
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-
-    if (isOperandConstantImmediateChar(op1) || isOperandConstantImmediateChar(op2)) {
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-    } else {
-        if (!supportsFloatingPoint()) {
-            if (!isOperandConstantImmediateInt(op1) && !isOperandConstantImmediateInt(op2))
-                linkSlowCase(iter); // int32 check
-            linkSlowCase(iter); // int32 check
-        } else {
-            if (!isOperandConstantImmediateInt(op1)) {
-                linkSlowCase(iter); // double check
-                linkSlowCase(iter); // int32 check
-            }
-            if (isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2))
-                linkSlowCase(iter); // double check
-        }
-    }
-
-    JITStubCall stubCall(this, cti_op_jless);
-    stubCall.addArgument(op1);
-    stubCall.addArgument(op2);
-    stubCall.call();
-    emitJumpSlowToHot(branchTest32(Zero, regT0), target);
-}
-
-void JIT::emit_op_jless(Instruction* currentInstruction)
-{
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-
-    JumpList notInt32Op1;
-    JumpList notInt32Op2;
-
-    // Character less.
-    if (isOperandConstantImmediateChar(op1)) {
-        emitLoad(op2, regT1, regT0);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::CellTag)));
-        JumpList failures;
-        emitLoadCharacterString(regT0, regT0, failures);
-        addSlowCase(failures);
-        addJump(branch32(GreaterThan, regT0, Imm32(asString(getConstantOperand(op1))->tryGetValue()[0])), target);
-        return;
-    }
-    if (isOperandConstantImmediateChar(op2)) {
-        emitLoad(op1, regT1, regT0);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::CellTag)));
-        JumpList failures;
-        emitLoadCharacterString(regT0, regT0, failures);
-        addSlowCase(failures);
-        addJump(branch32(LessThan, regT0, Imm32(asString(getConstantOperand(op2))->tryGetValue()[0])), target);
+        addJump(branch32(condition, regT0, Imm32(asString(getConstantOperand(op2))->tryGetValue()[0])), target);
         return;
     } 
     if (isOperandConstantImmediateInt(op1)) {
         emitLoad(op2, regT3, regT2);
         notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(GreaterThan, regT2, Imm32(getConstantOperand(op1).asInt32())), target);
+        addJump(branch32(commute(condition), regT2, Imm32(getConstantOperand(op1).asInt32())), target);
     } else if (isOperandConstantImmediateInt(op2)) {
         emitLoad(op1, regT1, regT0);
         notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(LessThan, regT0, Imm32(getConstantOperand(op2).asInt32())), target);
+        addJump(branch32(condition, regT0, Imm32(getConstantOperand(op2).asInt32())), target);
     } else {
         emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
         notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
         notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(LessThan, regT0, regT2), target);
+        addJump(branch32(condition, regT0, regT2), target);
     }
 
     if (!supportsFloatingPoint()) {
@@ -224,16 +131,12 @@ void JIT::emit_op_jless(Instruction* currentInstruction)
     Jump end = jump();
 
     // Double less.
-    emitBinaryDoubleOp(op_jless, target, op1, op2, OperandTypes(), notInt32Op1, notInt32Op2, !isOperandConstantImmediateInt(op1), isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2));
+    emitBinaryDoubleOp(opcode, target, op1, op2, OperandTypes(), notInt32Op1, notInt32Op2, !isOperandConstantImmediateInt(op1), isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2));
     end.link(this);
 }
 
-void JIT::emitSlow_op_jless(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
+void JIT::emit_compareAndJumpSlow(unsigned op1, unsigned op2, unsigned target, DoubleCondition, int (JIT_STUB *stub)(STUB_ARGS_DECLARATION), bool invert, Vector<SlowCaseEntry>::iterator& iter)
 {
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-    
     if (isOperandConstantImmediateChar(op1) || isOperandConstantImmediateChar(op2)) {
         linkSlowCase(iter);
         linkSlowCase(iter);
@@ -253,109 +156,11 @@ void JIT::emitSlow_op_jless(Instruction* currentInstruction, Vector<SlowCaseEntr
                 linkSlowCase(iter); // double check
         }
     }
-    JITStubCall stubCall(this, cti_op_jless);
-    stubCall.addArgument(op1);
-    stubCall.addArgument(op2);
-    stubCall.call();
-    emitJumpSlowToHot(branchTest32(NonZero, regT0), target);
-}
-
-void JIT::emit_op_jlesseq(Instruction* currentInstruction, bool invert)
-{
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-
-    JumpList notInt32Op1;
-    JumpList notInt32Op2;
-
-    // Character less.
-    if (isOperandConstantImmediateChar(op1)) {
-        emitLoad(op2, regT1, regT0);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::CellTag)));
-        JumpList failures;
-        emitLoadCharacterString(regT0, regT0, failures);
-        addSlowCase(failures);
-        addJump(branch32(invert ? LessThan : GreaterThanOrEqual, regT0, Imm32(asString(getConstantOperand(op1))->tryGetValue()[0])), target);
-        return;
-    }
-    if (isOperandConstantImmediateChar(op2)) {
-        emitLoad(op1, regT1, regT0);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::CellTag)));
-        JumpList failures;
-        emitLoadCharacterString(regT0, regT0, failures);
-        addSlowCase(failures);
-        addJump(branch32(invert ? GreaterThan : LessThanOrEqual, regT0, Imm32(asString(getConstantOperand(op2))->tryGetValue()[0])), target);
-        return;
-    }
-    if (isOperandConstantImmediateInt(op1)) {
-        emitLoad(op2, regT3, regT2);
-        notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(invert ? LessThan : GreaterThanOrEqual, regT2, Imm32(getConstantOperand(op1).asInt32())), target);
-    } else if (isOperandConstantImmediateInt(op2)) {
-        emitLoad(op1, regT1, regT0);
-        notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(invert ? GreaterThan : LessThanOrEqual, regT0, Imm32(getConstantOperand(op2).asInt32())), target);
-    } else {
-        emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
-        notInt32Op1.append(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        notInt32Op2.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-        addJump(branch32(invert ? GreaterThan : LessThanOrEqual, regT0, regT2), target);
-    }
-
-    if (!supportsFloatingPoint()) {
-        addSlowCase(notInt32Op1);
-        addSlowCase(notInt32Op2);
-        return;
-    }
-    Jump end = jump();
-
-    // Double less.
-    emitBinaryDoubleOp(invert ? op_jnlesseq : op_jlesseq, target, op1, op2, OperandTypes(), notInt32Op1, notInt32Op2, !isOperandConstantImmediateInt(op1), isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2));
-    end.link(this);
-}
-
-void JIT::emitSlow_op_jlesseq(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter, bool invert)
-{
-    unsigned op1 = currentInstruction[1].u.operand;
-    unsigned op2 = currentInstruction[2].u.operand;
-    unsigned target = currentInstruction[3].u.operand;
-
-    if (isOperandConstantImmediateChar(op1) || isOperandConstantImmediateChar(op2)) {
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-        linkSlowCase(iter);
-    } else {
-        if (!supportsFloatingPoint()) {
-            if (!isOperandConstantImmediateInt(op1) && !isOperandConstantImmediateInt(op2))
-                linkSlowCase(iter); // int32 check
-            linkSlowCase(iter); // int32 check
-        } else {
-            if (!isOperandConstantImmediateInt(op1)) {
-                linkSlowCase(iter); // double check
-                linkSlowCase(iter); // int32 check
-            }
-            if (isOperandConstantImmediateInt(op1) || !isOperandConstantImmediateInt(op2))
-                linkSlowCase(iter); // double check
-        }
-    }
-
-    JITStubCall stubCall(this, cti_op_jlesseq);
+    JITStubCall stubCall(this, stub);
     stubCall.addArgument(op1);
     stubCall.addArgument(op2);
     stubCall.call();
     emitJumpSlowToHot(branchTest32(invert ? Zero : NonZero, regT0), target);
-}
-
-void JIT::emit_op_jnlesseq(Instruction* currentInstruction)
-{
-    emit_op_jlesseq(currentInstruction, true);
-}
-
-void JIT::emitSlow_op_jnlesseq(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
-{
-    emitSlow_op_jlesseq(currentInstruction, iter, true);
 }
 
 // LeftShift (<<)
@@ -370,7 +175,7 @@ void JIT::emit_op_lshift(Instruction* currentInstruction)
         emitLoad(op1, regT1, regT0);
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
         lshift32(Imm32(getConstantOperand(op2).asInt32()), regT0);
-        emitStoreInt32(dst, regT0, dst == op1);
+        emitStoreAndMapInt32(dst, regT1, regT0, dst == op1, OPCODE_LENGTH(op_lshift));
         return;
     }
 
@@ -379,7 +184,7 @@ void JIT::emit_op_lshift(Instruction* currentInstruction)
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
     lshift32(regT2, regT0);
-    emitStoreInt32(dst, regT0, dst == op1 || dst == op2);
+    emitStoreAndMapInt32(dst, regT1, regT0, dst == op1 || dst == op2, OPCODE_LENGTH(op_lshift));
 }
 
 void JIT::emitSlow_op_lshift(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -411,32 +216,27 @@ void JIT::emitRightShift(Instruction* currentInstruction, bool isUnsigned)
     if (isOperandConstantImmediateInt(op2)) {
         emitLoad(op1, regT1, regT0);
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        int shift = getConstantOperand(op2).asInt32();
+        int shift = getConstantOperand(op2).asInt32() & 0x1f;
+        if (shift) {
+            if (isUnsigned)
+                urshift32(Imm32(shift), regT0);
+            else
+                rshift32(Imm32(shift), regT0);
+        } else if (isUnsigned) // signed right shift by zero is simply toInt conversion
+            addSlowCase(branch32(LessThan, regT0, TrustedImm32(0)));
+        emitStoreAndMapInt32(dst, regT1, regT0, dst == op1, OPCODE_LENGTH(op_rshift));
+    } else {
+        emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
+        if (!isOperandConstantImmediateInt(op1))
+            addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
+        addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
         if (isUnsigned) {
-            if (shift)
-                urshift32(Imm32(shift & 0x1f), regT0);
-            // unsigned shift < 0 or shift = k*2^32 may result in (essentially)
-            // a toUint conversion, which can result in a value we can represent
-            // as an immediate int.
-            if (shift < 0 || !(shift & 31))
-                addSlowCase(branch32(LessThan, regT0, TrustedImm32(0)));
-        } else if (shift) { // signed right shift by zero is simply toInt conversion
-            rshift32(Imm32(shift & 0x1f), regT0);
-        }
-        emitStoreInt32(dst, regT0, dst == op1);
-        return;
+            urshift32(regT2, regT0);
+            addSlowCase(branch32(LessThan, regT0, TrustedImm32(0)));
+        } else
+            rshift32(regT2, regT0);
+        emitStoreAndMapInt32(dst, regT1, regT0, dst == op1, OPCODE_LENGTH(op_rshift));
     }
-
-    emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
-    if (!isOperandConstantImmediateInt(op1))
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-    addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-    if (isUnsigned) {
-        urshift32(regT2, regT0);
-        addSlowCase(branch32(LessThan, regT0, TrustedImm32(0)));
-    } else
-        rshift32(regT2, regT0);
-    emitStoreInt32(dst, regT0, dst == op1 || dst == op2);
 }
 
 void JIT::emitRightShiftSlowCase(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter, bool isUnsigned)
@@ -445,7 +245,7 @@ void JIT::emitRightShiftSlowCase(Instruction* currentInstruction, Vector<SlowCas
     unsigned op1 = currentInstruction[2].u.operand;
     unsigned op2 = currentInstruction[3].u.operand;
     if (isOperandConstantImmediateInt(op2)) {
-        int shift = getConstantOperand(op2).asInt32();
+        int shift = getConstantOperand(op2).asInt32() & 0x1f;
         // op1 = regT1:regT0
         linkSlowCase(iter); // int32 check
         if (supportsFloatingPointTruncate()) {
@@ -453,18 +253,19 @@ void JIT::emitRightShiftSlowCase(Instruction* currentInstruction, Vector<SlowCas
             failures.append(branch32(AboveOrEqual, regT1, TrustedImm32(JSValue::LowestTag)));
             emitLoadDouble(op1, fpRegT0);
             failures.append(branchTruncateDoubleToInt32(fpRegT0, regT0));
-            if (isUnsigned) {
-                if (shift)
-                    urshift32(Imm32(shift & 0x1f), regT0);
-                if (shift < 0 || !(shift & 31))
-                    failures.append(branch32(LessThan, regT0, TrustedImm32(0)));
-            } else if (shift)
-                rshift32(Imm32(shift & 0x1f), regT0);
+            if (shift) {
+                if (isUnsigned)
+                    urshift32(Imm32(shift), regT0);
+                else
+                    rshift32(Imm32(shift), regT0);
+            } else if (isUnsigned) // signed right shift by zero is simply toInt conversion
+                failures.append(branch32(LessThan, regT0, TrustedImm32(0)));
+            move(TrustedImm32(JSValue::Int32Tag), regT1);
             emitStoreInt32(dst, regT0, false);
             emitJumpSlowToHot(jump(), OPCODE_LENGTH(op_rshift));
             failures.link(this);
         }
-        if (isUnsigned && (shift < 0 || !(shift & 31)))
+        if (isUnsigned && !shift)
             linkSlowCase(iter); // failed to box in hot path
     } else {
         // op1 = regT1:regT0
@@ -472,19 +273,20 @@ void JIT::emitRightShiftSlowCase(Instruction* currentInstruction, Vector<SlowCas
         if (!isOperandConstantImmediateInt(op1)) {
             linkSlowCase(iter); // int32 check -- op1 is not an int
             if (supportsFloatingPointTruncate()) {
-                Jump notDouble = branch32(Above, regT1, TrustedImm32(JSValue::LowestTag)); // op1 is not a double
+                JumpList failures;
+                failures.append(branch32(Above, regT1, TrustedImm32(JSValue::LowestTag))); // op1 is not a double
                 emitLoadDouble(op1, fpRegT0);
-                Jump notInt = branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)); // op2 is not an int
-                Jump cantTruncate = branchTruncateDoubleToInt32(fpRegT0, regT0);
-                if (isUnsigned)
+                failures.append(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag))); // op2 is not an int
+                failures.append(branchTruncateDoubleToInt32(fpRegT0, regT0));
+                if (isUnsigned) {
                     urshift32(regT2, regT0);
-                else
+                    failures.append(branch32(LessThan, regT0, TrustedImm32(0)));
+                } else
                     rshift32(regT2, regT0);
+                move(TrustedImm32(JSValue::Int32Tag), regT1);
                 emitStoreInt32(dst, regT0, false);
                 emitJumpSlowToHot(jump(), OPCODE_LENGTH(op_rshift));
-                notDouble.link(this);
-                notInt.link(this);
-                cantTruncate.link(this);
+                failures.link(this);
             }
         }
 
@@ -537,7 +339,7 @@ void JIT::emit_op_bitand(Instruction* currentInstruction)
         emitLoad(op, regT1, regT0);
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
         and32(Imm32(constant), regT0);
-        emitStoreInt32(dst, regT0, (op == dst));
+        emitStoreAndMapInt32(dst, regT1, regT0, dst == op, OPCODE_LENGTH(op_bitand));
         return;
     }
 
@@ -545,7 +347,7 @@ void JIT::emit_op_bitand(Instruction* currentInstruction)
     addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
     and32(regT2, regT0);
-    emitStoreInt32(dst, regT0, (op1 == dst || op2 == dst));
+    emitStoreAndMapInt32(dst, regT1, regT0, (op1 == dst || op2 == dst), OPCODE_LENGTH(op_bitand));
 }
 
 void JIT::emitSlow_op_bitand(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -578,7 +380,7 @@ void JIT::emit_op_bitor(Instruction* currentInstruction)
         emitLoad(op, regT1, regT0);
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
         or32(Imm32(constant), regT0);
-        emitStoreInt32(dst, regT0, (op == dst));
+        emitStoreAndMapInt32(dst, regT1, regT0, op == dst, OPCODE_LENGTH(op_bitor));
         return;
     }
 
@@ -586,7 +388,7 @@ void JIT::emit_op_bitor(Instruction* currentInstruction)
     addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
     or32(regT2, regT0);
-    emitStoreInt32(dst, regT0, (op1 == dst || op2 == dst));
+    emitStoreAndMapInt32(dst, regT1, regT0, (op1 == dst || op2 == dst), OPCODE_LENGTH(op_bitor));
 }
 
 void JIT::emitSlow_op_bitor(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -619,7 +421,7 @@ void JIT::emit_op_bitxor(Instruction* currentInstruction)
         emitLoad(op, regT1, regT0);
         addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
         xor32(Imm32(constant), regT0);
-        emitStoreInt32(dst, regT0, (op == dst));
+        emitStoreAndMapInt32(dst, regT1, regT0, op == dst, OPCODE_LENGTH(op_bitxor));
         return;
     }
 
@@ -627,7 +429,7 @@ void JIT::emit_op_bitxor(Instruction* currentInstruction)
     addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
     xor32(regT2, regT0);
-    emitStoreInt32(dst, regT0, (op1 == dst || op2 == dst));
+    emitStoreAndMapInt32(dst, regT1, regT0, (op1 == dst || op2 == dst), OPCODE_LENGTH(op_bitxor));
 }
 
 void JIT::emitSlow_op_bitxor(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -646,31 +448,6 @@ void JIT::emitSlow_op_bitxor(Instruction* currentInstruction, Vector<SlowCaseEnt
     stubCall.call(dst);
 }
 
-// BitNot (~)
-
-void JIT::emit_op_bitnot(Instruction* currentInstruction)
-{
-    unsigned dst = currentInstruction[1].u.operand;
-    unsigned src = currentInstruction[2].u.operand;
-
-    emitLoad(src, regT1, regT0);
-    addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-
-    not32(regT0);
-    emitStoreInt32(dst, regT0, (dst == src));
-}
-
-void JIT::emitSlow_op_bitnot(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
-{
-    unsigned dst = currentInstruction[1].u.operand;
-
-    linkSlowCase(iter); // int32 check
-
-    JITStubCall stubCall(this, cti_op_bitnot);
-    stubCall.addArgument(regT1, regT0);
-    stubCall.call(dst);
-}
-
 // PostInc (i++)
 
 void JIT::emit_op_post_inc(Instruction* currentInstruction)
@@ -684,10 +461,11 @@ void JIT::emit_op_post_inc(Instruction* currentInstruction)
     if (dst == srcDst) // x = x++ is a noop for ints.
         return;
 
-    emitStoreInt32(dst, regT0);
+    move(regT0, regT2);
+    addSlowCase(branchAdd32(Overflow, TrustedImm32(1), regT2));
+    emitStoreInt32(srcDst, regT2, true);
 
-    addSlowCase(branchAdd32(Overflow, TrustedImm32(1), regT0));
-    emitStoreInt32(srcDst, regT0, true);
+    emitStoreAndMapInt32(dst, regT1, regT0, false, OPCODE_LENGTH(op_post_inc));
 }
 
 void JIT::emitSlow_op_post_inc(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -701,7 +479,7 @@ void JIT::emitSlow_op_post_inc(Instruction* currentInstruction, Vector<SlowCaseE
 
     JITStubCall stubCall(this, cti_op_post_inc);
     stubCall.addArgument(srcDst);
-    stubCall.addArgument(Imm32(srcDst));
+    stubCall.addArgument(TrustedImm32(srcDst));
     stubCall.call(dst);
 }
 
@@ -718,10 +496,11 @@ void JIT::emit_op_post_dec(Instruction* currentInstruction)
     if (dst == srcDst) // x = x-- is a noop for ints.
         return;
 
-    emitStoreInt32(dst, regT0);
+    move(regT0, regT2);
+    addSlowCase(branchSub32(Overflow, TrustedImm32(1), regT2));
+    emitStoreInt32(srcDst, regT2, true);
 
-    addSlowCase(branchSub32(Overflow, TrustedImm32(1), regT0));
-    emitStoreInt32(srcDst, regT0, true);
+    emitStoreAndMapInt32(dst, regT1, regT0, false, OPCODE_LENGTH(op_post_dec));
 }
 
 void JIT::emitSlow_op_post_dec(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -749,7 +528,7 @@ void JIT::emit_op_pre_inc(Instruction* currentInstruction)
 
     addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branchAdd32(Overflow, TrustedImm32(1), regT0));
-    emitStoreInt32(srcDst, regT0, true);
+    emitStoreAndMapInt32(srcDst, regT1, regT0, true, OPCODE_LENGTH(op_pre_inc));
 }
 
 void JIT::emitSlow_op_pre_inc(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -774,7 +553,7 @@ void JIT::emit_op_pre_dec(Instruction* currentInstruction)
 
     addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
     addSlowCase(branchSub32(Overflow, TrustedImm32(1), regT0));
-    emitStoreInt32(srcDst, regT0, true);
+    emitStoreAndMapInt32(srcDst, regT1, regT0, true, OPCODE_LENGTH(op_pre_dec));
 }
 
 void JIT::emitSlow_op_pre_dec(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
@@ -799,6 +578,7 @@ void JIT::emit_op_add(Instruction* currentInstruction)
     OperandTypes types = OperandTypes::fromInt(currentInstruction[4].u.operand);
 
     if (!types.first().mightBeNumber() || !types.second().mightBeNumber()) {
+        addSlowCase();
         JITStubCall stubCall(this, cti_op_add);
         stubCall.addArgument(op1);
         stubCall.addArgument(op2);
@@ -839,9 +619,9 @@ void JIT::emit_op_add(Instruction* currentInstruction)
 void JIT::emitAdd32Constant(unsigned dst, unsigned op, int32_t constant, ResultType opType)
 {
     // Int32 case.
-    emitLoad(op, regT1, regT0);
+    emitLoad(op, regT1, regT2);
     Jump notInt32 = branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag));
-    addSlowCase(branchAdd32(Overflow, Imm32(constant), regT0));
+    addSlowCase(branchAdd32(Overflow, regT2, Imm32(constant), regT0));
     emitStoreInt32(dst, regT0, (op == dst));
 
     // Double case.
@@ -870,8 +650,10 @@ void JIT::emitSlow_op_add(Instruction* currentInstruction, Vector<SlowCaseEntry>
     unsigned op2 = currentInstruction[3].u.operand;
     OperandTypes types = OperandTypes::fromInt(currentInstruction[4].u.operand);
 
-    if (!types.first().mightBeNumber() || !types.second().mightBeNumber())
+    if (!types.first().mightBeNumber() || !types.second().mightBeNumber()) {
+        linkDummySlowCase(iter);
         return;
+    }
 
     unsigned op;
     int32_t constant;
@@ -950,8 +732,13 @@ void JIT::emitSub32Constant(unsigned dst, unsigned op, int32_t constant, ResultT
     // Int32 case.
     emitLoad(op, regT1, regT0);
     Jump notInt32 = branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag));
-    addSlowCase(branchSub32(Overflow, Imm32(constant), regT0));
-    emitStoreInt32(dst, regT0, (op == dst));
+#if ENABLE(JIT_CONSTANT_BLINDING)
+    addSlowCase(branchSub32(Overflow, regT0, Imm32(constant), regT2, regT3));
+#else
+    addSlowCase(branchSub32(Overflow, regT0, Imm32(constant), regT2));
+#endif
+    
+    emitStoreInt32(dst, regT2, (op == dst));
 
     // Double case.
     if (!supportsFloatingPoint()) {
@@ -1054,15 +841,39 @@ void JIT::emitBinaryDoubleOp(OpcodeID opcodeID, unsigned dst, unsigned op1, unsi
                 subDouble(fpRegT0, fpRegT1);
                 emitStoreDouble(dst, fpRegT1);
                 break;
-            case op_div:
+            case op_div: {
                 emitLoadDouble(op1, fpRegT1);
                 divDouble(fpRegT0, fpRegT1);
+
+#if ENABLE(VALUE_PROFILER)
+                // Is the result actually an integer? The DFG JIT would really like to know. If it's
+                // not an integer, we increment a count. If this together with the slow case counter
+                // are below threshold then the DFG JIT will compile this division with a specualtion
+                // that the remainder is zero.
+                
+                // As well, there are cases where a double result here would cause an important field
+                // in the heap to sometimes have doubles in it, resulting in double predictions getting
+                // propagated to a use site where it might cause damage (such as the index to an array
+                // access). So if we are DFG compiling anything in the program, we want this code to
+                // ensure that it produces integers whenever possible.
+                
+                // FIXME: This will fail to convert to integer if the result is zero. We should
+                // distinguish between positive zero and negative zero here.
+                
+                JumpList notInteger;
+                branchConvertDoubleToInt32(fpRegT1, regT2, notInteger, fpRegT0);
+                // If we've got an integer, we might as well make that the result of the division.
+                emitStoreInt32(dst, regT2);
+                Jump isInteger = jump();
+                notInteger.link(this);
+                add32(TrustedImm32(1), AbsoluteAddress(&m_codeBlock->specialFastCaseProfileForBytecodeOffset(m_bytecodeOffset)->m_counter));
                 emitStoreDouble(dst, fpRegT1);
+                isInteger.link(this);
+#else
+                emitStoreDouble(dst, fpRegT1);
+#endif
                 break;
-            case op_jnless:
-                emitLoadDouble(op1, fpRegT2);
-                addJump(branchDouble(DoubleLessThanOrEqualOrUnordered, fpRegT0, fpRegT2), dst);
-                break;
+            }
             case op_jless:
                 emitLoadDouble(op1, fpRegT2);
                 addJump(branchDouble(DoubleLessThan, fpRegT2, fpRegT0), dst);
@@ -1071,9 +882,29 @@ void JIT::emitBinaryDoubleOp(OpcodeID opcodeID, unsigned dst, unsigned op1, unsi
                 emitLoadDouble(op1, fpRegT2);
                 addJump(branchDouble(DoubleLessThanOrEqual, fpRegT2, fpRegT0), dst);
                 break;
+            case op_jgreater:
+                emitLoadDouble(op1, fpRegT2);
+                addJump(branchDouble(DoubleGreaterThan, fpRegT2, fpRegT0), dst);
+                break;
+            case op_jgreatereq:
+                emitLoadDouble(op1, fpRegT2);
+                addJump(branchDouble(DoubleGreaterThanOrEqual, fpRegT2, fpRegT0), dst);
+                break;
+            case op_jnless:
+                emitLoadDouble(op1, fpRegT2);
+                addJump(branchDouble(DoubleLessThanOrEqualOrUnordered, fpRegT0, fpRegT2), dst);
+                break;
             case op_jnlesseq:
                 emitLoadDouble(op1, fpRegT2);
                 addJump(branchDouble(DoubleLessThanOrUnordered, fpRegT0, fpRegT2), dst);
+                break;
+            case op_jngreater:
+                emitLoadDouble(op1, fpRegT2);
+                addJump(branchDouble(DoubleGreaterThanOrEqualOrUnordered, fpRegT0, fpRegT2), dst);
+                break;
+            case op_jngreatereq:
+                emitLoadDouble(op1, fpRegT2);
+                addJump(branchDouble(DoubleGreaterThanOrUnordered, fpRegT0, fpRegT2), dst);
                 break;
             default:
                 ASSERT_NOT_REACHED();
@@ -1115,26 +946,69 @@ void JIT::emitBinaryDoubleOp(OpcodeID opcodeID, unsigned dst, unsigned op1, unsi
                 subDouble(fpRegT2, fpRegT0);
                 emitStoreDouble(dst, fpRegT0);
                 break;
-            case op_div:
+            case op_div: {
                 emitLoadDouble(op2, fpRegT2);
                 divDouble(fpRegT2, fpRegT0);
+#if ENABLE(VALUE_PROFILER)
+                // Is the result actually an integer? The DFG JIT would really like to know. If it's
+                // not an integer, we increment a count. If this together with the slow case counter
+                // are below threshold then the DFG JIT will compile this division with a specualtion
+                // that the remainder is zero.
+                
+                // As well, there are cases where a double result here would cause an important field
+                // in the heap to sometimes have doubles in it, resulting in double predictions getting
+                // propagated to a use site where it might cause damage (such as the index to an array
+                // access). So if we are DFG compiling anything in the program, we want this code to
+                // ensure that it produces integers whenever possible.
+                
+                // FIXME: This will fail to convert to integer if the result is zero. We should
+                // distinguish between positive zero and negative zero here.
+                
+                JumpList notInteger;
+                branchConvertDoubleToInt32(fpRegT0, regT2, notInteger, fpRegT1);
+                // If we've got an integer, we might as well make that the result of the division.
+                emitStoreInt32(dst, regT2);
+                Jump isInteger = jump();
+                notInteger.link(this);
+                add32(TrustedImm32(1), AbsoluteAddress(&m_codeBlock->specialFastCaseProfileForBytecodeOffset(m_bytecodeOffset)->m_counter));
                 emitStoreDouble(dst, fpRegT0);
+                isInteger.link(this);
+#else
+                emitStoreDouble(dst, fpRegT0);
+#endif
+                break;
+            }
+            case op_jless:
+                emitLoadDouble(op2, fpRegT1);
+                addJump(branchDouble(DoubleLessThan, fpRegT0, fpRegT1), dst);
+                break;
+            case op_jlesseq:
+                emitLoadDouble(op2, fpRegT1);
+                addJump(branchDouble(DoubleLessThanOrEqual, fpRegT0, fpRegT1), dst);
+                break;
+            case op_jgreater:
+                emitLoadDouble(op2, fpRegT1);
+                addJump(branchDouble(DoubleGreaterThan, fpRegT0, fpRegT1), dst);
+                break;
+            case op_jgreatereq:
+                emitLoadDouble(op2, fpRegT1);
+                addJump(branchDouble(DoubleGreaterThanOrEqual, fpRegT0, fpRegT1), dst);
                 break;
             case op_jnless:
                 emitLoadDouble(op2, fpRegT1);
                 addJump(branchDouble(DoubleLessThanOrEqualOrUnordered, fpRegT1, fpRegT0), dst);
                 break;
-            case op_jless:
-                emitLoadDouble(op2, fpRegT1);
-                addJump(branchDouble(DoubleLessThan, fpRegT0, fpRegT1), dst);
-                break;
             case op_jnlesseq:
                 emitLoadDouble(op2, fpRegT1);
                 addJump(branchDouble(DoubleLessThanOrUnordered, fpRegT1, fpRegT0), dst);
                 break;
-            case op_jlesseq:
+            case op_jngreater:
                 emitLoadDouble(op2, fpRegT1);
-                addJump(branchDouble(DoubleLessThanOrEqual, fpRegT0, fpRegT1), dst);
+                addJump(branchDouble(DoubleGreaterThanOrEqualOrUnordered, fpRegT1, fpRegT0), dst);
+                break;
+            case op_jngreatereq:
+                emitLoadDouble(op2, fpRegT1);
+                addJump(branchDouble(DoubleGreaterThanOrUnordered, fpRegT1, fpRegT0), dst);
                 break;
             default:
                 ASSERT_NOT_REACHED();
@@ -1152,6 +1026,10 @@ void JIT::emit_op_mul(Instruction* currentInstruction)
     unsigned op1 = currentInstruction[2].u.operand;
     unsigned op2 = currentInstruction[3].u.operand;
     OperandTypes types = OperandTypes::fromInt(currentInstruction[4].u.operand);
+
+#if ENABLE(VALUE_PROFILER)
+    m_codeBlock->addSpecialFastCaseProfile(m_bytecodeOffset);
+#endif
 
     JumpList notInt32Op1;
     JumpList notInt32Op2;
@@ -1194,6 +1072,12 @@ void JIT::emitSlow_op_mul(Instruction* currentInstruction, Vector<SlowCaseEntry>
     emitJumpSlowToHot(jump(), OPCODE_LENGTH(op_mul));
 
     negZero.link(this);
+#if ENABLE(VALUE_PROFILER)
+    // We only get here if we have a genuine negative zero. Record this,
+    // so that the speculative JIT knows that we failed speculation
+    // because of a negative zero.
+    add32(TrustedImm32(1), AbsoluteAddress(&m_codeBlock->specialFastCaseProfileForBytecodeOffset(m_bytecodeOffset)->m_counter));
+#endif
     overflow.link(this);
 
     if (!supportsFloatingPoint()) {
@@ -1227,6 +1111,10 @@ void JIT::emit_op_div(Instruction* currentInstruction)
     unsigned op2 = currentInstruction[3].u.operand;
     OperandTypes types = OperandTypes::fromInt(currentInstruction[4].u.operand);
 
+#if ENABLE(VALUE_PROFILER)
+    m_codeBlock->addSpecialFastCaseProfile(m_bytecodeOffset);
+#endif
+
     if (!supportsFloatingPoint()) {
         addSlowCase(jump());
         return;
@@ -1246,7 +1134,32 @@ void JIT::emit_op_div(Instruction* currentInstruction)
     convertInt32ToDouble(regT0, fpRegT0);
     convertInt32ToDouble(regT2, fpRegT1);
     divDouble(fpRegT1, fpRegT0);
+#if ENABLE(VALUE_PROFILER)
+    // Is the result actually an integer? The DFG JIT would really like to know. If it's
+    // not an integer, we increment a count. If this together with the slow case counter
+    // are below threshold then the DFG JIT will compile this division with a specualtion
+    // that the remainder is zero.
+    
+    // As well, there are cases where a double result here would cause an important field
+    // in the heap to sometimes have doubles in it, resulting in double predictions getting
+    // propagated to a use site where it might cause damage (such as the index to an array
+    // access). So if we are DFG compiling anything in the program, we want this code to
+    // ensure that it produces integers whenever possible.
+    
+    // FIXME: This will fail to convert to integer if the result is zero. We should
+    // distinguish between positive zero and negative zero here.
+    
+    JumpList notInteger;
+    branchConvertDoubleToInt32(fpRegT0, regT2, notInteger, fpRegT1);
+    // If we've got an integer, we might as well make that the result of the division.
+    emitStoreInt32(dst, regT2);
+    end.append(jump());
+    notInteger.link(this);
+    add32(TrustedImm32(1), AbsoluteAddress(&m_codeBlock->specialFastCaseProfileForBytecodeOffset(m_bytecodeOffset)->m_counter));
     emitStoreDouble(dst, fpRegT0);
+#else
+    emitStoreDouble(dst, fpRegT0);
+#endif
     end.append(jump());
 
     // Double divide.
@@ -1283,8 +1196,6 @@ void JIT::emitSlow_op_div(Instruction* currentInstruction, Vector<SlowCaseEntry>
 
 /* ------------------------------ BEGIN: OP_MOD ------------------------------ */
 
-#if CPU(X86) || CPU(X86_64) || CPU(MIPS)
-
 void JIT::emit_op_mod(Instruction* currentInstruction)
 {
     unsigned dst = currentInstruction[1].u.operand;
@@ -1297,85 +1208,22 @@ void JIT::emit_op_mod(Instruction* currentInstruction)
     ASSERT(regT1 == X86Registers::edx);
     ASSERT(regT2 == X86Registers::ecx);
     ASSERT(regT3 == X86Registers::ebx);
-#endif
 
-    if (isOperandConstantImmediateInt(op2) && getConstantOperand(op2).asInt32() != 0) {
-        emitLoad(op1, regT1, regT0);
-        move(Imm32(getConstantOperand(op2).asInt32()), regT2);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        if (getConstantOperand(op2).asInt32() == -1)
-            addSlowCase(branch32(Equal, regT0, TrustedImm32(0x80000000))); // -2147483648 / -1 => EXC_ARITHMETIC
-    } else {
-        emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
-        addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-        addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
+    emitLoad2(op1, regT0, regT3, op2, regT1, regT2);
+    addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
+    addSlowCase(branch32(NotEqual, regT0, TrustedImm32(JSValue::Int32Tag)));
 
-        addSlowCase(branch32(Equal, regT0, TrustedImm32(0x80000000))); // -2147483648 / -1 => EXC_ARITHMETIC
-        addSlowCase(branch32(Equal, regT2, TrustedImm32(0))); // divide by 0
-    }
-
-    move(regT0, regT3); // Save dividend payload, in case of 0.
-#if CPU(X86) || CPU(X86_64)
+    move(regT3, regT0);
+    addSlowCase(branchTest32(Zero, regT2));
+    Jump denominatorNotNeg1 = branch32(NotEqual, regT2, TrustedImm32(-1));
+    addSlowCase(branch32(Equal, regT0, TrustedImm32(-2147483647-1)));
+    denominatorNotNeg1.link(this);
     m_assembler.cdq();
     m_assembler.idivl_r(regT2);
-#elif CPU(MIPS)
-    m_assembler.div(regT0, regT2);
-    m_assembler.mfhi(regT1);
-#endif
-
-    // If the remainder is zero and the dividend is negative, the result is -0.
-    Jump storeResult1 = branchTest32(NonZero, regT1);
-    Jump storeResult2 = branchTest32(Zero, regT3, TrustedImm32(0x80000000)); // not negative
-    emitStore(dst, jsNumber(-0.0));
-    Jump end = jump();
-
-    storeResult1.link(this);
-    storeResult2.link(this);
+    Jump numeratorPositive = branch32(GreaterThanOrEqual, regT3, TrustedImm32(0));
+    addSlowCase(branchTest32(Zero, regT1));
+    numeratorPositive.link(this);
     emitStoreInt32(dst, regT1, (op1 == dst || op2 == dst));
-    end.link(this);
-}
-
-void JIT::emitSlow_op_mod(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
-{
-    unsigned dst = currentInstruction[1].u.operand;
-    unsigned op1 = currentInstruction[2].u.operand;
-    unsigned op2 = currentInstruction[3].u.operand;
-
-    if (isOperandConstantImmediateInt(op2) && getConstantOperand(op2).asInt32() != 0) {
-        linkSlowCase(iter); // int32 check
-        if (getConstantOperand(op2).asInt32() == -1)
-            linkSlowCase(iter); // 0x80000000 check
-    } else {
-        linkSlowCase(iter); // int32 check
-        linkSlowCase(iter); // int32 check
-        linkSlowCase(iter); // 0 check
-        linkSlowCase(iter); // 0x80000000 check
-    }
-
-    JITStubCall stubCall(this, cti_op_mod);
-    stubCall.addArgument(op1);
-    stubCall.addArgument(op2);
-    stubCall.call(dst);
-}
-
-#else // CPU(X86) || CPU(X86_64) || CPU(MIPS)
-
-void JIT::emit_op_mod(Instruction* currentInstruction)
-{
-    unsigned dst = currentInstruction[1].u.operand;
-    unsigned op1 = currentInstruction[2].u.operand;
-    unsigned op2 = currentInstruction[3].u.operand;
-
-#if ENABLE(JIT_USE_SOFT_MODULO)
-    emitLoad2(op1, regT1, regT0, op2, regT3, regT2);
-    addSlowCase(branch32(NotEqual, regT1, TrustedImm32(JSValue::Int32Tag)));
-    addSlowCase(branch32(NotEqual, regT3, TrustedImm32(JSValue::Int32Tag)));
-
-    addSlowCase(branch32(Equal, regT2, TrustedImm32(0)));
-
-    emitNakedCall(m_globalData->jitStubs->ctiSoftModulo());
-
-    emitStoreInt32(dst, regT0, (op1 == dst || op2 == dst));
 #else
     JITStubCall stubCall(this, cti_op_mod);
     stubCall.addArgument(op1);
@@ -1386,12 +1234,12 @@ void JIT::emit_op_mod(Instruction* currentInstruction)
 
 void JIT::emitSlow_op_mod(Instruction* currentInstruction, Vector<SlowCaseEntry>::iterator& iter)
 {
-    UNUSED_PARAM(currentInstruction);
-    UNUSED_PARAM(iter);
-#if ENABLE(JIT_USE_SOFT_MODULO)
+#if CPU(X86) || CPU(X86_64)
     unsigned result = currentInstruction[1].u.operand;
     unsigned op1 = currentInstruction[2].u.operand;
     unsigned op2 = currentInstruction[3].u.operand;
+    linkSlowCase(iter);
+    linkSlowCase(iter);
     linkSlowCase(iter);
     linkSlowCase(iter);
     linkSlowCase(iter);
@@ -1402,11 +1250,11 @@ void JIT::emitSlow_op_mod(Instruction* currentInstruction, Vector<SlowCaseEntry>
 #else
     UNUSED_PARAM(currentInstruction);
     UNUSED_PARAM(iter);
-    ASSERT_NOT_REACHED();
+    // We would have really useful assertions here if it wasn't for the compiler's
+    // insistence on attribute noreturn.
+    // ASSERT_NOT_REACHED();
 #endif
 }
-
-#endif // CPU(X86) || CPU(X86_64)
 
 /* ------------------------------ END: OP_MOD ------------------------------ */
 
