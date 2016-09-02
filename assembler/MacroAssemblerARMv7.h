@@ -873,7 +873,7 @@ public:
 
     Jump branchMul32(Condition cond, RegisterID src, RegisterID dest)
     {
-        ASSERT(cond == Overflow);
+        ASSERT_UNUSED(cond, cond == Overflow);
         m_assembler.smull(dest, dataTempRegister, dest, src);
         m_assembler.asr(addressTempRegister, dest, 31);
         return branch32(NotEqual, addressTempRegister, dataTempRegister);
@@ -881,7 +881,7 @@ public:
 
     Jump branchMul32(Condition cond, Imm32 imm, RegisterID src, RegisterID dest)
     {
-        ASSERT(cond == Overflow);
+        ASSERT_UNUSED(cond, cond == Overflow);
         move(imm, dataTempRegister);
         m_assembler.smull(dest, dataTempRegister, src, dataTempRegister);
         m_assembler.asr(addressTempRegister, dest, 31);

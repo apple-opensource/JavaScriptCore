@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2008, 2009, 2010 Apple Inc. All rights reserved.
  * Copyright (C) 2008 Cameron Zwarich <cwzwarich@uwaterloo.ca>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -3114,9 +3114,10 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
         int argsOffset = vPC[2].u.operand;
         
         JSValue arguments = callFrame->r(argsOffset).jsValue();
-        int32_t argCount = 0;
+        uint32_t argCount = 0;
         if (!arguments) {
             argCount = (uint32_t)(callFrame->argumentCount()) - 1;
+            argCount = min<uint32_t>(argCount, Arguments::MaxArguments);
             int32_t sizeDelta = argsOffset + argCount + RegisterFile::CallFrameHeaderSize;
             Register* newEnd = callFrame->registers() + sizeDelta;
             if (!registerFile->grow(newEnd) || ((newEnd - callFrame->registers()) != sizeDelta)) {
@@ -3124,9 +3125,9 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
                 goto vm_throw;
             }
             ASSERT(!callFrame->callee()->isHostFunction());
-            int32_t expectedParams = callFrame->callee()->jsExecutable()->parameterCount();
-            int32_t inplaceArgs = min(argCount, expectedParams);
-            int32_t i = 0;
+            uint32_t expectedParams = callFrame->callee()->jsExecutable()->parameterCount();
+            uint32_t inplaceArgs = min(argCount, expectedParams);
+            uint32_t i = 0;
             Register* argStore = callFrame->registers() + argsOffset;
 
             // First step is to copy the "expected" parameters from their normal location relative to the callframe
@@ -3143,6 +3144,7 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
             if (asObject(arguments)->classInfo() == &Arguments::info) {
                 Arguments* args = asArguments(arguments);
                 argCount = args->numProvidedArguments(callFrame);
+                argCount = min<uint32_t>(argCount, Arguments::MaxArguments);
                 int32_t sizeDelta = argsOffset + argCount + RegisterFile::CallFrameHeaderSize;
                 Register* newEnd = callFrame->registers() + sizeDelta;
                 if (!registerFile->grow(newEnd) || ((newEnd - callFrame->registers()) != sizeDelta)) {
@@ -3153,6 +3155,7 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
             } else if (isJSArray(&callFrame->globalData(), arguments)) {
                 JSArray* array = asArray(arguments);
                 argCount = array->length();
+                argCount = min<uint32_t>(argCount, Arguments::MaxArguments);
                 int32_t sizeDelta = argsOffset + argCount + RegisterFile::CallFrameHeaderSize;
                 Register* newEnd = callFrame->registers() + sizeDelta;
                 if (!registerFile->grow(newEnd) || ((newEnd - callFrame->registers()) != sizeDelta)) {
@@ -3163,6 +3166,7 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
             } else if (asObject(arguments)->inherits(&JSArray::info)) {
                 JSObject* argObject = asObject(arguments);
                 argCount = argObject->get(callFrame, callFrame->propertyNames().length).toUInt32(callFrame);
+                argCount = min<uint32_t>(argCount, Arguments::MaxArguments);
                 int32_t sizeDelta = argsOffset + argCount + RegisterFile::CallFrameHeaderSize;
                 Register* newEnd = callFrame->registers() + sizeDelta;
                 if (!registerFile->grow(newEnd) || ((newEnd - callFrame->registers()) != sizeDelta)) {
@@ -3170,7 +3174,7 @@ JSValue Interpreter::privateExecute(ExecutionFlag flag, RegisterFile* registerFi
                     goto vm_throw;
                 }
                 Register* argsBuffer = callFrame->registers() + argsOffset;
-                for (int32_t i = 0; i < argCount; ++i) {
+                for (uint32_t i = 0; i < argCount; ++i) {
                     argsBuffer[i] = asObject(arguments)->get(callFrame, i);
                     CHECK_FOR_EXCEPTION();
                 }
