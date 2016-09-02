@@ -1,8 +1,8 @@
 // -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2004 Apple Computer, Inc.
+ *  Copyright (C) 2004-2007 Apple Inc.
+ *  Copyright (C) 2006 Bjoern Graf (bjoern.graf@gmail.com)
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -16,160 +16,329 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "config.h"
 
-#include "value.h"
-#include "object.h"
-#include "types.h"
+#include "JSGlobalObject.h"
+#include "JSLock.h"
+#include "Parser.h"
+#include "collector.h"
 #include "interpreter.h"
+#include "nodes.h"
+#include "object.h"
+#include "protect.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <wtf/Assertions.h>
+#include <wtf/HashTraits.h>
+
+#if HAVE(SYS_TIME_H)
+#include <sys/time.h>
+#endif
+
+#if PLATFORM(WIN_OS)
+#include <crtdbg.h>
+#include <windows.h>
+#endif
+
+#if PLATFORM(QT)
+#include <QDateTime>
+#endif
 
 using namespace KJS;
+using namespace WTF;
 
-class TestFunctionImp : public ObjectImp {
+static bool fillBufferWithContentsOfFile(const UString& fileName, Vector<char>& buffer);
+
+class StopWatch
+{
 public:
-  TestFunctionImp(int i, int length);
-  virtual bool implementsCall() const { return true; }
-  virtual Value call(ExecState *exec, Object &thisObj, const List &args);
-
-  enum { Print, Debug, Quit };
-
+    void start();
+    void stop();
+    long getElapsedMS(); // call stop() first
+    
 private:
-  int id;
+#if PLATFORM(QT)
+    uint m_startTime;
+    uint m_stopTime;
+#elif PLATFORM(WIN_OS)
+    DWORD m_startTime;
+    DWORD m_stopTime;
+#else
+    // Windows does not have timeval, disabling this class for now (bug 7399)
+    timeval m_startTime;
+    timeval m_stopTime;
+#endif
 };
 
-TestFunctionImp::TestFunctionImp(int i, int length) : ObjectImp(), id(i)
+void StopWatch::start()
 {
-  putDirect(lengthPropertyName,length,DontDelete|ReadOnly|DontEnum);
+#if PLATFORM(QT)
+    QDateTime t = QDateTime::currentDateTime();
+    m_startTime = t.toTime_t() * 1000 + t.time().msec();
+#elif PLATFORM(WIN_OS)
+    m_startTime = timeGetTime();
+#else
+    gettimeofday(&m_startTime, 0);
+#endif
 }
 
-Value TestFunctionImp::call(ExecState *exec, Object &/*thisObj*/, const List &args)
+void StopWatch::stop()
 {
-  switch (id) {
-  case Print:
-  case Debug:
-    fprintf(stderr,"--> %s\n",args[0].toString(exec).ascii());
-    return Undefined();
-  case Quit:
-    exit(0);
-    return Undefined();
-  default:
-    break;
-  }
-
-  return Undefined();
+#if PLATFORM(QT)
+    QDateTime t = QDateTime::currentDateTime();
+    m_stopTime = t.toTime_t() * 1000 + t.time().msec();
+#elif PLATFORM(WIN_OS)
+    m_stopTime = timeGetTime();
+#else
+    gettimeofday(&m_stopTime, 0);
+#endif
 }
 
-class VersionFunctionImp : public ObjectImp {
-public:
-  VersionFunctionImp() : ObjectImp() {}
-  virtual bool implementsCall() const { return true; }
-  virtual Value call(ExecState *exec, Object &thisObj, const List &args);
-};
-
-Value VersionFunctionImp::call(ExecState */*exec*/, Object &/*thisObj*/, const List &/*args*/)
+long StopWatch::getElapsedMS()
 {
-  // We need this function for compatibility with the Mozilla JS tests but for now
-  // we don't actually do any version-specific handling
-  return Undefined();
+#if PLATFORM(WIN_OS) || PLATFORM(QT)
+    return m_stopTime - m_startTime;
+#else
+    timeval elapsedTime;
+    timersub(&m_stopTime, &m_startTime, &elapsedTime);
+    
+    return elapsedTime.tv_sec * 1000 + lroundf(elapsedTime.tv_usec / 1000.0f);
+#endif
 }
 
-class GlobalImp : public ObjectImp {
+class GlobalImp : public JSGlobalObject {
 public:
   virtual UString className() const { return "global"; }
 };
+COMPILE_ASSERT(!IsInteger<GlobalImp>::value, WTF_IsInteger_GlobalImp_false);
 
-int main(int argc, char **argv)
+class TestFunctionImp : public JSObject {
+public:
+  enum TestFunctionType { Print, Debug, Quit, GC, Version, Run, Load };
+
+  TestFunctionImp(TestFunctionType i, int length);
+  virtual bool implementsCall() const { return true; }
+  virtual JSValue* callAsFunction(ExecState* exec, JSObject* thisObj, const List &args);
+
+private:
+  TestFunctionType m_type;
+};
+
+TestFunctionImp::TestFunctionImp(TestFunctionType i, int length)
+  : JSObject()
+  , m_type(i)
 {
-  // expecting a filename
-  if (argc < 2) {
-    fprintf(stderr, "You have to specify at least one filename\n");
-    return -1;
-  }
+  putDirect(Identifier("length"), length, DontDelete | ReadOnly | DontEnum);
+}
 
-  bool ret = true;
-  {
-    InterpreterLock lock;
-
-    Object global(new GlobalImp());
-
-    // create interpreter
-    Interpreter interp(global);
-    // add debug() function
-    global.put(interp.globalExec(), "debug", Object(new TestFunctionImp(TestFunctionImp::Debug,1)));
-    // add "print" for compatibility with the mozilla js shell
-    global.put(interp.globalExec(), "print", Object(new TestFunctionImp(TestFunctionImp::Print,1)));
-    // add "quit" for compatibility with the mozilla js shell
-    global.put(interp.globalExec(), "quit", Object(new TestFunctionImp(TestFunctionImp::Quit,0)));
-    // add "version" for compatibility with the mozilla js shell 
-    global.put(interp.globalExec(), "version", Object(new VersionFunctionImp()));
-
-    for (int i = 1; i < argc; i++) {
-      int code_len = 0;
-      int code_alloc = 1024;
-      char *code = (char*)malloc(code_alloc);
-
-      const char *file = argv[i];
-      if (strcmp(file, "-f") == 0)
-	continue;
-      FILE *f = fopen(file, "r");
-      if (!f) {
-        fprintf(stderr, "Error opening %s.\n", file);
-        return 2;
-      }
-
-      while (!feof(f) && !ferror(f)) {
-	size_t len = fread(code+code_len,1,code_alloc-code_len,f);
-	code_len += len;
-	if (code_len >= code_alloc) {
-	  code_alloc *= 2;
-	  code = (char*)realloc(code,code_alloc);
-	}
-      }
-      code = (char*)realloc(code,code_len+1);
-      code[code_len] = '\0';
-
-      // run
-      Completion comp(interp.evaluate(file, 1, code));
-
-      fclose(f);
-
-      if (comp.complType() == Throw) {
-        ExecState *exec = interp.globalExec();
-        Value exVal = comp.value();
-        char *msg = exVal.toString(exec).ascii();
-        int lineno = -1;
-        if (exVal.type() == ObjectType) {
-          Value lineVal = Object::dynamicCast(exVal).get(exec,"line");
-          if (lineVal.type() == NumberType)
-            lineno = int(lineVal.toNumber(exec));
-        }
-        if (lineno != -1)
-          fprintf(stderr,"Exception, line %d: %s\n",lineno,msg);
-        else
-          fprintf(stderr,"Exception: %s\n",msg);
-        ret = false;
-      }
-      else if (comp.complType() == ReturnValue) {
-        char *msg = comp.value().toString(interp.globalExec()).ascii();
-        fprintf(stderr,"Return value: %s\n",msg);
-      }
-
-      free(code);
+JSValue* TestFunctionImp::callAsFunction(ExecState* exec, JSObject*, const List &args)
+{
+  switch (m_type) {
+    case Print:
+      printf("%s\n", args[0]->toString(exec).UTF8String().c_str());
+      return jsUndefined();
+    case Debug:
+      fprintf(stderr, "--> %s\n", args[0]->toString(exec).UTF8String().c_str());
+      return jsUndefined();
+    case GC:
+    {
+      JSLock lock;
+      Collector::collect();
+      return jsUndefined();
     }
-  } // end block, so that interpreter gets deleted
+    case Version:
+      // We need this function for compatibility with the Mozilla JS tests but for now
+      // we don't actually do any version-specific handling
+      return jsUndefined();
+    case Run:
+    {
+      StopWatch stopWatch;
+      UString fileName = args[0]->toString(exec);
+      Vector<char> script;
+      if (!fillBufferWithContentsOfFile(fileName, script))
+        return throwError(exec, GeneralError, "Could not open file.");
 
-  if (ret)
-    fprintf(stderr, "OK.\n");
+      stopWatch.start();
+      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), fileName, 0, script.data());
+      stopWatch.stop();
+      
+      return jsNumber(stopWatch.getElapsedMS());
+    }
+    case Load:
+    {
+      UString fileName = args[0]->toString(exec);
+      Vector<char> script;
+      if (!fillBufferWithContentsOfFile(fileName, script))
+        return throwError(exec, GeneralError, "Could not open file.");
 
-#ifdef KJS_DEBUG_MEM
-  Interpreter::finalCheck();
+      Interpreter::evaluate(exec->dynamicGlobalObject()->globalExec(), fileName, 0, script.data());
+
+      return jsUndefined();
+    }
+    case Quit:
+      exit(0);
+    default:
+      abort();
+  }
+  return 0;
+}
+
+// Use SEH for Release builds only to get rid of the crash report dialog
+// (luckily the same tests fail in Release and Debug builds so far). Need to
+// be in a separate main function because the kjsmain function requires object
+// unwinding.
+
+#if PLATFORM(WIN_OS) && !defined(_DEBUG)
+#define TRY       __try {
+#define EXCEPT(x) } __except (EXCEPTION_EXECUTE_HANDLER) { x; }
+#else
+#define TRY
+#define EXCEPT(x)
 #endif
-  return ret ? 0 : 3;
+
+int kjsmain(int argc, char** argv);
+
+int main(int argc, char** argv)
+{
+#if defined(_DEBUG) && PLATFORM(WIN_OS)
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+#endif
+
+    int res = 0;
+    TRY
+        res = kjsmain(argc, argv);
+    EXCEPT(res = 3)
+    return res;
+}
+
+static GlobalImp* createGlobalObject()
+{
+  GlobalImp* global = new GlobalImp;
+
+  // add debug() function
+  global->put(global->globalExec(), "debug", new TestFunctionImp(TestFunctionImp::Debug, 1));
+  // add "print" for compatibility with the mozilla js shell
+  global->put(global->globalExec(), "print", new TestFunctionImp(TestFunctionImp::Print, 1));
+  // add "quit" for compatibility with the mozilla js shell
+  global->put(global->globalExec(), "quit", new TestFunctionImp(TestFunctionImp::Quit, 0));
+  // add "gc" for compatibility with the mozilla js shell
+  global->put(global->globalExec(), "gc", new TestFunctionImp(TestFunctionImp::GC, 0));
+  // add "version" for compatibility with the mozilla js shell 
+  global->put(global->globalExec(), "version", new TestFunctionImp(TestFunctionImp::Version, 1));
+  global->put(global->globalExec(), "run", new TestFunctionImp(TestFunctionImp::Run, 1));
+  global->put(global->globalExec(), "load", new TestFunctionImp(TestFunctionImp::Load, 1));
+
+  Interpreter::setShouldPrintExceptions(true);
+  return global;
+}
+
+static bool prettyPrintScript(const UString& fileName, const Vector<char>& script)
+{
+  int errLine = 0;
+  UString errMsg;
+  UString scriptUString(script.data());
+  RefPtr<ProgramNode> programNode = parser().parse<ProgramNode>(fileName, 0, scriptUString.data(), scriptUString.size(), 0, &errLine, &errMsg);
+  if (!programNode) {
+    fprintf(stderr, "%s:%d: %s.\n", fileName.UTF8String().c_str(), errLine, errMsg.UTF8String().c_str());
+    return false;
+  }
+  
+  printf("%s\n", programNode->toString().UTF8String().c_str());
+  return true;
+}
+
+static bool runWithScripts(const Vector<UString>& fileNames, bool prettyPrint)
+{
+  GlobalImp* globalObject = createGlobalObject();
+  Vector<char> script;
+  
+  bool success = true;
+  
+  for (size_t i = 0; i < fileNames.size(); i++) {
+    UString fileName = fileNames[i];
+    
+    if (!fillBufferWithContentsOfFile(fileName, script))
+      return false; // fail early so we can catch missing files
+    
+    if (prettyPrint)
+      prettyPrintScript(fileName, script);
+    else {
+      Completion completion = Interpreter::evaluate(globalObject->globalExec(), fileName, 0, script.data());
+      success = success && completion.complType() != Throw;
+    }
+  }
+  return success;
+}
+
+static void parseArguments(int argc, char** argv, Vector<UString>& fileNames, bool& prettyPrint)
+{
+  if (argc < 2) {
+    fprintf(stderr, "Usage: testkjs file1 [file2...]\n");
+    exit(-1);
+  }
+  
+  for (int i = 1; i < argc; i++) {
+    const char* fileName = argv[i];
+    if (strcmp(fileName, "-f") == 0) // mozilla test driver script uses "-f" prefix for files
+      continue;
+    if (strcmp(fileName, "-p") == 0) {
+      prettyPrint = true;
+      continue;
+    }
+    fileNames.append(fileName);
+  }
+}
+
+int kjsmain(int argc, char** argv)
+{
+  JSLock lock;
+  
+  bool prettyPrint = false;
+  Vector<UString> fileNames;
+  parseArguments(argc, argv, fileNames, prettyPrint);
+  
+  bool success = runWithScripts(fileNames, prettyPrint);
+
+#ifndef NDEBUG
+  Collector::collect();
+#endif
+
+  return success ? 0 : 3;
+}
+
+static bool fillBufferWithContentsOfFile(const UString& fileName, Vector<char>& buffer)
+{
+  FILE* f = fopen(fileName.UTF8String().c_str(), "r");
+  if (!f) {
+    fprintf(stderr, "Could not open file: %s\n", fileName.UTF8String().c_str());
+    return false;
+  }
+  
+  size_t buffer_size = 0;
+  size_t buffer_capacity = 1024;
+  
+  buffer.resize(buffer_capacity);
+  
+  while (!feof(f) && !ferror(f)) {
+    buffer_size += fread(buffer.data() + buffer_size, 1, buffer_capacity - buffer_size, f);
+    if (buffer_size == buffer_capacity) { // guarantees space for trailing '\0'
+      buffer_capacity *= 2;
+      buffer.resize(buffer_capacity);
+    }
+  }
+  fclose(f);
+  buffer[buffer_size] = '\0';
+  
+  return true;
 }

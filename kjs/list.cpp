@@ -1,6 +1,5 @@
 /*
- *  This file is part of the KDE libraries
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2003, 2004, 2005, 2006, 2007 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -14,375 +13,64 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
+#include "config.h"
 #include "list.h"
 
-#include "internal.h"
-
-#define DUMP_STATISTICS 0
+using std::min;
 
 namespace KJS {
 
-// tunable parameters
-const int poolSize = 512;
-const int inlineValuesSize = 4;
-
-
-enum ListImpState { unusedInPool = 0, usedInPool, usedOnHeap, immortal };
-
-struct ListImp : ListImpBase
+void List::getSlice(int startIndex, List& result) const
 {
-    ListImpState state;
-    ValueImp *values[inlineValuesSize];
-    int capacity;
-    ValueImp **overflow;
-
-    ListImp *nextInFreeList;
-    ListImp *nextInOutsideList;
-    ListImp *prevInOutsideList;
-
-#if DUMP_STATISTICS
-    int sizeHighWaterMark;
-#endif
-
-    void markValues();
-};
-
-static ListImp pool[poolSize];
-static ListImp *poolFreeList;
-static ListImp *outsidePoolList;
-static int poolUsed;
-
-#if DUMP_STATISTICS
-
-static int numLists;
-static int numListsHighWaterMark;
-
-static int listSizeHighWaterMark;
-
-static int numListsDestroyed;
-static int numListsBiggerThan[17];
-
-struct ListStatisticsExitLogger { ~ListStatisticsExitLogger(); };
-
-static ListStatisticsExitLogger logger;
-
-ListStatisticsExitLogger::~ListStatisticsExitLogger()
-{
-    printf("\nKJS::List statistics:\n\n");
-    printf("%d lists were allocated\n", numLists);
-    printf("%d lists was the high water mark\n", numListsHighWaterMark);
-    printf("largest list had %d elements\n", listSizeHighWaterMark);
-    if (numListsDestroyed) {
-        putc('\n', stdout);
-        for (int i = 0; i < 17; i++) {
-            printf("%.1f%% of the lists (%d) had more than %d element%s\n",
-                100.0 * numListsBiggerThan[i] / numListsDestroyed,
-                numListsBiggerThan[i],
-                i, i == 1 ? "" : "s");
-        }
-        putc('\n', stdout);
-    }
+    const_iterator start = min(begin() + startIndex, end());
+    result.m_vector.appendRange(start, end());
 }
 
-#endif
-
-
-inline void ListImp::markValues()
+List::ListSet& List::markSet()
 {
-    int inlineSize = MIN(size, inlineValuesSize);
-    for (int i = 0; i != inlineSize; ++i) {
-	if (!values[i]->marked()) {
-	    values[i]->mark();
-	}
-    }
-
-    int overflowSize = size - inlineSize;
-    for (int i = 0; i != overflowSize; ++i) {
-	if (!overflow[i]->marked()) {
-	    overflow[i]->mark();
-	}
-    }
+    static ListSet staticMarkSet;
+    return staticMarkSet;
 }
 
-void List::markProtectedLists()
+void List::markProtectedListsSlowCase()
 {
-#if TEST_CONSERVATIVE_GC || USE_CONSERVATIVE_GC
-    int seen = 0;
-    for (int i = 0; i < poolSize; i++) {
-        if (seen >= poolUsed)
-            break;
+    ListSet::iterator end = markSet().end();
+    for (ListSet::iterator it = markSet().begin(); it != end; ++it) {
+        List* list = *it;
 
-        if (pool[i].state == usedInPool) {
-            seen++;
-            if (pool[i].valueRefCount > 0) {
-                pool[i].markValues();
-            }
+        iterator end2 = list->end();
+        for (iterator it2 = list->begin(); it2 != end2; ++it2) {
+            JSValue* v = *it2;
+            if (!v->marked())
+                v->mark();
         }
     }
+}
 
-    for (ListImp *l = outsidePoolList; l; l = l->nextInOutsideList) {
-        if (l->valueRefCount > 0) {
-            l->markValues();
-        }
+void List::expandAndAppend(JSValue* v)
+{
+    ASSERT(m_vector.size() == m_vector.capacity());
+    
+    // 4x growth would be excessive for a normal vector, but it's OK for Lists 
+    // because they're short-lived.
+    m_vector.reserveCapacity(m_vector.capacity() * 4);
+    
+    // As long as our size stays within our Vector's inline 
+    // capacity, all our values are allocated on the stack, and 
+    // therefore don't need explicit marking. Once our size exceeds
+    // our Vector's inline capacity, though, our values move to the 
+    // heap, where they do need explicit marking.
+    if (!m_isInMarkSet) {
+        markSet().add(this);
+        m_isInMarkSet = true;
     }
-#endif
-}
 
-
-static inline ListImp *allocateListImp()
-{
-    // Find a free one in the pool.
-    if (poolUsed < poolSize) {
-	ListImp *imp = poolFreeList ? poolFreeList : &pool[0];
-	poolFreeList = imp->nextInFreeList ? imp->nextInFreeList : imp + 1;
-	imp->state = usedInPool;
-	poolUsed++;
-	return imp;
-    }
-    
-    ListImp *imp = new ListImp;
-    imp->state = usedOnHeap;
-    // link into outside pool list
-    if (outsidePoolList) {
-        outsidePoolList->prevInOutsideList = imp;
-    }
-    imp->nextInOutsideList = outsidePoolList;
-    imp->prevInOutsideList = NULL;
-    outsidePoolList = imp;
-
-    return imp;
-}
-
-static inline void deallocateListImp(ListImp *imp)
-{
-    if (imp->state == usedInPool) {
-        imp->state = unusedInPool;
-	imp->nextInFreeList = poolFreeList;
-	poolFreeList = imp;
-	poolUsed--;
-    } else {
-        // unlink from outside pool list
-        if (!imp->prevInOutsideList) {
-            outsidePoolList = imp->nextInOutsideList;
-            if (outsidePoolList) {
-                outsidePoolList->prevInOutsideList = NULL;
-            }
-        } else {
-            imp->prevInOutsideList->nextInOutsideList = imp->nextInOutsideList;
-            if (imp->nextInOutsideList) {
-                imp->nextInOutsideList->prevInOutsideList = imp->prevInOutsideList;
-            }
-        }
-
-        delete imp;
-    }
-}
-
-List::List() : _impBase(allocateListImp()), _needsMarking(false)
-{
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    imp->size = 0;
-    imp->refCount = 1;
-    imp->valueRefCount = 1;
-    imp->capacity = 0;
-    imp->overflow = 0;
-#if DUMP_STATISTICS
-    if (++numLists > numListsHighWaterMark)
-        numListsHighWaterMark = numLists;
-    imp->sizeHighWaterMark = 0;
-#endif
-}
-
-List::List(bool needsMarking) : _impBase(allocateListImp()), _needsMarking(needsMarking)
-{
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    imp->size = 0;
-    imp->refCount = 1;
-    imp->valueRefCount = !needsMarking;
-    imp->capacity = 0;
-    imp->overflow = 0;
-
-#if DUMP_STATISTICS
-    if (++numLists > numListsHighWaterMark)
-        numListsHighWaterMark = numLists;
-    imp->sizeHighWaterMark = 0;
-#endif
-}
-
-void List::derefValues()
-{
-#if !USE_CONSERVATIVE_GC
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    
-    int size = imp->size;
-    
-    int inlineSize = MIN(size, inlineValuesSize);
-    for (int i = 0; i != inlineSize; ++i)
-        imp->values[i]->deref();
-
-    int overflowSize = size - inlineSize;
-    ValueImp **overflow = imp->overflow;
-
-    for (int i = 0; i != overflowSize; ++i)
-        overflow[i]->deref();
-#endif
-}
-
-void List::refValues()
-{
-#if !USE_CONSERVATIVE_GC
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    
-    int size = imp->size;
-    
-    int inlineSize = MIN(size, inlineValuesSize);
-    for (int i = 0; i != inlineSize; ++i)
-        imp->values[i]->ref();
-    
-    int overflowSize = size - inlineSize;
-    ValueImp **overflow = imp->overflow;
-    for (int i = 0; i != overflowSize; ++i)
-        overflow[i]->ref();
-#endif
-}
-
-void List::markValues()
-{
-    static_cast<ListImp *>(_impBase)->markValues();
-}
-
-void List::release()
-{
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    
-#if DUMP_STATISTICS
-    --numLists;
-    ++numListsDestroyed;
-    for (int i = 0; i < 17; i++)
-        if (imp->sizeHighWaterMark > i)
-            ++numListsBiggerThan[i];
-#endif
-
-    delete [] imp->overflow;
-    deallocateListImp(imp);
-}
-
-ValueImp *List::impAt(int i) const
-{
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-    if ((unsigned)i >= (unsigned)imp->size)
-        return UndefinedImp::staticUndefined;
-    if (i < inlineValuesSize)
-        return imp->values[i];
-    return imp->overflow[i - inlineValuesSize];
-}
-
-void List::clear()
-{
-    if (_impBase->valueRefCount > 0) {
-	derefValues();
-    }
-    _impBase->size = 0;
-}
-
-void List::append(ValueImp *v)
-{
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-
-    int i = imp->size++;
-
-#if DUMP_STATISTICS
-    if (imp->size > listSizeHighWaterMark)
-        listSizeHighWaterMark = imp->size;
-#endif
-
-    if (imp->valueRefCount > 0) {
-#if !USE_CONSERVATIVE_GC
-	v->ref();
-#endif
-    }
-    
-    if (i < inlineValuesSize) {
-        imp->values[i] = v;
-        return;
-    }
-    
-    if (i >= imp->capacity) {
-        int newCapacity = i * 2;
-        ValueImp **newOverflow = new ValueImp * [newCapacity - inlineValuesSize];
-        ValueImp **oldOverflow = imp->overflow;
-        int oldOverflowSize = i - inlineValuesSize;
-        for (int j = 0; j != oldOverflowSize; j++)
-            newOverflow[j] = oldOverflow[j];
-        delete [] oldOverflow;
-        imp->overflow = newOverflow;
-        imp->capacity = newCapacity;
-    }
-    
-    imp->overflow[i - inlineValuesSize] = v;
-}
-
-List List::copy() const
-{
-    List copy;
-
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-
-    int size = imp->size;
-
-    int inlineSize = MIN(size, inlineValuesSize);
-    for (int i = 0; i != inlineSize; ++i)
-        copy.append(imp->values[i]);
-
-    ValueImp **overflow = imp->overflow;
-    int overflowSize = size - inlineSize;
-    for (int i = 0; i != overflowSize; ++i)
-        copy.append(overflow[i]);
-
-    return copy;
-}
-
-
-List List::copyTail() const
-{
-    List copy;
-
-    ListImp *imp = static_cast<ListImp *>(_impBase);
-
-    int size = imp->size;
-
-    int inlineSize = MIN(size, inlineValuesSize);
-    for (int i = 1; i < inlineSize; ++i)
-        copy.append(imp->values[i]);
-
-    ValueImp **overflow = imp->overflow;
-    int overflowSize = size - inlineSize;
-    for (int i = 0; i < overflowSize; ++i)
-        copy.append(overflow[i]);
-
-    return copy;
-}
-
-const List &List::empty()
-{
-    static List emptyList;
-    return emptyList;
-}
-
-List &List::operator=(const List &b)
-{
-    ListImpBase *bImpBase = b._impBase;
-    ++bImpBase->refCount;
-    if (!_needsMarking)
-        ++bImpBase->valueRefCount;
-    deref();
-    _impBase = bImpBase;
-    return *this;
+    m_vector.uncheckedAppend(v);
 }
 
 } // namespace KJS

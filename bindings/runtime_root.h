@@ -22,83 +22,82 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
-#ifndef _RUNTIME_ROOT_H_
-#define _RUNTIME_ROOT_H_
 
-#include <JavaScriptCore/interpreter.h>
-#include <JavaScriptCore/object.h>
-#include <JavaScriptCore/jni_jsobject.h>
-#include <JavaScriptCore/protect.h>
+#ifndef RUNTIME_ROOT_H_
+#define RUNTIME_ROOT_H_
+
+#include <CoreFoundation/CoreFoundation.h>
+
+#if ENABLE(JAVA_BINDINGS)
+#include "jni_jsobject.h"
+#endif
+#include "protect.h"
+
+#include <wtf/HashSet.h>
+#include <wtf/Noncopyable.h>
+#include <wtf/RefCounted.h>
 
 namespace KJS {
+
+class Interpreter;
+class JSGlobalObject;
+class RuntimeObjectImp;
 
 namespace Bindings {
 
 class RootObject;
 
-typedef RootObject *(*FindRootObjectForNativeHandleFunctionPtr)(void *);
+typedef PassRefPtr<RootObject> (*CreateRootObjectFunction)(void* nativeHandle);
+typedef HashCountedSet<JSObject*> ProtectCountSet;
 
-extern CFMutableDictionaryRef findReferenceDictionary(ObjectImp *imp);
-extern const RootObject *rootForImp (ObjectImp *imp);
-extern const RootObject *rootForInterpreter (Interpreter *interpreter);
-extern void addNativeReference (const RootObject *root, ObjectImp *imp);
-extern void removeNativeReference (ObjectImp *imp);
+extern RootObject* findProtectingRootObject(JSObject*);
+extern RootObject* findRootObject(JSGlobalObject*);
 
-class RootObject
-{
-friend class JSObject;
+class RootObject : public RefCounted<RootObject> {
+    friend class JavaJSObject;
+
 public:
-    RootObject (const void *nativeHandle) : _nativeHandle(nativeHandle), _imp(0), _interpreter(0) {}
-    ~RootObject (){
-#if !USE_CONSERVATIVE_GC
-        _imp->deref();
-#endif
-#if USE_CONSERVATIVE_GC | TEST_CONSERVATIVE_GC
-        InterpreterLock lock;
-        gcUnprotect(_imp);
-#endif
-    }
+    ~RootObject();
     
-    void setRootObjectImp (ObjectImp *i) { 
-#if USE_CONSERVATIVE_GC | TEST_CONSERVATIVE_GC
-        InterpreterLock lock;
-#endif
-        _imp = i;
-#if !USE_CONSERVATIVE_GC
-        _imp->ref();
-#endif
-#if USE_CONSERVATIVE_GC | TEST_CONSERVATIVE_GC
-        gcProtect(_imp);
-#endif
-    }
-    
-    ObjectImp *rootObjectImp() const { return _imp; }
-    
-    void setInterpreter (Interpreter *i);
-    Interpreter *interpreter() const { return _interpreter; }
+    static PassRefPtr<RootObject> create(const void* nativeHandle, JSGlobalObject*);
 
-    void removeAllNativeReferences ();
+    bool isValid() { return m_isValid; }
+    void invalidate();
+    
+    void gcProtect(JSObject*);
+    void gcUnprotect(JSObject*);
+    bool gcIsProtected(JSObject*);
 
+    const void* nativeHandle() const;
+    JSGlobalObject* globalObject() const;
 
     // Must be called from the thread that will be used to access JavaScript.
-    static void setFindRootObjectForNativeHandleFunction(FindRootObjectForNativeHandleFunctionPtr aFunc);
-    static FindRootObjectForNativeHandleFunctionPtr findRootObjectForNativeHandleFunction() {
-        return _findRootObjectForNativeHandleFunctionPtr;
+    static void setCreateRootObject(CreateRootObjectFunction);
+    static CreateRootObjectFunction createRootObject() {
+        return _createRootObject;
     }
     
     static CFRunLoopRef runLoop() { return _runLoop; }
     static CFRunLoopSourceRef performJavaScriptSource() { return _performJavaScriptSource; }
     
+#if ENABLE(JAVA_BINDINGS)
     static void dispatchToJavaScriptThread(JSObjectCallContext *context);
-    
-    const void *nativeHandle() const { return _nativeHandle; }
+#endif
 
+    void addRuntimeObject(RuntimeObjectImp*);
+    void removeRuntimeObject(RuntimeObjectImp*);
 private:
-    const void *_nativeHandle;
-    ObjectImp *_imp;
-    Interpreter *_interpreter;
+    RootObject(const void* nativeHandle, JSGlobalObject*);
+    
+    bool m_isValid;
+    
+    const void* m_nativeHandle;
+    ProtectedPtr<JSGlobalObject> m_globalObject;
+    ProtectCountSet m_protectCountSet;
 
-    static FindRootObjectForNativeHandleFunctionPtr _findRootObjectForNativeHandleFunctionPtr;
+    HashSet<RuntimeObjectImp*> m_runtimeObjects;
+    
+    static CreateRootObjectFunction _createRootObject;
     static CFRunLoopRef _runLoop;
     static CFRunLoopSourceRef _performJavaScriptSource;
 };
@@ -107,4 +106,4 @@ private:
 
 } // namespace KJS
 
-#endif
+#endif // RUNTIME_ROOT_H_

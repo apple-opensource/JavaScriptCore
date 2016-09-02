@@ -1,9 +1,8 @@
 // -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001 Peter Kelly (pmk@post.com)
- *  Copyright (C) 2003 Apple Computer, Inc
+ *  Copyright (C) 2003, 2007 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -17,29 +16,25 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
-#ifndef _KJS_COMPLETION_H_
-#define _KJS_COMPLETION_H_
-
-#include "identifier.h"
-#include "value.h"
+#ifndef KJS_COMPLETION_H
+#define KJS_COMPLETION_H
 
 namespace KJS {
 
-  /**
-   * Completion types.
-   */
-  enum ComplType { Normal, Break, Continue, ReturnValue, Throw };
+  class JSValue;
+
+  enum ComplType { Normal, Break, Continue, ReturnValue, Throw, Interrupted };
 
   /**
    * Completion objects are used to convey the return status and value
    * from functions.
    *
-   * See @ref FunctionImp::execute()
+   * See FunctionImp::execute()
    *
    * @see FunctionImp
    *
@@ -47,18 +42,17 @@ namespace KJS {
    */
   class Completion {
   public:
-    Completion(ComplType c = Normal, const Value& v = Value(),
-               const Identifier &t = Identifier::null())
-        : comp(c), val(v), tar(t) { }
+    Completion(ComplType type = Normal, JSValue* value = 0)
+        : m_type(type), m_value(value) { }
 
-    ComplType complType() const { return comp; }
-    Value value() const { return val; }
-    Identifier target() const { return tar; }
-    bool isValueCompletion() const { return !val.isNull(); }
+    ComplType complType() const { return m_type; }
+    JSValue* value() const { return m_value; }
+    void setValue(JSValue* v) { m_value = v; }
+    bool isValueCompletion() const { return !!m_value; }
+
   private:
-    ComplType comp;
-    Value val;
-    Identifier tar;
+    ComplType m_type;
+    JSValue* m_value;
   };
 
 }

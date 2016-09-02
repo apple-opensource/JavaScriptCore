@@ -1,7 +1,8 @@
 // -*- c-basic-offset: 2 -*-
 /*
  *  This file is part of the KDE libraries
- *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
+ *  Copyright (C) 1999-2001, 2004 Harri Porten (porten@kde.org)
+ *  Copyright (c) 2007, Apple Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -15,164 +16,105 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
+#include "config.h"
 #include "regexp.h"
 
-#include <assert.h>
+#include "lexer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wtf/Assertions.h>
 
 namespace KJS {
 
-RegExp::RegExp(const UString &p, int flags)
-  : _flags(flags), _numSubPatterns(0)
+RegExp::RegExp(const UString& pattern)
+  : m_pattern(pattern)
+  , m_flagBits(0)
+  , m_constructionError(0)
+  , m_numSubpatterns(0)
 {
-#ifdef HAVE_PCREPOSIX
+    m_regExp = jsRegExpCompile(reinterpret_cast<const ::UChar*>(pattern.data()), pattern.size(),
+        JSRegExpDoNotIgnoreCase, JSRegExpSingleLine, &m_numSubpatterns, &m_constructionError);
+}
 
-  int options = PCRE_UTF8;
-  // Note: the Global flag is already handled by RegExpProtoFunc::execute.
-  if (flags & IgnoreCase)
-    options |= PCRE_CASELESS;
-  if (flags & Multiline)
-    options |= PCRE_MULTILINE;
+RegExp::RegExp(const UString& pattern, const UString& flags)
+  : m_pattern(pattern)
+  , m_flags(flags)
+  , m_flagBits(0)
+  , m_constructionError(0)
+  , m_numSubpatterns(0)
+{
+    // NOTE: The global flag is handled on a case-by-case basis by functions like
+    // String::match and RegExpImp::match.
+    if (flags.find('g') != -1)
+        m_flagBits |= Global;
 
-  const char *errorMessage;
-  int errorOffset;
-  UString nullTerminated(p);
-  char null(0);
-  nullTerminated.append(null);
-  _regex = pcre_compile(reinterpret_cast<const uint16_t *>(nullTerminated.data()), options, &errorMessage, &errorOffset, NULL);
-  if (!_regex) {
-#ifndef NDEBUG
-    fprintf(stderr, "KJS: pcre_compile() failed with '%s'\n", errorMessage);
-#endif
-    return;
-  }
+    // FIXME: Eliminate duplication by adding a way ask a JSRegExp what its flags are?
+    JSRegExpIgnoreCaseOption ignoreCaseOption = JSRegExpDoNotIgnoreCase;
+    if (flags.find('i') != -1) {
+        m_flagBits |= IgnoreCase;
+        ignoreCaseOption = JSRegExpIgnoreCase;
+    }
 
-#ifdef PCRE_INFO_CAPTURECOUNT
-  // Get number of subpatterns that will be returned.
-  pcre_fullinfo(_regex, NULL, PCRE_INFO_CAPTURECOUNT, &_numSubPatterns);
-#endif
-
-#else /* HAVE_PCREPOSIX */
-
-  int regflags = 0;
-#ifdef REG_EXTENDED
-  regflags |= REG_EXTENDED;
-#endif
-#ifdef REG_ICASE
-  if ( f & IgnoreCase )
-    regflags |= REG_ICASE;
-#endif
-
-  //NOTE: Multiline is not feasible with POSIX regex.
-  //if ( f & Multiline )
-  //    ;
-  // Note: the Global flag is already handled by RegExpProtoFunc::execute
-
-  regcomp(&_regex, p.ascii(), regflags);
-  /* TODO check for errors */
-
-#endif
+    JSRegExpMultilineOption multilineOption = JSRegExpSingleLine;
+    if (flags.find('m') != -1) {
+        m_flagBits |= Multiline;
+        multilineOption = JSRegExpMultiline;
+    }
+    
+    m_regExp = jsRegExpCompile(reinterpret_cast<const ::UChar*>(pattern.data()), pattern.size(),
+        ignoreCaseOption, multilineOption, &m_numSubpatterns, &m_constructionError);
 }
 
 RegExp::~RegExp()
 {
-#ifdef HAVE_PCREPOSIX
-  pcre_free(_regex);
-#else
-  /* TODO: is this really okay after an error ? */
-  regfree(&_regex);
-#endif
+    jsRegExpFree(m_regExp);
 }
 
-UString RegExp::match(const UString &s, int i, int *pos, int **ovector)
+int RegExp::match(const UString& s, int i, OwnArrayPtr<int>* ovector)
 {
   if (i < 0)
     i = 0;
-  int dummyPos;
-  if (!pos)
-    pos = &dummyPos;
-  *pos = -1;
   if (ovector)
-    *ovector = 0;
+    ovector->clear();
 
   if (i > s.size() || s.isNull())
-    return UString::null();
+    return -1;
 
-#ifdef HAVE_PCREPOSIX
-
-  if (!_regex)
-    return UString::null();
+  if (!m_regExp)
+    return -1;
 
   // Set up the offset vector for the result.
   // First 2/3 used for result, the last third used by PCRE.
-  int *offsetVector;
+  int* offsetVector;
   int offsetVectorSize;
   int fixedSizeOffsetVector[3];
   if (!ovector) {
     offsetVectorSize = 3;
     offsetVector = fixedSizeOffsetVector;
   } else {
-    offsetVectorSize = (_numSubPatterns + 1) * 3;
+    offsetVectorSize = (m_numSubpatterns + 1) * 3;
     offsetVector = new int [offsetVectorSize];
+    ovector->set(offsetVector);
   }
 
-  const int numMatches = pcre_exec(_regex, NULL, reinterpret_cast<const uint16_t *>(s.data()), s.size(), i, 0, offsetVector, offsetVectorSize);
+  int numMatches = jsRegExpExecute(m_regExp, reinterpret_cast<const ::UChar*>(s.data()), s.size(), i, offsetVector, offsetVectorSize);
 
   if (numMatches < 0) {
 #ifndef NDEBUG
-    if (numMatches != PCRE_ERROR_NOMATCH)
-      fprintf(stderr, "KJS: pcre_exec() failed with result %d\n", numMatches);
+    if (numMatches != JSRegExpErrorNoMatch)
+      fprintf(stderr, "jsRegExpExecute failed with result %d\n", numMatches);
 #endif
-    if (offsetVector != fixedSizeOffsetVector)
-      delete [] offsetVector;
-    return UString::null();
+    if (ovector)
+      ovector->clear();
+    return -1;
   }
 
-  *pos = offsetVector[0];
-  if (ovector)
-    *ovector = offsetVector;
-  return s.substr(offsetVector[0], offsetVector[1] - offsetVector[0]);
-
-#else
-
-  const uint maxMatch = 10;
-  regmatch_t rmatch[maxMatch];
-
-  char *str = strdup(s.ascii()); // TODO: why ???
-  if (regexec(&_regex, str + i, maxMatch, rmatch, 0)) {
-    free(str);
-    return UString::null();
-  }
-  free(str);
-
-  if (!ovector) {
-    *pos = rmatch[0].rm_so + i;
-    return s.substr(rmatch[0].rm_so + i, rmatch[0].rm_eo - rmatch[0].rm_so);
-  }
-
-  // map rmatch array to ovector used in PCRE case
-  _numSubPatterns = 0;
-  for(uint j = 1; j < maxMatch && rmatch[j].rm_so >= 0 ; j++)
-      _numSubPatterns++;
-  int ovecsize = (_numSubPatterns+1)*3; // see above
-  *ovector = new int[ovecsize];
-  for (uint j = 0; j < _numSubPatterns + 1; j++) {
-    if (j>maxMatch)
-      break;
-    (*ovector)[2*j] = rmatch[j].rm_so + i;
-    (*ovector)[2*j+1] = rmatch[j].rm_eo + i;
-  }
-
-  *pos = (*ovector)[0];
-  return s.substr((*ovector)[0], (*ovector)[1] - (*ovector)[0]);
-
-#endif
+  return offsetVector[0];
 }
 
 } // namespace KJS

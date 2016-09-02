@@ -16,15 +16,14 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
+#include "config.h"
 #include "debugger.h"
-#include "value.h"
-#include "object.h"
-#include "types.h"
-#include "interpreter.h"
+
+#include "JSGlobalObject.h"
 #include "internal.h"
 #include "ustring.h"
 
@@ -33,13 +32,13 @@ using namespace KJS;
 // ------------------------------ Debugger -------------------------------------
 
 namespace KJS {
-  struct AttachedInterpreter
+  struct AttachedGlobalObject
   {
   public:
-    AttachedInterpreter(Interpreter *i, AttachedInterpreter *ai) : interp(i), next(ai) { ++Debugger::debuggersPresent; }
-    ~AttachedInterpreter() { --Debugger::debuggersPresent; }
-    Interpreter *interp;
-    AttachedInterpreter *next;
+    AttachedGlobalObject(JSGlobalObject* o, AttachedGlobalObject* ai) : globalObj(o), next(ai) { ++Debugger::debuggersPresent; }
+    ~AttachedGlobalObject() { --Debugger::debuggersPresent; }
+    JSGlobalObject* globalObj;
+    AttachedGlobalObject* next;
   };
 
 }
@@ -57,67 +56,78 @@ Debugger::~Debugger()
   delete rep;
 }
 
-void Debugger::attach(Interpreter *interp)
+void Debugger::attach(JSGlobalObject* globalObject)
 {
-  Debugger *other = interp->imp()->debugger();
+  Debugger* other = globalObject->debugger();
   if (other == this)
     return;
   if (other)
-    other->detach(interp);
-  interp->imp()->setDebugger(this);
-  rep->interps = new AttachedInterpreter(interp, rep->interps);
+    other->detach(globalObject);
+  globalObject->setDebugger(this);
+  rep->globalObjects = new AttachedGlobalObject(globalObject, rep->globalObjects);
 }
 
-void Debugger::detach(Interpreter *interp)
+void Debugger::detach(JSGlobalObject* globalObj)
 {
-  if (interp && interp->imp()->debugger() == this)
-    interp->imp()->setDebugger(0);
-
-  // iterate the addresses where AttachedInterpreter pointers are stored
+  // iterate the addresses where AttachedGlobalObject pointers are stored
   // so we can unlink items from the list
-  AttachedInterpreter **p = &rep->interps;
-  AttachedInterpreter *q;
+  AttachedGlobalObject **p = &rep->globalObjects;
+  AttachedGlobalObject *q;
   while ((q = *p)) {
-    if (!interp || q->interp == interp) {
+    if (!globalObj || q->globalObj == globalObj) {
       *p = q->next;
+      q->globalObj->setDebugger(0);
       delete q;
-    } else {
+    } else
       p = &q->next;
-    }
   }
+
+  if (globalObj)
+    latestExceptions.remove(globalObj);
+  else
+    latestExceptions.clear();
 }
 
-bool Debugger::sourceParsed(ExecState */*exec*/, int /*sourceId*/, const UString &/*sourceURL*/, 
-                           const UString &/*source*/, int /*errorLine*/)
+bool Debugger::hasHandledException(ExecState *exec, JSValue *exception)
+{
+    if (latestExceptions.get(exec->dynamicGlobalObject()).get() == exception)
+        return true;
+
+    latestExceptions.set(exec->dynamicGlobalObject(), exception);
+    return false;
+}
+
+bool Debugger::sourceParsed(ExecState*, int /*sourceId*/, const UString &/*sourceURL*/, 
+                           const UString &/*source*/, int /*startingLineNumber*/, int /*errorLine*/, const UString & /*errorMsg*/)
 {
   return true;
 }
 
-bool Debugger::sourceUnused(ExecState */*exec*/, int /*sourceId*/)
+bool Debugger::sourceUnused(ExecState*, int /*sourceId*/)
 {
   return true;
 }
 
-bool Debugger::exception(ExecState */*exec*/, int /*sourceId*/, int /*lineno*/,
-                         Object &/*exceptionObj*/)
+bool Debugger::exception(ExecState*, int /*sourceId*/, int /*lineno*/,
+                         JSValue* /*exception */)
 {
   return true;
 }
 
-bool Debugger::atStatement(ExecState */*exec*/, int /*sourceId*/, int /*firstLine*/,
+bool Debugger::atStatement(ExecState*, int /*sourceId*/, int /*firstLine*/,
                            int /*lastLine*/)
 {
   return true;
 }
 
-bool Debugger::callEvent(ExecState */*exec*/, int /*sourceId*/, int /*lineno*/,
-                         Object &/*function*/, const List &/*args*/)
+bool Debugger::callEvent(ExecState*, int /*sourceId*/, int /*lineno*/,
+                         JSObject* /*function*/, const List &/*args*/)
 {
   return true;
 }
 
-bool Debugger::returnEvent(ExecState */*exec*/, int /*sourceId*/, int /*lineno*/,
-                           Object &/*function*/)
+bool Debugger::returnEvent(ExecState*, int /*sourceId*/, int /*lineno*/,
+                           JSObject* /*function*/)
 {
   return true;
 }

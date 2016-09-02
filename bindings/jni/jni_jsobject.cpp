@@ -22,19 +22,23 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
+
+#include "config.h"
+
+#if ENABLE(JAVA_BINDINGS)
+
+#include "identifier.h"
+#include "internal.h"
+#include "interpreter.h"
+#include "jni_jsobject.h"
+#include "jni_runtime.h"
+#include "jni_utility.h"
+#include "JSGlobalObject.h"
+#include "list.h"
+#include "runtime_object.h"
+#include "runtime_root.h"
 #include <CoreFoundation/CoreFoundation.h>
-
-#include <assert.h>
-
-#include <identifier.h>
-#include <internal.h>
-#include <interpreter.h>
-#include <list.h>
-#include <jni_jsobject.h>
-#include <jni_runtime.h>
-#include <jni_utility.h>
-#include <runtime_object.h>
-#include <runtime_root.h>
+#include <wtf/Assertions.h>
 
 using namespace KJS::Bindings;
 using namespace KJS;
@@ -55,7 +59,7 @@ static bool isJavaScriptThread()
     return (RootObject::runLoop() == CFRunLoopGetCurrent());
 }
 
-jvalue JSObject::invoke (JSObjectCallContext *context)
+jvalue JavaJSObject::invoke (JSObjectCallContext *context)
 {
     jvalue result;
 
@@ -74,66 +78,58 @@ jvalue JSObject::invoke (JSObjectCallContext *context)
         }
 
         if (context->type == CreateNative) {
-            result.j = JSObject::createNative(nativeHandle);
+            result.j = JavaJSObject::createNative(nativeHandle);
         }
         else {
-            KJS::ObjectImp *imp = jlong_to_impptr(nativeHandle);
-            if (!rootForImp(imp)) {
+            JSObject *imp = jlong_to_impptr(nativeHandle);
+            if (!findProtectingRootObject(imp)) {
                 fprintf (stderr, "%s:%d:  Attempt to access JavaScript from destroyed applet, type %d.\n", __FILE__, __LINE__, context->type);
                 return result;
             }
 
             switch (context->type){            
                 case Call: {
-                    result.l = JSObject(nativeHandle).call(context->string, context->args);
+                    result.l = JavaJSObject(nativeHandle).call(context->string, context->args);
                     break;
                 }
                 
                 case Eval: {
-                    result.l = JSObject(nativeHandle).eval(context->string);
+                    result.l = JavaJSObject(nativeHandle).eval(context->string);
                     break;
                 }
             
                 case GetMember: {
-                    result.l = JSObject(nativeHandle).getMember(context->string);
+                    result.l = JavaJSObject(nativeHandle).getMember(context->string);
                     break;
                 }
                 
                 case SetMember: {
-                    JSObject(nativeHandle).setMember(context->string, context->value);
+                    JavaJSObject(nativeHandle).setMember(context->string, context->value);
                     break;
                 }
                 
                 case RemoveMember: {
-                    JSObject(nativeHandle).removeMember(context->string);
+                    JavaJSObject(nativeHandle).removeMember(context->string);
                     break;
                 }
             
                 case GetSlot: {
-                    result.l = JSObject(nativeHandle).getSlot(context->index);
+                    result.l = JavaJSObject(nativeHandle).getSlot(context->index);
                     break;
                 }
                 
                 case SetSlot: {
-                    JSObject(nativeHandle).setSlot(context->index, context->value);
+                    JavaJSObject(nativeHandle).setSlot(context->index, context->value);
                     break;
                 }
             
                 case ToString: {
-                    result.l = (jobject) JSObject(nativeHandle).toString();
+                    result.l = (jobject) JavaJSObject(nativeHandle).toString();
                     break;
                 }
     
                 case Finalize: {
-                    ObjectImp *imp = jlong_to_impptr(nativeHandle);
-                    if (findReferenceDictionary(imp) == 0) {
-                        // We may have received a finalize method call from the VM 
-                        // AFTER removing our last reference to the Java instance.
-                        JS_LOG ("finalize called on instance we have already removed.\n");
-                    }
-                    else {
-                        JSObject(nativeHandle).finalize();
-                    }
+                    JavaJSObject(nativeHandle).finalize();
                     break;
                 }
                 
@@ -149,174 +145,222 @@ jvalue JSObject::invoke (JSObjectCallContext *context)
 }
 
 
-JSObject::JSObject(jlong nativeJSObject)
+JavaJSObject::JavaJSObject(jlong nativeJSObject)
 {
     _imp = jlong_to_impptr(nativeJSObject);
     
-    // If we are unable to cast the nativeJSObject to an ObjectImp something is
-    // terribly wrong.
-    assert (_imp != 0);
-    
-    _root = rootForImp(_imp);
-    
-    // If we can't find the root for the object something is terribly wrong.
-    assert (_root != 0);
+    ASSERT(_imp);
+    _rootObject = findProtectingRootObject(_imp);
+    ASSERT(_rootObject);
 }
 
+RootObject* JavaJSObject::rootObject() const
+{ 
+    return _rootObject && _rootObject->isValid() ? _rootObject.get() : 0; 
+}
 
-jobject JSObject::call(jstring methodName, jobjectArray args) const
+jobject JavaJSObject::call(jstring methodName, jobjectArray args) const
 {
     JS_LOG ("methodName = %s\n", JavaString(methodName).UTF8String());
 
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
+    
     // Lookup the function object.
-    ExecState *exec = _root->interpreter()->globalExec();
-    InterpreterLock lock;
+    ExecState* exec = rootObject->globalObject()->globalExec();
+    JSLock lock;
     
     Identifier identifier(JavaString(methodName).ustring());
-    Value func = _imp->get (exec, identifier);
-    if (func.isNull() || func.type() == UndefinedType) {
-        // Maybe throw an exception here?
+    JSValue *func = _imp->get (exec, identifier);
+    if (func->isUndefinedOrNull())
         return 0;
-    }
 
     // Call the function object.
-    ObjectImp *funcImp = static_cast<ObjectImp*>(func.imp());
-    Object thisObj = Object(const_cast<ObjectImp*>(_imp));
-    List argList = listFromJArray(args);
-
-    Value result = Object(funcImp).call (exec, thisObj, argList);
+    JSObject *funcImp = static_cast<JSObject*>(func);
+    JSObject *thisObj = const_cast<JSObject*>(_imp);
+    List argList;
+    getListFromJArray(args, argList);
+    rootObject->globalObject()->startTimeoutCheck();
+    JSValue *result = funcImp->call(exec, thisObj, argList);
+    rootObject->globalObject()->stopTimeoutCheck();
 
     return convertValueToJObject(result);
 }
 
-jobject JSObject::eval(jstring script) const
+jobject JavaJSObject::eval(jstring script) const
 {
     JS_LOG ("script = %s\n", JavaString(script).UTF8String());
     
-    Object thisObj = Object(const_cast<ObjectImp*>(_imp));
-    Value result;
+    JSObject *thisObj = const_cast<JSObject*>(_imp);
+    JSValue *result;
     
-    InterpreterLock lock;
+    JSLock lock;
     
-    Completion completion = _root->interpreter()->evaluate(UString(), 0, JavaString(script).ustring(),thisObj);
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
+
+    rootObject->globalObject()->startTimeoutCheck();
+    Completion completion = Interpreter::evaluate(rootObject->globalObject()->globalExec(), UString(), 0, JavaString(script).ustring(),thisObj);
+    rootObject->globalObject()->stopTimeoutCheck();
     ComplType type = completion.complType();
     
     if (type == Normal) {
         result = completion.value();
-        if (result.isNull())
-            result = Undefined();
+        if (!result)
+            result = jsUndefined();
     } else
-        result = Undefined();
+        result = jsUndefined();
     
     return convertValueToJObject (result);
 }
 
-jobject JSObject::getMember(jstring memberName) const
+jobject JavaJSObject::getMember(jstring memberName) const
 {
     JS_LOG ("(%p) memberName = %s\n", _imp, JavaString(memberName).UTF8String());
 
-    ExecState *exec = _root->interpreter()->globalExec();
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
 
-    InterpreterLock lock;
-    Value result = _imp->get (exec, Identifier (JavaString(memberName).ustring()));
+    ExecState* exec = rootObject->globalObject()->globalExec();
+    
+    JSLock lock;
+    JSValue *result = _imp->get (exec, Identifier (JavaString(memberName).ustring()));
 
     return convertValueToJObject(result);
 }
 
-void JSObject::setMember(jstring memberName, jobject value) const
+void JavaJSObject::setMember(jstring memberName, jobject value) const
 {
     JS_LOG ("memberName = %s, value = %p\n", JavaString(memberName).UTF8String(), value);
-    ExecState *exec = _root->interpreter()->globalExec();
-    InterpreterLock lock;
+
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return;
+
+    ExecState* exec = rootObject->globalObject()->globalExec();
+    JSLock lock;
     _imp->put(exec, Identifier (JavaString(memberName).ustring()), convertJObjectToValue(value));
 }
 
 
-void JSObject::removeMember(jstring memberName) const
+void JavaJSObject::removeMember(jstring memberName) const
 {
     JS_LOG ("memberName = %s\n", JavaString(memberName).UTF8String());
 
-    ExecState *exec = _root->interpreter()->globalExec();
-    InterpreterLock lock;
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return;
+
+    ExecState* exec = rootObject->globalObject()->globalExec();
+    JSLock lock;
     _imp->deleteProperty(exec, Identifier (JavaString(memberName).ustring()));
 }
 
 
-jobject JSObject::getSlot(jint index) const
+jobject JavaJSObject::getSlot(jint index) const
 {
+#ifdef __LP64__
+    JS_LOG ("index = %d\n", index);
+#else
     JS_LOG ("index = %ld\n", index);
+#endif
 
-    ExecState *exec = _root->interpreter()->globalExec();
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
 
-    InterpreterLock lock;
-    Value result = _imp->get (exec, (unsigned)index);
+    ExecState* exec = rootObject->globalObject()->globalExec();
+
+    JSLock lock;
+    JSValue *result = _imp->get (exec, (unsigned)index);
 
     return convertValueToJObject(result);
 }
 
 
-void JSObject::setSlot(jint index, jobject value) const
+void JavaJSObject::setSlot(jint index, jobject value) const
 {
+#ifdef __LP64__
+    JS_LOG ("index = %d, value = %p\n", index, value);
+#else
     JS_LOG ("index = %ld, value = %p\n", index, value);
+#endif
 
-    ExecState *exec = _root->interpreter()->globalExec();
-    InterpreterLock lock;
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return;
+
+    ExecState* exec = rootObject->globalObject()->globalExec();
+    JSLock lock;
     _imp->put(exec, (unsigned)index, convertJObjectToValue(value));
 }
 
 
-jstring JSObject::toString() const
+jstring JavaJSObject::toString() const
 {
     JS_LOG ("\n");
     
-    InterpreterLock lock;
-    Object thisObj = Object(const_cast<ObjectImp*>(_imp));
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
 
-    ExecState *exec = _root->interpreter()->globalExec();
+    JSLock lock;
+    JSObject *thisObj = const_cast<JSObject*>(_imp);
+    ExecState* exec = rootObject->globalObject()->globalExec();
     
     return (jstring)convertValueToJValue (exec, thisObj, object_type, "java.lang.String").l;
 }
 
-void JSObject::finalize() const
+void JavaJSObject::finalize() const
 {
-    JS_LOG ("\n");
-
-    removeNativeReference (_imp);
+    if (RootObject* rootObject = this->rootObject())
+        rootObject->gcUnprotect(_imp);
 }
 
-// We're either creating a 'Root' object (via a call to JSObject.getWindow()), or
-// another JSObject.
-jlong JSObject::createNative(jlong nativeHandle)
+// We're either creating a 'Root' object (via a call to JavaJSObject.getWindow()), or
+// another JavaJSObject.
+jlong JavaJSObject::createNative(jlong nativeHandle)
 {
     JS_LOG ("nativeHandle = %d\n", (int)nativeHandle);
 
     if (nativeHandle == UndefinedHandle)
         return nativeHandle;
-    else if (rootForImp(jlong_to_impptr(nativeHandle))){
-        return nativeHandle;
-    }
 
-    FindRootObjectForNativeHandleFunctionPtr aFunc = RootObject::findRootObjectForNativeHandleFunction();
-    if (aFunc) {
-        Bindings::RootObject *root = aFunc(jlong_to_ptr(nativeHandle));
-        // If root is !NULL We must have been called via netscape.javascript.JSObject.getWindow(),
-        // otherwise we are being called after creating a JSObject in
-        // JSObject::convertValueToJObject().
-        if (root) {
-            addNativeReference (root, root->rootObjectImp());        
-            return ptr_to_jlong(root->rootObjectImp());
-        }
-        else {
-            return nativeHandle;
-        }
+    if (findProtectingRootObject(jlong_to_impptr(nativeHandle)))
+        return nativeHandle;
+
+    CreateRootObjectFunction createRootObject = RootObject::createRootObject();
+    if (!createRootObject)
+        return ptr_to_jlong(0);
+
+    RefPtr<RootObject> rootObject = createRootObject(jlong_to_ptr(nativeHandle));
+
+    // If rootObject is !NULL We must have been called via netscape.javascript.JavaJSObject.getWindow(),
+    // otherwise we are being called after creating a JavaJSObject in
+    // JavaJSObject::convertValueToJObject().
+    if (rootObject) {
+        JSObject* globalObject = rootObject->globalObject();
+        // We call gcProtect here to get the object into the root object's "protect set" which
+        // is used to test if a native handle is valid as well as getting the root object given the handle.
+        rootObject->gcProtect(globalObject);
+        return ptr_to_jlong(globalObject);
     }
     
-    return ptr_to_jlong(0);
+    return nativeHandle;
 }
 
-jobject JSObject::convertValueToJObject (KJS::Value value) const
+jobject JavaJSObject::convertValueToJObject (JSValue *value) const
 {
-    ExecState *exec = _root->interpreter()->globalExec();
+    JSLock lock;
+    
+    RootObject* rootObject = this->rootObject();
+    if (!rootObject)
+        return 0;
+
+    ExecState* exec = rootObject->globalObject()->globalExec();
     JNIEnv *env = getJNIEnv();
     jobject result = 0;
     
@@ -326,50 +370,50 @@ jobject JSObject::convertValueToJObject (KJS::Value value) const
     // string -> java.lang.String
     // boolean -> java.lang.Boolean
     // Java instance -> Java instance
-    // Everything else -> JSObject
+    // Everything else -> JavaJSObject
     
-    KJS::Type type = value.type();
-    if (type == KJS::NumberType) {
+    JSType type = value->type();
+    if (type == NumberType) {
         jclass JSObjectClass = env->FindClass ("java/lang/Double");
         jmethodID constructorID = env->GetMethodID (JSObjectClass, "<init>", "(D)V");
         if (constructorID != NULL) {
-            result = env->NewObject (JSObjectClass, constructorID, (jdouble)value.toNumber(exec));
+            result = env->NewObject (JSObjectClass, constructorID, (jdouble)value->toNumber(exec));
         }
     }
-    else if (type == KJS::StringType) {
-        KJS::UString stringValue = value.toString(exec);
+    else if (type == StringType) {
+        UString stringValue = value->toString(exec);
         JNIEnv *env = getJNIEnv();
         result = env->NewString ((const jchar *)stringValue.data(), stringValue.size());
     }
-    else if (type == KJS::BooleanType) {
+    else if (type == BooleanType) {
         jclass JSObjectClass = env->FindClass ("java/lang/Boolean");
         jmethodID constructorID = env->GetMethodID (JSObjectClass, "<init>", "(Z)V");
         if (constructorID != NULL) {
-            result = env->NewObject (JSObjectClass, constructorID, (jboolean)value.toBoolean(exec));
+            result = env->NewObject (JSObjectClass, constructorID, (jboolean)value->toBoolean(exec));
         }
     }
     else {
-        // Create a JSObject.
+        // Create a JavaJSObject.
         jlong nativeHandle;
         
-        if (type == KJS::ObjectType){
-            KJS::ObjectImp *imp = static_cast<KJS::ObjectImp*>(value.imp());
+        if (type == ObjectType){
+            JSObject *imp = static_cast<JSObject*>(value);
             
             // We either have a wrapper around a Java instance or a JavaScript
             // object.  If we have a wrapper around a Java instance, return that
-            // instance, otherwise create a new Java JSObject with the ObjectImp*
+            // instance, otherwise create a new Java JavaJSObject with the JSObject*
             // as it's nativeHandle.
             if (imp->classInfo() && strcmp(imp->classInfo()->className, "RuntimeObject") == 0) {
-                KJS::RuntimeObjectImp *runtimeImp = static_cast<KJS::RuntimeObjectImp*>(value.imp());
-                Bindings::JavaInstance *runtimeInstance = static_cast<Bindings::JavaInstance *>(runtimeImp->getInternalInstance());
+                RuntimeObjectImp *runtimeImp = static_cast<RuntimeObjectImp*>(value);
+                JavaInstance *runtimeInstance = static_cast<JavaInstance *>(runtimeImp->getInternalInstance());
+                if (!runtimeInstance)
+                    return 0;
+                
                 return runtimeInstance->javaInstance();
             }
             else {
                 nativeHandle = ptr_to_jlong(imp);
-                
-                // Bump our 'meta' reference count for the imp.  We maintain the reference
-                // until either finalize is called or the applet shuts down.
-                addNativeReference (_root, imp);
+                rootObject->gcProtect(imp);
             }
         }
         // All other types will result in an undefined object.
@@ -377,7 +421,7 @@ jobject JSObject::convertValueToJObject (KJS::Value value) const
             nativeHandle = UndefinedHandle;
         }
         
-        // Now create the Java JSObject.  Look for the JSObject in it's new (Tiger)
+        // Now create the Java JavaJSObject.  Look for the JavaJSObject in it's new (Tiger)
         // location and in the original Java 1.4.2 location.
         jclass JSObjectClass;
         
@@ -397,7 +441,7 @@ jobject JSObject::convertValueToJObject (KJS::Value value) const
     return result;
 }
 
-KJS::Value JSObject::convertJObjectToValue (jobject theObject) const
+JSValue *JavaJSObject::convertJObjectToValue (jobject theObject) const
 {
     // Instances of netscape.javascript.JSObject get converted back to
     // JavaScript objects.  All other objects are wrapped.  It's not
@@ -406,137 +450,141 @@ KJS::Value JSObject::convertJObjectToValue (jobject theObject) const
     // figure 22-4.
     jobject classOfInstance = callJNIObjectMethod(theObject, "getClass", "()Ljava/lang/Class;");
     jstring className = (jstring)callJNIObjectMethod(classOfInstance, "getName", "()Ljava/lang/String;");
-        
-    if (strcmp(Bindings::JavaString(className).UTF8String(), "netscape.javascript.JSObject") == 0) {
+    
+    // Only the sun.plugin.javascript.webkit.JSObject has a member called nativeJSObject. This class is
+    // created above to wrap internal browser objects. The constructor of this class takes the native
+    // pointer and stores it in this object, so that it can be retrieved below.
+    if (strcmp(JavaString(className).UTF8String(), "sun.plugin.javascript.webkit.JSObject") == 0) {
         // Pull the nativeJSObject value from the Java instance.  This is a
-        // pointer to the ObjectImp.
+        // pointer to the JSObject.
         JNIEnv *env = getJNIEnv();
-        jfieldID fieldID = env->GetFieldID((jclass)classOfInstance, "nativeJSObject", "long");
+        jfieldID fieldID = env->GetFieldID((jclass)classOfInstance, "nativeJSObject", "J");
         if (fieldID == NULL) {
-            return KJS::Undefined();
+            return jsUndefined();
         }
         jlong nativeHandle = env->GetLongField(theObject, fieldID);
         if (nativeHandle == UndefinedHandle) {
-            return KJS::Undefined();
+            return jsUndefined();
         }
-        KJS::ObjectImp *imp = static_cast<KJS::ObjectImp*>(jlong_to_impptr(nativeHandle));
-        return KJS::Object(const_cast<KJS::ObjectImp*>(imp));
+        JSObject *imp = static_cast<JSObject*>(jlong_to_impptr(nativeHandle));
+        return imp;
     }
 
-    InterpreterLock lock;
-    return KJS::Object(new RuntimeObjectImp(new Bindings::JavaInstance (theObject, _root)));
+    JSLock lock;
+    JavaInstance* javaInstance = new JavaInstance(theObject, _rootObject);
+    return KJS::Bindings::Instance::createRuntimeObject(javaInstance);
 }
 
-KJS::List JSObject::listFromJArray(jobjectArray jArray) const
+void JavaJSObject::getListFromJArray(jobjectArray jArray, List& list) const
 {
     JNIEnv *env = getJNIEnv();
-    long i, numObjects = jArray ? env->GetArrayLength (jArray) : 0;
-    KJS::List aList;
+    int i, numObjects = jArray ? env->GetArrayLength (jArray) : 0;
     
     for (i = 0; i < numObjects; i++) {
         jobject anObject = env->GetObjectArrayElement ((jobjectArray)jArray, i);
-	if (anObject) {
-	    aList.append (convertJObjectToValue(anObject));
-	    env->DeleteLocalRef (anObject);
-	}
-	else {
+        if (anObject) {
+            list.append(convertJObjectToValue(anObject));
+            env->DeleteLocalRef (anObject);
+        }
+        else {
             env->ExceptionDescribe();
             env->ExceptionClear();
-	}
+        }
     }
-    return aList;
 }
 
 extern "C" {
 
-jlong KJS_JSCreateNativeJSObject (JNIEnv *env, jclass clazz, jstring jurl, jlong nativeHandle, jboolean ctx)
+jlong KJS_JSCreateNativeJSObject (JNIEnv*, jclass, jstring, jlong nativeHandle, jboolean)
 {
     JSObjectCallContext context;
     context.type = CreateNative;
     context.nativeHandle = nativeHandle;
-    return JSObject::invoke (&context).j;
+    return JavaJSObject::invoke (&context).j;
 }
 
-void KJS_JSObject_JSFinalize (JNIEnv *env, jclass jsClass, jlong nativeHandle)
+void KJS_JSObject_JSFinalize (JNIEnv*, jclass, jlong nativeHandle)
 {
     JSObjectCallContext context;
     context.type = Finalize;
     context.nativeHandle = nativeHandle;
-    JSObject::invoke (&context);
+    JavaJSObject::invoke (&context);
 }
 
-jobject KJS_JSObject_JSObjectCall (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jstring methodName, jobjectArray args, jboolean ctx)
+jobject KJS_JSObject_JSObjectCall (JNIEnv*, jclass, jlong nativeHandle, jstring, jstring methodName, jobjectArray args, jboolean)
 {
     JSObjectCallContext context;
     context.type = Call;
     context.nativeHandle = nativeHandle;
     context.string = methodName;
     context.args = args;
-    return JSObject::invoke (&context).l;
+    return JavaJSObject::invoke (&context).l;
 }
 
-jobject KJS_JSObject_JSObjectEval (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jstring jscript, jboolean ctx)
+jobject KJS_JSObject_JSObjectEval (JNIEnv*, jclass, jlong nativeHandle, jstring, jstring jscript, jboolean)
 {
     JSObjectCallContext context;
     context.type = Eval;
     context.nativeHandle = nativeHandle;
     context.string = jscript;
-    return JSObject::invoke (&context).l;
+    return JavaJSObject::invoke (&context).l;
 }
 
-jobject KJS_JSObject_JSObjectGetMember (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jstring jname, jboolean ctx)
+jobject KJS_JSObject_JSObjectGetMember (JNIEnv*, jclass, jlong nativeHandle, jstring, jstring jname, jboolean)
 {
     JSObjectCallContext context;
     context.type = GetMember;
     context.nativeHandle = nativeHandle;
     context.string = jname;
-    return JSObject::invoke (&context).l;
+    return JavaJSObject::invoke (&context).l;
 }
 
-void KJS_JSObject_JSObjectSetMember (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jstring jname, jobject value, jboolean ctx)
+void KJS_JSObject_JSObjectSetMember (JNIEnv*, jclass, jlong nativeHandle, jstring, jstring jname, jobject value, jboolean)
 {
     JSObjectCallContext context;
     context.type = SetMember;
     context.nativeHandle = nativeHandle;
     context.string = jname;
     context.value = value;
-    JSObject::invoke (&context);
+    JavaJSObject::invoke (&context);
 }
 
-void KJS_JSObject_JSObjectRemoveMember (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jstring jname, jboolean ctx)
+void KJS_JSObject_JSObjectRemoveMember (JNIEnv*, jclass, jlong nativeHandle, jstring, jstring jname, jboolean)
 {
     JSObjectCallContext context;
     context.type = RemoveMember;
     context.nativeHandle = nativeHandle;
     context.string = jname;
-    JSObject::invoke (&context);
+    JavaJSObject::invoke (&context);
 }
 
-jobject KJS_JSObject_JSObjectGetSlot (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jint jindex, jboolean ctx)
+jobject KJS_JSObject_JSObjectGetSlot (JNIEnv*, jclass, jlong nativeHandle, jstring, jint jindex, jboolean)
 {
     JSObjectCallContext context;
     context.type = GetSlot;
     context.nativeHandle = nativeHandle;
     context.index = jindex;
-    return JSObject::invoke (&context).l;
+    return JavaJSObject::invoke (&context).l;
 }
 
-void KJS_JSObject_JSObjectSetSlot (JNIEnv *env, jclass jsClass, jlong nativeHandle, jstring jurl, jint jindex, jobject value, jboolean ctx)
+void KJS_JSObject_JSObjectSetSlot (JNIEnv*, jclass, jlong nativeHandle, jstring, jint jindex, jobject value, jboolean)
 {
     JSObjectCallContext context;
     context.type = SetSlot;
     context.nativeHandle = nativeHandle;
     context.index = jindex;
     context.value = value;
-    JSObject::invoke (&context);
+    JavaJSObject::invoke (&context);
 }
 
-jstring KJS_JSObject_JSObjectToString (JNIEnv *env, jclass clazz, jlong nativeHandle)
+jstring KJS_JSObject_JSObjectToString (JNIEnv*, jclass, jlong nativeHandle)
 {
     JSObjectCallContext context;
     context.type = ToString;
     context.nativeHandle = nativeHandle;
-    return (jstring)JSObject::invoke (&context).l;
+    return (jstring)JavaJSObject::invoke (&context).l;
 }
 
 }
+
+#endif // ENABLE(JAVA_BINDINGS)

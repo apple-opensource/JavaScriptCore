@@ -1,7 +1,6 @@
-// -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
+ *  Copyright (C) 2007 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -15,53 +14,58 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
-#ifndef _ARRAY_OBJECT_H_
-#define _ARRAY_OBJECT_H_
+#ifndef ARRAY_OBJECT_H_
+#define ARRAY_OBJECT_H_
 
-#include "internal.h"
+#include "array_instance.h"
 #include "function_object.h"
+#include "lookup.h"
 
 namespace KJS {
 
- class ArrayPrototypeImp : public ArrayInstanceImp {
+ class ArrayPrototype : public ArrayInstance {
   public:
-    ArrayPrototypeImp(ExecState *exec,
-                      ObjectPrototypeImp *objProto);
-    Value get(ExecState *exec, const Identifier &p) const;
-    virtual const ClassInfo *classInfo() const { return &info; }
+    ArrayPrototype(ExecState*, ObjectPrototype*);
+
+    bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
+    virtual const ClassInfo* classInfo() const { return &info; }
     static const ClassInfo info;
-  };
-
-  class ArrayProtoFuncImp : public InternalFunctionImp {
-  public:
-    ArrayProtoFuncImp(ExecState *exec, int i, int len);
-
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
-
-    enum { ToString, ToLocaleString, Concat, Join, Pop, Push,
-	   Reverse, Shift, Slice, Sort, Splice, UnShift };
-  private:
-    int id;
   };
 
   class ArrayObjectImp : public InternalFunctionImp {
   public:
-    ArrayObjectImp(ExecState *exec,
-                   FunctionPrototypeImp *funcProto,
-                   ArrayPrototypeImp *arrayProto);
+    ArrayObjectImp(ExecState*, FunctionPrototype*, ArrayPrototype*);
 
     virtual bool implementsConstruct() const;
-    virtual Object construct(ExecState *exec, const List &args);
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+    virtual JSObject* construct(ExecState*, const List&);
+    virtual JSValue* callAsFunction(ExecState*, JSObject*, const List&);
 
   };
 
-}; // namespace
+  JSValue* arrayProtoFuncToString(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncToLocaleString(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncConcat(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncJoin(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncPop(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncPush(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncReverse(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncShift(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncSlice(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncSort(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncSplice(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncUnShift(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncEvery(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncForEach(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncSome(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncIndexOf(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncFilter(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncMap(ExecState*, JSObject*, const List&);
+  JSValue* arrayProtoFuncLastIndexOf(ExecState*, JSObject*, const List&);
 
-#endif
+} // namespace KJS
+
+#endif // ARRAY_OBJECT_H_

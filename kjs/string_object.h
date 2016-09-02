@@ -15,30 +15,52 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
-#ifndef _STRING_OBJECT_H_
-#define _STRING_OBJECT_H_
+#ifndef STRING_OBJECT_H_
+#define STRING_OBJECT_H_
 
-#include "internal.h"
 #include "function_object.h"
+#include "JSWrapperObject.h"
+#include "internal.h"
+#include "lookup.h"
 
 namespace KJS {
 
-  class StringInstanceImp : public ObjectImp {
+  class StringInstance : public JSWrapperObject {
   public:
-    StringInstanceImp(ObjectImp *proto);
-    StringInstanceImp(ObjectImp *proto, const UString &string);
+    StringInstance(JSObject *proto);
+    StringInstance(JSObject *proto, StringImp*);
+    StringInstance(JSObject *proto, const UString&);
 
-    virtual Value get(ExecState *exec, const Identifier &propertyName) const;
-    virtual void put(ExecState *exec, const Identifier &propertyName, const Value &value, int attr = None);
-    virtual bool hasOwnProperty(ExecState *exec, const Identifier &propertyName) const;
-    virtual bool deleteProperty(ExecState *exec, const Identifier &propertyName);
+    virtual bool getOwnPropertySlot(ExecState*, const Identifier&, PropertySlot&);
+    virtual bool getOwnPropertySlot(ExecState*, unsigned propertyName, PropertySlot&);
+
+    virtual void put(ExecState* exec, const Identifier& propertyName, JSValue*, int attr = None);
+    virtual bool deleteProperty(ExecState* exec, const Identifier& propertyName);
+    virtual void getPropertyNames(ExecState*, PropertyNameArray&);
 
     virtual const ClassInfo *classInfo() const { return &info; }
     static const ClassInfo info;
+
+    StringImp* internalValue() const { return static_cast<StringImp*>(JSWrapperObject::internalValue());}
+
+  private:
+    bool inlineGetOwnPropertySlot(ExecState*, unsigned, PropertySlot&);
+
+    static JSValue* lengthGetter(ExecState*, JSObject *, const Identifier&, const PropertySlot&);
+    static JSValue* indexGetter(ExecState*, JSObject *, const Identifier&, const PropertySlot&);
+  };
+
+  // WebCore uses this to make style.filter undetectable
+  class StringInstanceThatMasqueradesAsUndefined : public StringInstance {
+  public:
+      StringInstanceThatMasqueradesAsUndefined(JSObject* proto, const UString& string)
+          : StringInstance(proto, string) { }
+      virtual bool masqueradeAsUndefined() const { return true; }
+      virtual bool toBoolean(ExecState*) const { return false; }
   };
 
   /**
@@ -47,11 +69,11 @@ namespace KJS {
    * The initial value of String.prototype (and thus all objects created
    * with the String constructor
    */
-  class StringPrototypeImp : public StringInstanceImp {
+  class StringPrototype : public StringInstance {
   public:
-    StringPrototypeImp(ExecState *exec,
-                       ObjectPrototypeImp *objProto);
-    Value get(ExecState *exec, const Identifier &p) const;
+    StringPrototype(ExecState *exec,
+                       ObjectPrototype *objProto);
+    virtual bool getOwnPropertySlot(ExecState *, const Identifier&, PropertySlot&);
     virtual const ClassInfo *classInfo() const { return &info; }
     static const ClassInfo info;
   };
@@ -59,28 +81,43 @@ namespace KJS {
   /**
    * @internal
    *
-   * Class to implement all methods that are properties of the
+   * Functions to implement all methods that are properties of the
    * String.prototype object
    */
-  class StringProtoFuncImp : public InternalFunctionImp {
-  public:
-    StringProtoFuncImp(ExecState *exec, int i, int len);
 
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+  JSValue* stringProtoFuncToString(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncValueOf(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncCharAt(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncCharCodeAt(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncConcat(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncIndexOf(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncLastIndexOf(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncMatch(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncReplace(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSearch(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSlice(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSplit(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSubstr(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSubstring(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncToLowerCase(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncToUpperCase(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncToLocaleLowerCase(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncToLocaleUpperCase(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncLocaleCompare(ExecState*, JSObject*, const List&);
 
-    enum { ToString, ValueOf, CharAt, CharCodeAt, Concat, IndexOf, LastIndexOf,
-	   Match, Replace, Search, Slice, Split,
-	   Substr, Substring, FromCharCode, ToLowerCase, ToUpperCase,
-           ToLocaleLowerCase, ToLocaleUpperCase
-#ifndef KJS_PURE_ECMA
-	   , Big, Small, Blink, Bold, Fixed, Italics, Strike, Sub, Sup,
-	   Fontcolor, Fontsize, Anchor, Link
-#endif
-    };
-  private:
-    int id;
-  };
+  JSValue* stringProtoFuncBig(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSmall(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncBlink(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncBold(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncFixed(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncItalics(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncStrike(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSub(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncSup(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncFontcolor(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncFontsize(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncAnchor(ExecState*, JSObject*, const List&);
+  JSValue* stringProtoFuncLink(ExecState*, JSObject*, const List&);
 
   /**
    * @internal
@@ -90,13 +127,12 @@ namespace KJS {
   class StringObjectImp : public InternalFunctionImp {
   public:
     StringObjectImp(ExecState *exec,
-                    FunctionPrototypeImp *funcProto,
-                    StringPrototypeImp *stringProto);
+                    FunctionPrototype *funcProto,
+                    StringPrototype *stringProto);
 
     virtual bool implementsConstruct() const;
-    virtual Object construct(ExecState *exec, const List &args);
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+    virtual JSObject *construct(ExecState *exec, const List &args);
+    virtual JSValue *callAsFunction(ExecState *exec, JSObject *thisObj, const List &args);
   };
 
   /**
@@ -107,12 +143,11 @@ namespace KJS {
    */
   class StringObjectFuncImp : public InternalFunctionImp {
   public:
-    StringObjectFuncImp(ExecState *exec, FunctionPrototypeImp *funcProto);
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+    StringObjectFuncImp(ExecState*, FunctionPrototype*, const Identifier&);
+    virtual JSValue *callAsFunction(ExecState *exec, JSObject *thisObj, const List &args);
   };
 
-}; // namespace
+} // namespace
 
 #endif
 

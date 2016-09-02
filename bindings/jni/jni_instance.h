@@ -22,15 +22,16 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
+
 #ifndef _JNI_INSTANCE_H_
 #define _JNI_INSTANCE_H_
 
-#include <CoreFoundation/CoreFoundation.h>
+#if ENABLE(JAVA_BINDINGS)
+
+#include "runtime.h"
 
 #include <JavaVM/jni.h>
 
-#include <JavaScriptCore/runtime.h>
-#include "shared_ptr.h"
 
 namespace KJS {
 
@@ -40,8 +41,9 @@ class JavaClass;
 
 class JObjectWrapper
 {
-friend class SharedPtr<JObjectWrapper>;
+friend class RefPtr<JObjectWrapper>;
 friend class JavaArray;
+friend class JavaField;
 friend class JavaInstance;
 friend class JavaMethod;
 
@@ -55,7 +57,7 @@ protected:
         if (--_refCount == 0) 
             delete this; 
     }
-	
+
     jobject _instance;
 
 private:
@@ -66,33 +68,29 @@ private:
 class JavaInstance : public Instance
 {
 public:
-    JavaInstance (jobject instance, const RootObject *r);
-        
-    ~JavaInstance ();
+    JavaInstance(jobject instance, PassRefPtr<RootObject>);
+    ~JavaInstance();
     
     virtual Class *getClass() const;
     
     virtual void begin();
     virtual void end();
     
-    virtual Value valueOf() const;
-    virtual Value defaultValue (Type hint) const;
+    virtual JSValue *valueOf() const;
+    virtual JSValue *defaultValue (JSType hint) const;
 
-    virtual Value invokeMethod (ExecState *exec, const MethodList &method, const List &args);
-    virtual Value invokeDefaultMethod (ExecState *exec, const List &args);
+    virtual JSValue *invokeMethod (ExecState *exec, const MethodList &method, const List &args);
 
     jobject javaInstance() const { return _instance->_instance; }
     
-    Value stringValue() const;
-    Value numberValue() const;
-    Value booleanValue() const;
-        
+    JSValue *stringValue() const;
+    JSValue *numberValue() const;
+    JSValue *booleanValue() const;
+
+    virtual BindingLanguage getBindingLanguage() const { return JavaLanguage; }
+
 private:
-    JavaInstance ();                         // prevent default construction
-    JavaInstance (JavaInstance &);           // prevent copying
-    JavaInstance &operator=(JavaInstance &); // prevent copying
-    
-    SharedPtr<JObjectWrapper> _instance;
+    RefPtr<JObjectWrapper> _instance;
     mutable JavaClass *_class;
 };
 
@@ -100,4 +98,6 @@ private:
 
 } // namespace KJS
 
-#endif
+#endif // ENABLE(JAVA_BINDINGS)
+
+#endif // _JNI_INSTANCE_H_

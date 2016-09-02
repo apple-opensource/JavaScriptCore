@@ -1,4 +1,3 @@
-// -*- c-basic-offset: 2 -*-
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
@@ -15,115 +14,122 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
-#ifndef _DATE_OBJECT_H_
-#define _DATE_OBJECT_H_
+#ifndef DATE_OBJECT_H
+#define DATE_OBJECT_H
 
-#include "internal.h"
-#include "function_object.h"
-
-#include <sys/time.h>
+#include "function.h"
+#include "JSWrapperObject.h"
+#include "lookup.h"
 
 namespace KJS {
 
-  class DateInstanceImp : public ObjectImp {
-  public:
-    DateInstanceImp(ObjectImp *proto);
+    struct GregorianDateTime;
 
-    virtual const ClassInfo *classInfo() const { return &info; }
-    static const ClassInfo info;
-  };
+    class FunctionPrototype;
+    class ObjectPrototype;
 
-  /**
-   * @internal
-   *
-   * The initial value of Date.prototype (and thus all objects created
-   * with the Date constructor
-   */
-  class DatePrototypeImp : public DateInstanceImp {
-  public:
-    DatePrototypeImp(ExecState *exec, ObjectPrototypeImp *objectProto);
-    Value get(ExecState *exec, const Identifier &p) const;
-    virtual const ClassInfo *classInfo() const { return &info; }
-    static const ClassInfo info;
-  };
+    class DateInstance : public JSWrapperObject {
+    public:
+        DateInstance(JSObject *proto);
+        
+        bool getTime(GregorianDateTime&, int& offset) const;
+        bool getUTCTime(GregorianDateTime&) const;
+        bool getTime(double& milli, int& offset) const;
+        bool getUTCTime(double& milli) const;
+        
+        virtual const ClassInfo *classInfo() const { return &info; }
+        static const ClassInfo info;
+    };
 
-  /**
-   * @internal
-   *
-   * Class to implement all methods that are properties of the
-   * Date.prototype object
-   */
-  class DateProtoFuncImp : public InternalFunctionImp {
-  public:
-    DateProtoFuncImp(ExecState *exec, int i, int len);
+    /**
+     * @internal
+     *
+     * The initial value of Date.prototype (and thus all objects created
+     * with the Date constructor
+     */
+    class DatePrototype : public DateInstance {
+    public:
+        DatePrototype(ExecState *, ObjectPrototype *);
+        virtual bool getOwnPropertySlot(ExecState *, const Identifier &, PropertySlot&);
+        virtual const ClassInfo *classInfo() const { return &info; }
+        static const ClassInfo info;
+    };
 
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+    /**
+     * @internal
+     *
+     * Functions to implement all methods that are properties of the
+     * Date.prototype object
+     */
+    
+    // Non-normative properties (Appendix B)
+    // GetYear, SetYear, ToGMTString
 
+    JSValue* dateProtoFuncToString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToUTCString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToDateString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToTimeString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToLocaleString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToLocaleDateString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToLocaleTimeString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncValueOf(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetTime(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetFullYear(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCFullYear(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncToGMTString(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetMonth(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCMonth(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetDate(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCDate(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetDay(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCDay(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetHours(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCHours(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetMinutes(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCMinutes(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetMilliSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetUTCMilliseconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetTimezoneOffset(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetTime(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetMilliSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCMilliseconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCSeconds(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetMinutes(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCMinutes(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetHours(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCHours(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetDate(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCDate(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetMonth(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCMonth(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetFullYear(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetUTCFullYear(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncSetYear(ExecState*, JSObject*, const List&);
+    JSValue* dateProtoFuncGetYear(ExecState*, JSObject*, const List&);
 
-    Completion execute(const List &);
-    enum { ToString, ToDateString, ToTimeString, ToLocaleString,
-	   ToLocaleDateString, ToLocaleTimeString, ValueOf, GetTime,
-	   GetFullYear, GetMonth, GetDate, GetDay, GetHours, GetMinutes,
-	   GetSeconds, GetMilliSeconds, GetTimezoneOffset, SetTime,
-	   SetMilliSeconds, SetSeconds, SetMinutes, SetHours, SetDate,
-	   SetMonth, SetFullYear, ToUTCString,
-	   // non-normative properties (Appendix B)
-	   GetYear, SetYear, ToGMTString };
-  private:
-    int id;
-    bool utc;
-  };
+    /**
+     * @internal
+     *
+     * The initial value of the the global variable's "Date" property
+     */
+    class DateObjectImp : public InternalFunctionImp {
+    public:
+        DateObjectImp(ExecState *, FunctionPrototype *, DatePrototype *);
 
-  /**
-   * @internal
-   *
-   * The initial value of the the global variable's "Date" property
-   */
-  class DateObjectImp : public InternalFunctionImp {
-  public:
-    DateObjectImp(ExecState *exec,
-                  FunctionPrototypeImp *funcProto,
-                  DatePrototypeImp *dateProto);
+        virtual bool implementsConstruct() const;
+        virtual JSObject *construct(ExecState *, const List &args);
+        virtual JSValue *callAsFunction(ExecState *, JSObject *thisObj, const List &args);
 
-    virtual bool implementsConstruct() const;
-    virtual Object construct(ExecState *exec, const List &args);
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+        JSObject *construct(const List &);
+    };
 
-    Completion execute(const List &);
-    Object construct(const List &);
-  };
-
-  /**
-   * @internal
-   *
-   * Class to implement all methods that are properties of the
-   * Date object
-   */
-  class DateObjectFuncImp : public InternalFunctionImp {
-  public:
-    DateObjectFuncImp(ExecState *exec, FunctionPrototypeImp *funcProto,
-                      int i, int len);
-
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
-
-    enum { Parse, UTC };
-  private:
-    int id;
-  };
-
-  // helper functions
-  double parseDate(const UString &u);
-  double KRFCDate_parseDate(const UString &_date);
-  double timeClip(double t);
-  double makeTime(struct tm *t, int milli, bool utc);
-
-}; // namespace
+} // namespace
 
 #endif

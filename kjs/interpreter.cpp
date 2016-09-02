@@ -3,7 +3,7 @@
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001 Peter Kelly (pmk@post.com)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2003, 2007 Apple Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -17,307 +17,130 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
-#include "value.h"
-#include "object.h"
-#include "types.h"
+#include "config.h"
 #include "interpreter.h"
 
-#include <assert.h>
+#include "ExecState.h"
+#include "JSGlobalObject.h"
+#include "Parser.h"
+#include "SavedBuiltins.h"
+#include "array_object.h"
+#include "bool_object.h"
+#include "collector.h"
+#include "date_object.h"
+#include "debugger.h"
+#include "error_object.h"
+#include "function_object.h"
+#include "internal.h"
+#include "math_object.h"
+#include "nodes.h"
+#include "number_object.h"
+#include "object.h"
+#include "object_object.h"
+#include "operations.h"
+#include "regexp_object.h"
+#include "runtime.h"
+#include "string_object.h"
+#include "types.h"
+#include "value.h"
 #include <math.h>
 #include <stdio.h>
+#include <wtf/Assertions.h>
 
-#include "internal.h"
-#include "collector.h"
-#include "operations.h"
-#include "error_object.h"
-#include "nodes.h"
-#include "context.h"
+namespace KJS {
 
-using namespace KJS;
-
-// ------------------------------ Context --------------------------------------
-
-const ScopeChain &Context::scopeChain() const
+Completion Interpreter::checkSyntax(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UString& code)
 {
-  return rep->scopeChain();
+    return checkSyntax(exec, sourceURL, startingLineNumber, code.data(), code.size());
 }
 
-Object Context::variableObject() const
+Completion Interpreter::checkSyntax(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UChar* code, int codeLength)
 {
-  return rep->variableObject();
+    JSLock lock;
+
+    int errLine;
+    UString errMsg;
+    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(sourceURL, startingLineNumber, code, codeLength, 0, &errLine, &errMsg);
+    if (!progNode)
+        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, 0, sourceURL));
+    return Completion(Normal);
 }
 
-Object Context::thisValue() const
+Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UString& code, JSValue* thisV)
 {
-  return rep->thisValue();
+    return evaluate(exec, sourceURL, startingLineNumber, code.data(), code.size(), thisV);
 }
 
-const Context Context::callingContext() const
+Completion Interpreter::evaluate(ExecState* exec, const UString& sourceURL, int startingLineNumber, const UChar* code, int codeLength, JSValue* thisV)
 {
-  return rep->callingContext();
-}
+    JSLock lock;
+    
+    JSGlobalObject* globalObject = exec->dynamicGlobalObject();
 
-// ------------------------------ Interpreter ----------------------------------
-
-Interpreter::Interpreter(const Object &global) : rep(0)
-{
-  rep = new InterpreterImp(this,global);
-}
-
-Interpreter::Interpreter()
-{
-  Object global(new ObjectImp());
-  rep = new InterpreterImp(this,global);
-}
-
-Interpreter::~Interpreter()
-{
-  delete rep;
-}
-
-Object &Interpreter::globalObject() const
-{
-  return rep->globalObject();
-}
-
-void Interpreter::initGlobalObject()
-{
-  rep->initGlobalObject();
-}
-
-void Interpreter::lock()
-{
-  InterpreterImp::lock();
-}
-
-void Interpreter::unlock()
-{
-  InterpreterImp::unlock();
-}
-
-int Interpreter::lockCount()
-{
-  return InterpreterImp::lockCount();
-}
-
-ExecState *Interpreter::globalExec()
-{
-  return rep->globalExec();
-}
-
-bool Interpreter::checkSyntax(const UString &code)
-{
-  return rep->checkSyntax(code);
-}
-
-Completion Interpreter::evaluate(const UString &code, const Value &thisV, const UString &)
-{
-  return evaluate(UString(), 0, code, thisV);
-}
-
-Completion Interpreter::evaluate(const UString &sourceURL, int startingLineNumber, const UString &code, const Value &thisV)
-{
-  Completion comp = rep->evaluate(code,thisV, sourceURL, startingLineNumber);
-
-#if APPLE_CHANGES
-  if (shouldPrintExceptions() && comp.complType() == Throw) {
-    InterpreterLock lock;
-    ExecState *exec = rep->globalExec();
-    char *f = strdup(sourceURL.ascii());
-    const char *message = comp.value().toObject(exec).toString(exec).ascii();
-    printf("[%d] %s:%s\n", getpid(), f, message);
-
-    free(f);
-  }
+    if (globalObject->recursion() >= 20)
+        return Completion(Throw, Error::create(exec, GeneralError, "Recursion too deep"));
+    
+    // parse the source code
+    int sourceId;
+    int errLine;
+    UString errMsg;
+    RefPtr<ProgramNode> progNode = parser().parse<ProgramNode>(sourceURL, startingLineNumber, code, codeLength, &sourceId, &errLine, &errMsg);
+    
+    // notify debugger that source has been parsed
+    if (globalObject->debugger()) {
+        bool cont = globalObject->debugger()->sourceParsed(exec, sourceId, sourceURL, UString(code, codeLength), startingLineNumber, errLine, errMsg);
+        if (!cont)
+            return Completion(Break);
+    }
+    
+    // no program node means a syntax error occurred
+    if (!progNode)
+        return Completion(Throw, Error::create(exec, SyntaxError, errMsg, errLine, sourceId, sourceURL));
+    
+    exec->clearException();
+    
+    globalObject->incRecursion();
+    
+    JSObject* thisObj = globalObject;
+    
+    // "this" must be an object... use same rules as Function.prototype.apply()
+    if (thisV && !thisV->isUndefinedOrNull())
+        thisObj = thisV->toObject(exec);
+    
+    Completion res;
+    if (exec->hadException())
+        // the thisV->toObject() conversion above might have thrown an exception - if so, propagate it
+        res = Completion(Throw, exec->exception());
+    else {
+        // execute the code
+        InterpreterExecState newExec(globalObject, thisObj, progNode.get());
+        JSValue* value = progNode->execute(&newExec);
+        res = Completion(newExec.completionType(), value);
+    }
+    
+    globalObject->decRecursion();
+    
+    if (shouldPrintExceptions() && res.complType() == Throw) {
+        JSLock lock;
+        ExecState* exec = globalObject->globalExec();
+        CString f = sourceURL.UTF8String();
+        CString message = res.value()->toObject(exec)->toString(exec).UTF8String();
+        int line = res.value()->toObject(exec)->get(exec, "line")->toUInt32(exec);
+#if PLATFORM(WIN_OS)
+        printf("%s line %d: %s\n", f.c_str(), line, message.c_str());
+#else
+        printf("[%d] %s line %d: %s\n", getpid(), f.c_str(), line, message.c_str());
 #endif
+    }
 
-  return comp;
+    return res;
 }
 
-Object Interpreter::builtinObject() const
-{
-  return rep->builtinObject();
-}
-
-Object Interpreter::builtinFunction() const
-{
-  return rep->builtinFunction();
-}
-
-Object Interpreter::builtinArray() const
-{
-  return rep->builtinArray();
-}
-
-Object Interpreter::builtinBoolean() const
-{
-  return rep->builtinBoolean();
-}
-
-Object Interpreter::builtinString() const
-{
-  return rep->builtinString();
-}
-
-Object Interpreter::builtinNumber() const
-{
-  return rep->builtinNumber();
-}
-
-Object Interpreter::builtinDate() const
-{
-  return rep->builtinDate();
-}
-
-Object Interpreter::builtinRegExp() const
-{
-  return rep->builtinRegExp();
-}
-
-Object Interpreter::builtinError() const
-{
-  return rep->builtinError();
-}
-
-Object Interpreter::builtinObjectPrototype() const
-{
-  return rep->builtinObjectPrototype();
-}
-
-Object Interpreter::builtinFunctionPrototype() const
-{
-  return rep->builtinFunctionPrototype();
-}
-
-Object Interpreter::builtinArrayPrototype() const
-{
-  return rep->builtinArrayPrototype();
-}
-
-Object Interpreter::builtinBooleanPrototype() const
-{
-  return rep->builtinBooleanPrototype();
-}
-
-Object Interpreter::builtinStringPrototype() const
-{
-  return rep->builtinStringPrototype();
-}
-
-Object Interpreter::builtinNumberPrototype() const
-{
-  return rep->builtinNumberPrototype();
-}
-
-Object Interpreter::builtinDatePrototype() const
-{
-  return rep->builtinDatePrototype();
-}
-
-Object Interpreter::builtinRegExpPrototype() const
-{
-  return rep->builtinRegExpPrototype();
-}
-
-Object Interpreter::builtinErrorPrototype() const
-{
-  return rep->builtinErrorPrototype();
-}
-
-Object Interpreter::builtinEvalError() const
-{
-  return rep->builtinEvalError();
-}
-
-Object Interpreter::builtinRangeError() const
-{
-  return rep->builtinRangeError();
-}
-
-Object Interpreter::builtinReferenceError() const
-{
-  return rep->builtinReferenceError();
-}
-
-Object Interpreter::builtinSyntaxError() const
-{
-  return rep->builtinSyntaxError();
-}
-
-Object Interpreter::builtinTypeError() const
-{
-  return rep->builtinTypeError();
-}
-
-Object Interpreter::builtinURIError() const
-{
-  return rep->builtinURIError();
-}
-
-Object Interpreter::builtinEvalErrorPrototype() const
-{
-  return rep->builtinEvalErrorPrototype();
-}
-
-Object Interpreter::builtinRangeErrorPrototype() const
-{
-  return rep->builtinRangeErrorPrototype();
-}
-
-Object Interpreter::builtinReferenceErrorPrototype() const
-{
-  return rep->builtinReferenceErrorPrototype();
-}
-
-Object Interpreter::builtinSyntaxErrorPrototype() const
-{
-  return rep->builtinSyntaxErrorPrototype();
-}
-
-Object Interpreter::builtinTypeErrorPrototype() const
-{
-  return rep->builtinTypeErrorPrototype();
-}
-
-Object Interpreter::builtinURIErrorPrototype() const
-{
-  return rep->builtinURIErrorPrototype();
-}
-
-void Interpreter::setCompatMode(CompatMode mode)
-{
-  rep->setCompatMode(mode);
-}
-
-Interpreter::CompatMode Interpreter::compatMode() const
-{
-  return rep->compatMode();
-}
-
-#ifdef KJS_DEBUG_MEM
-#include "lexer.h"
-void Interpreter::finalCheck()
-{
-  fprintf(stderr,"Interpreter::finalCheck()\n");
-  // Garbage collect - as many times as necessary
-  // (we could delete an object which was holding another object, so
-  // the deref() will happen too late for deleting the impl of the 2nd object).
-  while( Collector::collect() )
-    ;
-
-  Node::finalCheck();
-  Collector::finalCheck();
-  Lexer::globalClear();
-  UString::globalClear();
-}
-#endif
-
-#if APPLE_CHANGES
 static bool printExceptions = false;
 
 bool Interpreter::shouldPrintExceptions()
@@ -330,50 +153,4 @@ void Interpreter::setShouldPrintExceptions(bool print)
   printExceptions = print;
 }
 
-
-void *Interpreter::createLanguageInstanceForValue (ExecState *exec, Bindings::Instance::BindingLanguage language, const Object &value, const Bindings::RootObject *origin, const Bindings::RootObject *current)
-{
-    return Bindings::Instance::createLanguageInstanceForValue (exec, language, value, origin, current);
-}
-
-#endif
-
-void Interpreter::saveBuiltins (SavedBuiltins &builtins) const
-{
-  rep->saveBuiltins(builtins);
-}
-
-void Interpreter::restoreBuiltins (const SavedBuiltins &builtins)
-{
-  rep->restoreBuiltins(builtins);
-}
-
-SavedBuiltins::SavedBuiltins() : 
-  _internal(0)
-{
-}
-
-SavedBuiltins::~SavedBuiltins()
-{
-  delete _internal;
-}
-
-
-void Interpreter::virtual_hook( int, void* )
-{ /*BASE::virtual_hook( id, data );*/ }
-
-
-Interpreter *ExecState::lexicalInterpreter() const
-{
-  if (!_context) {
-    return dynamicInterpreter();
-  }
-
-  InterpreterImp *result = InterpreterImp::interpreterWithGlobalObject(_context->scopeChain().bottom());
-
-  if (!result) {
-    return dynamicInterpreter();
-  }
-
-  return result->interpreter();
-}
+} // namespace KJS

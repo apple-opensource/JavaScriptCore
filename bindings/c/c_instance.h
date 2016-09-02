@@ -22,12 +22,16 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
-#ifndef _BINDINGS_C_INSTANCE_H_
-#define _BINDINGS_C_INSTANCE_H_
 
-#include <npruntime.h>
+#ifndef BINDINGS_C_INSTANCE_H_
+#define BINDINGS_C_INSTANCE_H_
 
-#include <runtime.h>
+#if ENABLE(NETSCAPE_API)
+
+#include "runtime.h"
+#include <wtf/Noncopyable.h>
+
+typedef struct NPObject NPObject;
 
 namespace KJS {
 
@@ -35,33 +39,32 @@ namespace Bindings {
 
 class CClass;
 
-class CInstance : public Instance
-{
+class CInstance : public Instance {
 public:
-    CInstance (NPObject *instance);
-        
+    CInstance (NPObject*, PassRefPtr<RootObject>);
     ~CInstance ();
     
     virtual Class *getClass() const;
     
-    CInstance (const CInstance &other);
-
-    CInstance &operator=(const CInstance &other);
-    
     virtual void begin();
     virtual void end();
     
-    virtual Value valueOf() const;
-    virtual Value defaultValue (KJS::Type hint) const;
+    virtual JSValue *valueOf() const;
+    virtual JSValue *defaultValue (JSType hint) const;
 
-    virtual Value invokeMethod (ExecState *exec, const MethodList &method, const List &args);
-    virtual Value invokeDefaultMethod (ExecState *exec, const List &args);
+    virtual bool implementsCall() const;
+    
+    virtual JSValue *invokeMethod (ExecState *exec, const MethodList &method, const List &args);
+    virtual JSValue *invokeDefaultMethod (ExecState *exec, const List &args);
+    virtual void getPropertyNames(ExecState*, PropertyNameArray&);
 
-    Value stringValue() const;
-    Value numberValue() const;
-    Value booleanValue() const;
+    JSValue *stringValue() const;
+    JSValue *numberValue() const;
+    JSValue *booleanValue() const;
     
     NPObject *getObject() const { return _object; }
+
+    virtual BindingLanguage getBindingLanguage() const { return CLanguage; }
 
 private:
     mutable CClass *_class;
@@ -71,5 +74,7 @@ private:
 } // namespace Bindings
 
 } // namespace KJS
+
+#endif // ENABLE(NETSCAPE_API)
 
 #endif

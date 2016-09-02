@@ -1,8 +1,7 @@
 // -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2004 Apple Computer, Inc.
+ *  Copyright (C) 2004, 2005, 2006, 2007 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -16,40 +15,45 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
 #ifndef _KJS_USTRING_H_
 #define _KJS_USTRING_H_
 
-#include "fast_malloc.h"
-
-#if APPLE_CHANGES
-#include <sys/types.h>
-#ifndef KWQ_UNSIGNED_TYPES_DEFINED
-#define KWQ_UNSIGNED_TYPES_DEFINED
-typedef unsigned char uchar;
-typedef unsigned long ulong;
-#endif
-#endif
-
+#include "JSLock.h"
+#include "collector.h"
 #include <stdint.h>
+#include <wtf/Assertions.h>
+#include <wtf/FastMalloc.h>
+#include <wtf/PassRefPtr.h>
+#include <wtf/RefPtr.h>
+#include <wtf/Vector.h>
+
+/* On some ARM platforms GCC won't pack structures by default so sizeof(UChar)
+   will end up being != 2 which causes crashes since the code depends on that. */
+#if COMPILER(GCC) && PLATFORM(FORCE_PACK)
+#define PACK_STRUCT __attribute__((packed))
+#else
+#define PACK_STRUCT
+#endif
 
 /**
  * @internal
  */
 namespace DOM {
   class DOMString;
-};
+  class AtomicString;
+}
 class KJScript;
-class QString;
-class QConstString;
 
 namespace KJS {
 
-  class UCharReference;
+  using WTF::PlacementNewAdoptType;
+  using WTF::PlacementNewAdopt;
+
   class UString;
 
   /**
@@ -77,31 +81,21 @@ namespace KJS {
     UChar(char u);
     UChar(unsigned char u);
     UChar(unsigned short u);
-    UChar(const UCharReference &c);
     /**
      * @return The higher byte of the character.
      */
-    unsigned char high() const { return uc >> 8; }
+    unsigned char high() const { return static_cast<unsigned char>(uc >> 8); }
     /**
      * @return The lower byte of the character.
      */
-    unsigned char low() const { return uc; }
+    unsigned char low() const { return static_cast<unsigned char>(uc); }
     /**
      * @return the 16 bit Unicode value of the character
      */
     unsigned short unicode() const { return uc; }
-  public:
-    /**
-     * @return The character converted to lower case.
-     */
-    UChar toLower() const;
-    /**
-     * @return The character converted to upper case.
-     */
-    UChar toUpper() const;
 
     unsigned short uc;
-  };
+  } PACK_STRUCT;
 
   inline UChar::UChar() { }
   inline UChar::UChar(unsigned char h , unsigned char l) : uc(h << 8 | l) { }
@@ -110,70 +104,13 @@ namespace KJS {
   inline UChar::UChar(unsigned short u) : uc(u) { }
 
   /**
-   * @short Dynamic reference to a string character.
-   *
-   * UCharReference is the dynamic counterpart of @ref UChar. It's used when
-   * characters retrieved via index from a @ref UString are used in an
-   * assignment expression (and therefore can't be treated as being const):
-   * <pre>
-   * UString s("hello world");
-   * s[0] = 'H';
-   * </pre>
-   *
-   * If that sounds confusing your best bet is to simply forget about the
-   * existance of this class and treat is as being identical to @ref UChar.
-   */
-  class UCharReference {
-    friend class UString;
-    UCharReference(UString *s, unsigned int off) : str(s), offset(off) { }
-  public:
-    /**
-     * Set the referenced character to c.
-     */
-    UCharReference& operator=(UChar c);
-    /**
-     * Same operator as above except the argument that it takes.
-     */
-    UCharReference& operator=(char c) { return operator=(UChar(c)); }
-    /**
-     * @return Unicode value.
-     */
-    unsigned short unicode() const { return ref().uc; }
-    /**
-     * @return Lower byte.
-     */
-    unsigned char low() const { return ref().uc; }
-    /**
-     * @return Higher byte.
-     */
-    unsigned char high() const { return ref().uc >> 8; }
-    /**
-     * @return Character converted to lower case.
-     */
-    UChar toLower() const { return ref().toLower(); }
-    /**
-     * @return Character converted to upper case.
-     */
-    UChar toUpper() const  { return ref().toUpper(); }
-  private:
-    // not implemented, can only be constructed from UString
-    UCharReference();
-
-    UChar& ref() const;
-    UString *str;
-    int offset;
-  };
-
-  inline UChar::UChar(const UCharReference &c) : uc(c.unicode()) { }
-
-  /**
    * @short 8 bit char based string class
    */
   class CString {
   public:
     CString() : data(0), length(0) { }
     CString(const char *c);
-    CString(const char *c, int len);
+    CString(const char *c, size_t len);
     CString(const CString &);
 
     ~CString();
@@ -183,11 +120,11 @@ namespace KJS {
     CString &operator=(const CString &);
     CString &operator+=(const CString &c) { return append(c); }
 
-    int size() const { return length; }
+    size_t size() const { return length; }
     const char *c_str() const { return data; }
   private:
     char *data;
-    int length;
+    size_t length;
   };
 
   /**
@@ -195,34 +132,31 @@ namespace KJS {
    */
   class UString {
     friend bool operator==(const UString&, const UString&);
-    friend class UCharReference;
-    friend class Identifier;
-    friend class PropertyMap;
-    friend class PropertyMapHashTableEntry;
 
+  public:
     /**
      * @internal
      */
     struct Rep {
-      friend class UString;
-      friend bool operator==(const UString&, const UString&);
-      
-      static Rep *create(UChar *d, int l);
-      static Rep *createCopying(const UChar *d, int l);
-      static Rep *create(Rep *base, int offset, int length);
+
+      static PassRefPtr<Rep> create(UChar *d, int l);
+      static PassRefPtr<Rep> createCopying(const UChar *d, int l);
+      static PassRefPtr<Rep> create(PassRefPtr<Rep> base, int offset, int length);
+
       void destroy();
       
-      UChar *data() const { return baseString ? (baseString->buf + baseString->preCapacity + offset) : (buf + preCapacity + offset); }
+      bool baseIsSelf() const { return baseString == this; }
+      UChar* data() const { return baseString->buf + baseString->preCapacity + offset; }
       int size() const { return len; }
       
       unsigned hash() const { if (_hash == 0) _hash = computeHash(data(), len); return _hash; }
+      unsigned computedHash() const { ASSERT(_hash); return _hash; } // fast path for Identifiers
+
       static unsigned computeHash(const UChar *, int length);
       static unsigned computeHash(const char *);
 
-      KJS_FAST_ALLOCATED;
-
-      void ref() { ++rc; }
-      void deref() { if (--rc == 0) destroy(); }
+      Rep* ref() { ASSERT(JSLock::lockCount() > 0); ++rc; return this; }
+      ALWAYS_INLINE void deref() { ASSERT(JSLock::lockCount() > 0); if (--rc == 0) destroy(); }
 
       // unshared data
       int offset;
@@ -230,7 +164,8 @@ namespace KJS {
       int rc;
       mutable unsigned _hash;
       bool isIdentifier;
-      UString::Rep *baseString;
+      UString::Rep* baseString;
+      size_t reportedCost;
 
       // potentially shared data
       UChar *buf;
@@ -244,16 +179,13 @@ namespace KJS {
     };
 
   public:
+
     /**
      * Constructs a null string.
      */
     UString();
     /**
-     * Constructs a string from the single character c.
-     */
-    explicit UString(char c);
-    /**
-     * Constructs a string from a classical zero determined char string.
+     * Constructs a string from a classical zero-terminated char string.
      */
     UString(const char *c);
     /**
@@ -271,30 +203,34 @@ namespace KJS {
     /**
      * Copy constructor. Makes a shallow copy only.
      */
-    UString(const UString &s) { attach(s.rep); }
+    UString(const UString &s) : m_rep(s.m_rep) {}
+
+    UString(const Vector<UChar>& buffer);
+
     /**
      * Convenience declaration only ! You'll be on your own to write the
-     * implementation for a construction from QString.
+     * implementation for a construction from DOM::DOMString.
      *
      * Note: feel free to contact me if you want to see a dummy header for
-     * your favourite FooString class here !
+     * your favorite FooString class here !
      */
-    UString(const QString &);
+    UString(const DOM::DOMString&);
     /**
-     * Convenience declaration only ! See @ref UString(const QString&).
+     * Convenience declaration only ! See UString(const DOM::DOMString&).
      */
-    UString(const DOM::DOMString &);
+    UString(const DOM::AtomicString&);
+
     /**
      * Concatenation constructor. Makes operator+ more efficient.
      */
     UString(const UString &, const UString &);
     /**
-     * Destructor. If this handle was the only one holding a reference to the
-     * string the data will be freed.
+     * Destructor.
      */
-    ~UString() { release(); }
+    ~UString() {}
 
-    KJS_FAST_ALLOCATED;
+    // Special constructor for cases where we overwrite an object in place.
+    UString(PlacementNewAdoptType) : m_rep(PlacementNewAdopt) { }
 
     /**
      * Constructs a string from an int.
@@ -305,9 +241,9 @@ namespace KJS {
      */
     static UString from(unsigned int u);
     /**
-     * Constructs a string from a long.
+     * Constructs a string from a long int.
      */
-    static UString from(long l);
+    static UString from(long u);
     /**
      * Constructs a string from a double.
      */
@@ -333,7 +269,9 @@ namespace KJS {
     UString &append(UChar c) { return append(c.uc); }
 
     /**
-     * @return The string converted to the 8-bit string type @ref CString().
+     * @return The string converted to the 8-bit string type CString().
+     * This method is not Unicode safe and shouldn't be used unless the string
+     * is known to be ASCII.
      */
     CString cstring() const;
     /**
@@ -347,31 +285,23 @@ namespace KJS {
 
     /**
      * Convert the string to UTF-8, assuming it is UTF-16 encoded.
-     * Since this function is tolerant of badly formed UTF-16, it can create UTF-8
-     * strings that are invalid because they have characters in the range
-     * U+D800-U+DDFF, U+FFFE, or U+FFFF, but the UTF-8 string is guaranteed to
-     * be otherwise valid.
+     * In non-strict mode, this function is tolerant of badly formed UTF-16, it
+     * can create UTF-8 strings that are invalid because they have characters in
+     * the range U+D800-U+DDFF, U+FFFE, or U+FFFF, but the UTF-8 string is
+     * guaranteed to be otherwise valid.
+     * In strict mode, error is returned as null CString.
      */
-    CString UTF8String() const;
+    CString UTF8String(bool strict = false) const;
 
     /**
-     * @see UString(const QString&).
+     * @see UString(const DOM::DOMString&).
      */
-    DOM::DOMString string() const;
-    /**
-     * @see UString(const QString&).
-     */
-    QString qstring() const;
-    /**
-     * @see UString(const QString&).
-     */
-    QConstString qconststring() const;
+    DOM::DOMString domString() const;
 
     /**
      * Assignment operator.
      */
     UString &operator=(const char *c);
-    UString &operator=(const UString &);
     /**
      * Appends the specified string.
      */
@@ -381,19 +311,19 @@ namespace KJS {
     /**
      * @return A pointer to the internal Unicode data.
      */
-    const UChar* data() const { return rep->data(); }
+    const UChar* data() const { return m_rep->data(); }
     /**
      * @return True if null.
      */
-    bool isNull() const { return (rep == &Rep::null); }
+    bool isNull() const { return (m_rep == &Rep::null); }
     /**
      * @return True if null or zero length.
      */
-    bool isEmpty() const { return (!rep->len); }
+    bool isEmpty() const { return (!m_rep->len); }
     /**
      * Use this if you want to make sure that this string is a plain ASCII
      * string. For example, if you don't want to lose any information when
-     * using @ref cstring() or @ref ascii().
+     * using cstring() or ascii().
      *
      * @return True if the string doesn't contain any non-ASCII characters.
      */
@@ -401,15 +331,11 @@ namespace KJS {
     /**
      * @return The length of the string.
      */
-    int size() const { return rep->size(); }
+    int size() const { return m_rep->size(); }
     /**
      * Const character at specified position.
      */
-    UChar operator[](int pos) const;
-    /**
-     * Writable reference to character at specified position.
-     */
-    UCharReference operator[](int pos);
+    const UChar operator[](int pos) const;
 
     /**
      * Attempts an conversion to a number. Apart from floating point numbers,
@@ -422,15 +348,14 @@ namespace KJS {
     double toDouble(bool tolerateTrailingJunk, bool tolerateEmptyString) const;
     double toDouble(bool tolerateTrailingJunk) const;
     double toDouble() const;
-    /**
-     * Attempts an conversion to an unsigned long integer. ok will be set
-     * according to the success.
-     * @param tolerateEmptyString if false, toULong will return false for *ok for an empty string.
-     */
-    unsigned long toULong(bool *ok, bool tolerateEmptyString) const;
-    unsigned long toULong(bool *ok = 0) const;
 
+    /**
+     * Attempts an conversion to a 32-bit integer. ok will be set
+     * according to the success.
+     * @param tolerateEmptyString if false, toUInt32 will return false for *ok for an empty string.
+     */
     uint32_t toUInt32(bool *ok = 0) const;
+    uint32_t toUInt32(bool *ok, bool tolerateEmptyString) const;
     uint32_t toStrictUInt32(bool *ok = 0) const;
 
     /**
@@ -462,24 +387,20 @@ namespace KJS {
      * Static instance of a null string.
      */
     static const UString &null();
-#ifdef KJS_DEBUG_MEM
-    /**
-     * Clear statically allocated resources.
-     */
-    static void globalClear();
-#endif
+
+    Rep* rep() const { return m_rep.get(); }
+    UString(PassRefPtr<Rep> r) : m_rep(r) { ASSERT(m_rep); }
+
+    size_t cost() const;
+
   private:
-    UString(Rep *r) { attach(r); }
-    void attach(Rep *r) { rep = r; r->ref(); }
-    void detach();
-    void release() { rep->deref(); }
-    int expandedSize(int size, int otherSize) const;
+    size_t expandedSize(size_t size, size_t otherSize) const;
     int usedCapacity() const;
     int usedPreCapacity() const;
     void expandCapacity(int requiredLength);
     void expandPreCapacity(int requiredPreCap);
 
-    Rep *rep;
+    RefPtr<Rep> m_rep;
   };
 
   inline bool operator==(const UChar &c1, const UChar &c2) {
@@ -507,16 +428,43 @@ namespace KJS {
   
   int compare(const UString &, const UString &);
 
-  // Given a first byte, gives the length of the UTF-8 sequence it begins.
-  // Returns 0 for bytes that are not legal starts of UTF-8 sequences.
-  // Only allows sequences of up to 4 bytes, since that works for all Unicode characters (U-00000000 to U-0010FFFF).
-  int UTF8SequenceLength(char);
+inline UString::UString()
+  : m_rep(&Rep::null)
+{
+}
 
-  // Takes a null-terminated C-style string with a UTF-8 sequence in it and converts it to a character.
-  // Only allows Unicode characters (U-00000000 to U-0010FFFF).
-  // Returns -1 if the sequence is not valid (including presence of extra bytes).
-  int decodeUTF8Sequence(const char *);
+// Rule from ECMA 15.2 about what an array index is.
+// Must exactly match string form of an unsigned integer, and be less than 2^32 - 1.
+inline unsigned UString::toArrayIndex(bool *ok) const
+{
+    unsigned i = toStrictUInt32(ok);
+    if (ok && i >= 0xFFFFFFFFU)
+        *ok = false;
+    return i;
+}
 
-}; // namespace
+// We'd rather not do shared substring append for small strings, since
+// this runs too much risk of a tiny initial string holding down a
+// huge buffer.
+// FIXME: this should be size_t but that would cause warnings until we
+// fix UString sizes to be size_t instead of int
+static const int minShareSize = Collector::minExtraCostSize / sizeof(UChar);
+
+inline size_t UString::cost() const
+{
+   size_t capacity = (m_rep->baseString->capacity + m_rep->baseString->preCapacity) * sizeof(UChar);
+   size_t reportedCost = m_rep->baseString->reportedCost;
+   ASSERT(capacity >= reportedCost);
+
+   size_t capacityDelta = capacity - reportedCost;
+
+   if (capacityDelta < static_cast<size_t>(minShareSize))
+       return 0;
+
+   m_rep->baseString->reportedCost = capacity;
+   return capacityDelta;
+}
+
+} // namespace
 
 #endif

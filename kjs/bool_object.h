@@ -1,7 +1,6 @@
-// -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
+ *  Copyright (C) 2008 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -15,76 +14,52 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
-#ifndef _BOOL_OBJECT_H_
-#define _BOOL_OBJECT_H_
+#ifndef BOOL_OBJECT_H_
+#define BOOL_OBJECT_H_
 
-#include "internal.h"
 #include "function_object.h"
+#include "JSWrapperObject.h"
 
 namespace KJS {
 
-  class BooleanInstanceImp : public ObjectImp {
-  public:
-    BooleanInstanceImp(ObjectImp *proto);
+    class BooleanInstance : public JSWrapperObject {
+    public:
+        BooleanInstance(JSObject* proto);
 
-    virtual const ClassInfo *classInfo() const { return &info; }
-    static const ClassInfo info;
-  };
+        virtual const ClassInfo* classInfo() const { return &info; }
+        static const ClassInfo info;
+    };
 
-  /**
-   * @internal
-   *
-   * The initial value of Boolean.prototype (and thus all objects created
-   * with the Boolean constructor
-   */
-  class BooleanPrototypeImp : public BooleanInstanceImp {
-  public:
-    BooleanPrototypeImp(ExecState *exec,
-                        ObjectPrototypeImp *objectProto,
-                        FunctionPrototypeImp *funcProto);
-  };
+    /**
+     * @internal
+     *
+     * The initial value of Boolean.prototype (and thus all objects created
+     * with the Boolean constructor
+     */
+    class BooleanPrototype : public BooleanInstance {
+    public:
+        BooleanPrototype(ExecState*, ObjectPrototype*, FunctionPrototype*);
+    };
 
-  /**
-   * @internal
-   *
-   * Class to implement all methods that are properties of the
-   * Boolean.prototype object
-   */
-  class BooleanProtoFuncImp : public InternalFunctionImp {
-  public:
-    BooleanProtoFuncImp(ExecState *exec,
-                        FunctionPrototypeImp *funcProto, int i, int len);
+    /**
+     * @internal
+     *
+     * The initial value of the the global variable's "Boolean" property
+     */
+    class BooleanObjectImp : public InternalFunctionImp {
+    public:
+        BooleanObjectImp(ExecState*, FunctionPrototype*, BooleanPrototype*);
 
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+        virtual bool implementsConstruct() const;
+        virtual JSObject* construct(ExecState*, const List&);
 
-    enum { ToString, ValueOf };
-  private:
-    int id;
-  };
+        virtual JSValue* callAsFunction(ExecState*, JSObject*, const List&);
+    };
 
-  /**
-   * @internal
-   *
-   * The initial value of the the global variable's "Boolean" property
-   */
-  class BooleanObjectImp : public InternalFunctionImp {
-    friend class BooleanProtoFuncImp;
-  public:
-    BooleanObjectImp(ExecState *exec, FunctionPrototypeImp *funcProto,
-                     BooleanPrototypeImp *booleanProto);
+} // namespace KJS
 
-    virtual bool implementsConstruct() const;
-    virtual Object construct(ExecState *exec, const List &args);
-
-    virtual bool implementsCall() const;
-    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
-  };
-
-}; // namespace
-
-#endif
+#endif // BOOL_OBJECT_H_

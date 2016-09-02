@@ -16,8 +16,8 @@
  * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE COMPUTER, INC. OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
  * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-                                        * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-                                        * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
@@ -26,7 +26,9 @@
 #ifndef _NP_RUNTIME_IMPL_H_
 #define _NP_RUNTIME_IMPL_H_
 
-#include "npruntime.h"
+#if ENABLE(NETSCAPE_API)
+
+#include "npruntime_internal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,9 +54,12 @@ extern bool _NPN_RemoveProperty(NPP npp, NPObject *npobj, NPIdentifier propertyN
 extern bool _NPN_HasProperty(NPP npp, NPObject *npobj, NPIdentifier propertyName);
 extern bool _NPN_HasMethod(NPP npp, NPObject *npobj, NPIdentifier methodName);
 extern void _NPN_SetException(NPObject *obj, const NPUTF8 *message);
+extern bool _NPN_Enumerate(NPP npp, NPObject *npobj, NPIdentifier **identifier, uint32_t *count);
 
 #ifdef __cplusplus
 }  /* end extern "C" */
 #endif
+
+#endif // ENABLE(NETSCAPE_API)
 
 #endif

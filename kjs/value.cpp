@@ -1,9 +1,7 @@
-// -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001 Peter Kelly (pmk@post.com)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2003, 2007, 2008 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -17,384 +15,218 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
+#include "config.h"
 #include "value.h"
-#include "object.h"
-#include "types.h"
-#include "interpreter.h"
 
-#include <assert.h>
-#include <math.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "internal.h"
-#include "collector.h"
-#include "operations.h"
 #include "error_object.h"
 #include "nodes.h"
-#include "simple_number.h"
+#include <stdio.h>
+#include <string.h>
+#include <wtf/MathExtras.h>
 
-using namespace KJS;
+namespace KJS {
 
-// ----------------------------- ValueImp -------------------------------------
+#if defined NAN && defined INFINITY
 
-#if !USE_CONSERVATIVE_GC
-ValueImp::ValueImp() :
-  refcount(0),
-  // Tell the garbage collector that this memory block corresponds to a real object now
-  _flags(VI_CREATED)
-{
-  //fprintf(stderr,"ValueImp::ValueImp %p\n",(void*)this);
-}
+extern const double NaN = NAN;
+extern const double Inf = INFINITY;
 
-ValueImp::~ValueImp()
-{
-  //fprintf(stderr,"ValueImp::~ValueImp %p\n",(void*)this);
-}
-#endif
+#else // !(defined NAN && defined INFINITY)
 
-#if TEST_CONSERVATIVE_GC
-static bool conservativeMark = false;
+// The trick is to define the NaN and Inf globals with a different type than the declaration.
+// This trick works because the mangled name of the globals does not include the type, although
+// I'm not sure that's guaranteed. There could be alignment issues with this, since arrays of
+// characters don't necessarily need the same alignment doubles do, but for now it seems to work.
+// It would be good to figure out a 100% clean way that still avoids code that runs at init time.
 
-void ValueImp::useConservativeMark(bool use)
-{
-  conservativeMark = use;
-}
-#endif
+// Note, we have to use union to ensure alignment. Otherwise, NaN_Bytes can start anywhere,
+// while NaN_double has to be 4-byte aligned for 32-bits.
+// With -fstrict-aliasing enabled, unions are the only safe way to do type masquerading.
 
-void ValueImp::mark()
-{
-  //fprintf(stderr,"ValueImp::mark %p\n",(void*)this);
-#if USE_CONSERVATIVE_GC
-  _marked = true;
-#elif TEST_CONSERVATIVE_GC
-  if (conservativeMark) {
-    _flags |= VI_CONSERVATIVE_MARKED;
-  } else {
-    if (!(_flags & VI_CONSERVATIVE_MARKED)) {
-      printf("Conservative collector missed ValueImp 0x%x. refcount %d, protect count %d\n", (int)this, refcount, ProtectedValues::getProtectCount(this));
-    }
-    _flags |= VI_MARKED;
-  }
+static const union {
+    struct {
+        unsigned char NaN_Bytes[8];
+        unsigned char Inf_Bytes[8];
+    } bytes;
+    
+    struct {
+        double NaN_Double;
+        double Inf_Double;
+    } doubles;
+    
+} NaNInf = { {
+#if PLATFORM(BIG_ENDIAN)
+    { 0x7f, 0xf8, 0, 0, 0, 0, 0, 0 },
+    { 0x7f, 0xf0, 0, 0, 0, 0, 0, 0 }
+#elif PLATFORM(MIDDLE_ENDIAN)
+    { 0, 0, 0xf8, 0x7f, 0, 0, 0, 0 },
+    { 0, 0, 0xf0, 0x7f, 0, 0, 0, 0 }
 #else
-  _flags |= VI_MARKED;
+    { 0, 0, 0, 0, 0, 0, 0xf8, 0x7f },
+    { 0, 0, 0, 0, 0, 0, 0xf0, 0x7f }
 #endif
+} } ;
+
+extern const double NaN = NaNInf.doubles.NaN_Double;
+extern const double Inf = NaNInf.doubles.Inf_Double;
+ 
+#endif // !(defined NAN && defined INFINITY)
+
+static const double D16 = 65536.0;
+static const double D32 = 4294967296.0;
+
+void *JSCell::operator new(size_t size)
+{
+    return Collector::allocate(size);
 }
 
-#if !USE_CONSERVATIVE_GC
-void ValueImp::setGcAllowed()
+bool JSCell::getUInt32(uint32_t&) const
 {
-  //fprintf(stderr,"ValueImp::setGcAllowed %p\n",(void*)this);
-  // simple numbers are never seen by the collector so setting this
-  // flag is irrelevant
-  if (!SimpleNumber::is(this))
-    _flags |= VI_GCALLOWED;
-}
-#endif
-
-void* ValueImp::operator new(size_t s)
-{
-  return Collector::allocate(s);
+    return false;
 }
 
-void ValueImp::operator delete(void*)
+bool JSCell::getTruncatedInt32(int32_t&) const
 {
-  // Do nothing. So far.
+    return false;
 }
 
-bool ValueImp::toUInt32(unsigned&) const
+bool JSCell::getTruncatedUInt32(uint32_t&) const
 {
-  return false;
+    return false;
 }
 
 // ECMA 9.4
-double ValueImp::toInteger(ExecState *exec) const
+double JSValue::toInteger(ExecState *exec) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-  return roundValue(exec, Value(const_cast<ValueImp*>(this)));
+    int32_t i;
+    if (getTruncatedInt32(i))
+        return i;
+    double d = toNumber(exec);
+    return isnan(d) ? 0.0 : trunc(d);
 }
 
-int32_t ValueImp::toInt32(ExecState *exec) const
+double JSValue::toIntegerPreserveNaN(ExecState *exec) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d32 = fmod(d, D32);
-
-  if (d32 >= D32 / 2.0)
-    d32 -= D32;
-  else if (d32 < -D32 / 2.0)
-    d32 += D32;
-
-  return static_cast<int32_t>(d32);
+    int32_t i;
+    if (getTruncatedInt32(i))
+        return i;
+    return trunc(toNumber(exec));
 }
 
-uint32_t ValueImp::toUInt32(ExecState *exec) const
+int32_t JSValue::toInt32SlowCase(double d, bool& ok)
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
+    ok = true;
 
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d32 = fmod(d, D32);
+    if (d >= -D32 / 2 && d < D32 / 2)
+        return static_cast<int32_t>(d);
 
-  if (d32 < 0)
-    d32 += D32;
+    if (isnan(d) || isinf(d)) {
+        ok = false;
+        return 0;
+    }
 
-  return static_cast<uint32_t>(d32);
+    double d32 = fmod(trunc(d), D32);
+    if (d32 >= D32 / 2)
+        d32 -= D32;
+    else if (d32 < -D32 / 2)
+        d32 += D32;
+    return static_cast<int32_t>(d32);
 }
 
-uint16_t ValueImp::toUInt16(ExecState *exec) const
+int32_t JSValue::toInt32SlowCase(ExecState* exec, bool& ok) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d16 = fmod(d, D16);
-
-  if (d16 < 0)
-    d16 += D16;
-
-  return static_cast<uint16_t>(d16);
+    return JSValue::toInt32SlowCase(toNumber(exec), ok);
 }
 
-Object ValueImp::dispatchToObject(ExecState *exec) const
+uint32_t JSValue::toUInt32SlowCase(double d, bool& ok)
 {
-  if (SimpleNumber::is(this))
-    return static_cast<const NumberImp *>(this)->NumberImp::toObject(exec);
-  return toObject(exec);
+    ok = true;
+
+    if (d >= 0.0 && d < D32)
+        return static_cast<uint32_t>(d);
+
+    if (isnan(d) || isinf(d)) {
+        ok = false;
+        return 0;
+    }
+
+    double d32 = fmod(trunc(d), D32);
+    if (d32 < 0)
+        d32 += D32;
+    return static_cast<uint32_t>(d32);
 }
 
-// ------------------------------ Value ----------------------------------------
-
-#if !USE_CONSERVATIVE_GC
-
-Value::Value(ValueImp *v)
+uint32_t JSValue::toUInt32SlowCase(ExecState* exec, bool& ok) const
 {
-  rep = v;
-#if DEBUG_COLLECTOR
-  assert (!(rep && !SimpleNumber::is(rep) && *((uint32_t *)rep) == 0 ));
-  assert (!(rep && !SimpleNumber::is(rep) && rep->_flags & ValueImp::VI_MARKED));
-#endif
-  if (v)
-  {
-    v->ref();
-    //fprintf(stderr, "Value::Value(%p) imp=%p ref=%d\n", this, rep, rep->refcount);
-    v->setGcAllowed();
-  }
+    return JSValue::toUInt32SlowCase(toNumber(exec), ok);
 }
 
-Value::Value(const Value &v)
+float JSValue::toFloat(ExecState* exec) const
 {
-  rep = v.imp();
-#if DEBUG_COLLECTOR
-  assert (!(rep && !SimpleNumber::is(rep) && *((uint32_t *)rep) == 0 ));
-  assert (!(rep && !SimpleNumber::is(rep) && rep->_flags & ValueImp::VI_MARKED));
-#endif
-  if (rep)
-  {
-    rep->ref();
-    //fprintf(stderr, "Value::Value(%p)(copying %p) imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
+    return static_cast<float>(toNumber(exec));
 }
 
-Value::~Value()
+bool JSCell::getNumber(double &numericValue) const
 {
-  if (rep)
-  {
-    rep->deref();
-    //fprintf(stderr, "Value::~Value(%p) imp=%p ref=%d\n", this, rep, rep->refcount);
-  }
+    if (!isNumber())
+        return false;
+    numericValue = static_cast<const NumberImp *>(this)->value();
+    return true;
 }
 
-Value& Value::operator=(const Value &v)
+double JSCell::getNumber() const
 {
-  if (rep) {
-    rep->deref();
-    //fprintf(stderr, "Value::operator=(%p)(copying %p) old imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
-  rep = v.imp();
-  if (rep)
-  {
-    rep->ref();
-    //fprintf(stderr, "Value::operator=(%p)(copying %p) imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
-  return *this;
-}
-#endif
-
-Value::Value(bool b) : rep(b ? BooleanImp::staticTrue : BooleanImp::staticFalse) { }
-
-Value::Value(int i)
-    : rep(SimpleNumber::fits(i) ? SimpleNumber::make(i) : new NumberImp(static_cast<double>(i))) { }
-
-Value::Value(unsigned u)
-    : rep(SimpleNumber::fits(u) ? SimpleNumber::make(u) : new NumberImp(static_cast<double>(u))) { }
-
-Value::Value(double d)
-    : rep(SimpleNumber::fits(d)
-        ? SimpleNumber::make(static_cast<long>(d))
-        : (KJS::isNaN(d) ? NumberImp::staticNaN : new NumberImp(d)))
-{ }
-
-Value::Value(double d, bool knownToBeInteger)
-    : rep((knownToBeInteger ? SimpleNumber::integerFits(d) : SimpleNumber::fits(d))
-        ? SimpleNumber::make(static_cast<long>(d))
-        : ((!knownToBeInteger && KJS::isNaN(d)) ? NumberImp::staticNaN : new NumberImp(d)))
-{ }
-
-Value::Value(long l)
-    : rep(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Value::Value(unsigned long l)
-    : rep(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Value::Value(const char *s) : rep(new StringImp(s ? s : "")) { }
-
-Value::Value(const UString &s) : rep(new StringImp(s.isNull() ? "" : s)) { }
-
-// ------------------------------ Undefined ------------------------------------
-
-Undefined::Undefined() : Value(UndefinedImp::staticUndefined)
-{
+    return isNumber() ? static_cast<const NumberImp *>(this)->value() : NaN;
 }
 
-Undefined Undefined::dynamicCast(const Value &v)
+bool JSCell::getString(UString &stringValue) const
 {
-  if (v.isNull() || v.type() != UndefinedType)
-    return Undefined(0);
-
-  return Undefined();
+    if (!isString())
+        return false;
+    stringValue = static_cast<const StringImp *>(this)->value();
+    return true;
 }
 
-// ------------------------------ Null -----------------------------------------
-
-Null::Null() : Value(NullImp::staticNull)
+UString JSCell::getString() const
 {
+    return isString() ? static_cast<const StringImp *>(this)->value() : UString();
 }
 
-Null Null::dynamicCast(const Value &v)
+JSObject *JSCell::getObject()
 {
-  if (v.isNull() || v.type() != NullType)
-    return Null(0);
-
-  return Null();
+    return isObject() ? static_cast<JSObject *>(this) : 0;
 }
 
-// ------------------------------ Boolean --------------------------------------
-
-Boolean::Boolean(bool b)
-  : Value(b ? BooleanImp::staticTrue : BooleanImp::staticFalse)
+const JSObject *JSCell::getObject() const
 {
+    return isObject() ? static_cast<const JSObject *>(this) : 0;
 }
 
-bool Boolean::value() const
+JSCell* jsString(const char* s)
 {
-  assert(rep);
-  return ((BooleanImp*)rep)->value();
+    return new StringImp(s ? s : "");
 }
 
-Boolean Boolean::dynamicCast(const Value &v)
+JSCell* jsString(const UString& s)
 {
-  if (v.isNull() || v.type() != BooleanType)
-    return static_cast<BooleanImp*>(0);
-
-  return static_cast<BooleanImp*>(v.imp());
+    return s.isNull() ? new StringImp("") : new StringImp(s);
 }
 
-// ------------------------------ String ---------------------------------------
-
-String::String(const UString &s) : Value(new StringImp(s.isNull() ? "" : s))
+JSCell* jsOwnedString(const UString& s)
 {
+    return s.isNull() ? new StringImp("", StringImp::HasOtherOwner) : new StringImp(s, StringImp::HasOtherOwner);
 }
 
-UString String::value() const
+// This method includes a PIC branch to set up the NumberImp's vtable, so we quarantine
+// it in a separate function to keep the normal case speedy.
+JSValue *jsNumberCell(double d)
 {
-  assert(rep);
-  return ((StringImp*)rep)->value();
+    return new NumberImp(d);
 }
 
-String String::dynamicCast(const Value &v)
-{
-  if (v.isNull() || v.type() != StringType)
-    return String(0);
-
-  return String(static_cast<StringImp*>(v.imp()));
-}
-
-// ------------------------------ Number ---------------------------------------
-
-Number::Number(int i)
-  : Value(SimpleNumber::fits(i) ? SimpleNumber::make(i) : new NumberImp(static_cast<double>(i))) { }
-
-Number::Number(unsigned int u)
-  : Value(SimpleNumber::fits(u) ? SimpleNumber::make(u) : new NumberImp(static_cast<double>(u))) { }
-
-Number::Number(double d)
-  : Value(SimpleNumber::fits(d)
-        ? SimpleNumber::make(static_cast<long>(d))
-        : (KJS::isNaN(d) ? NumberImp::staticNaN : new NumberImp(d)))
-{ }
-
-Number::Number(double d, bool knownToBeInteger)
-  : Value((knownToBeInteger ? SimpleNumber::integerFits(d) : SimpleNumber::fits(d))
-        ? SimpleNumber::make(static_cast<long>(d))
-        : ((!knownToBeInteger && KJS::isNaN(d)) ? NumberImp::staticNaN : new NumberImp(d)))
-{ }
-
-Number::Number(long int l)
-  : Value(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Number::Number(long unsigned int l)
-  : Value(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Number Number::dynamicCast(const Value &v)
-{
-  if (v.isNull() || v.type() != NumberType)
-    return Number((NumberImp*)0);
-
-  return Number(static_cast<NumberImp*>(v.imp()));
-}
-
-double Number::value() const
-{
-  if (SimpleNumber::is(rep))
-    return (double)SimpleNumber::value(rep);
-  assert(rep);
-  return ((NumberImp*)rep)->value();
-}
-
-int Number::intValue() const
-{
-  if (SimpleNumber::is(rep))
-    return SimpleNumber::value(rep);
-  return (int)((NumberImp*)rep)->value();
-}
-
-bool Number::isNaN() const
-{
-  return rep == NumberImp::staticNaN;
-}
-
-bool Number::isInf() const
-{
-  if (SimpleNumber::is(rep))
-    return false;
-  return KJS::isInf(((NumberImp*)rep)->value());
-}
+} // namespace KJS

@@ -1,8 +1,6 @@
-// -*- c-basic-offset: 2 -*-
 /*
- *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2003, 2007, 2008 Apple Inc. All Rights Reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -16,285 +14,462 @@
  *
  *  You should have received a copy of the GNU Lesser General Public
  *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  *
  */
 
+#include "config.h"
+#include "regexp_object.h"
+#include "regexp_object.lut.h"
+
+#include "array_instance.h"
+#include "array_object.h"
+#include "error_object.h"
+#include "internal.h"
+#include "object.h"
+#include "operations.h"
+#include "regexp.h"
+#include "types.h"
+#include "value.h"
+#include "UnusedParam.h"
+
 #include <stdio.h>
 
-#include "value.h"
-#include "object.h"
-#include "types.h"
-#include "interpreter.h"
-#include "operations.h"
-#include "internal.h"
-#include "regexp.h"
-#include "regexp_object.h"
-#include "error_object.h"
+namespace KJS {
 
-using namespace KJS;
+// ------------------------------ RegExpPrototype ---------------------------
 
-// ------------------------------ RegExpPrototypeImp ---------------------------
+static JSValue* regExpProtoFuncTest(ExecState*, JSObject*, const List&);
+static JSValue* regExpProtoFuncExec(ExecState*, JSObject*, const List&);
+static JSValue* regExpProtoFuncCompile(ExecState*, JSObject*, const List&);
+static JSValue* regExpProtoFuncToString(ExecState*, JSObject*, const List&);
 
-// ECMA 15.9.4
+// ECMA 15.10.5
 
-const ClassInfo RegExpPrototypeImp::info = {"RegExpPrototype", 0, 0, 0};
+const ClassInfo RegExpPrototype::info = { "RegExpPrototype", 0, 0 };
 
-RegExpPrototypeImp::RegExpPrototypeImp(ExecState *exec,
-                                       ObjectPrototypeImp *objProto,
-                                       FunctionPrototypeImp *funcProto)
-  : ObjectImp(objProto)
+RegExpPrototype::RegExpPrototype(ExecState* exec, ObjectPrototype* objectPrototype, FunctionPrototype* functionPrototype)
+    : JSObject(objectPrototype)
 {
-  Value protect(this);
-  setInternalValue(String(""));
+    static const Identifier* compilePropertyName = new Identifier("compile");
+    static const Identifier* execPropertyName = new Identifier("exec");
+    static const Identifier* testPropertyName = new Identifier("test");
 
-  // The constructor will be added later in RegExpObject's constructor (?)
-
-  static const Identifier execPropertyName("exec");
-  putDirect(execPropertyName,     new RegExpProtoFuncImp(exec,funcProto,RegExpProtoFuncImp::Exec,     0), DontEnum);
-  static const Identifier testPropertyName("test");
-  putDirect(testPropertyName,     new RegExpProtoFuncImp(exec,funcProto,RegExpProtoFuncImp::Test,     0), DontEnum);
-  putDirect(toStringPropertyName, new RegExpProtoFuncImp(exec,funcProto,RegExpProtoFuncImp::ToString, 0), DontEnum);
+    putDirectFunction(new PrototypeFunction(exec, functionPrototype, 0, *compilePropertyName, regExpProtoFuncCompile), DontEnum);
+    putDirectFunction(new PrototypeFunction(exec, functionPrototype, 0, *execPropertyName, regExpProtoFuncExec), DontEnum);
+    putDirectFunction(new PrototypeFunction(exec, functionPrototype, 0, *testPropertyName, regExpProtoFuncTest), DontEnum);
+    putDirectFunction(new PrototypeFunction(exec, functionPrototype, 0, exec->propertyNames().toString, regExpProtoFuncToString), DontEnum);
 }
 
-// ------------------------------ RegExpProtoFuncImp ---------------------------
-
-RegExpProtoFuncImp::RegExpProtoFuncImp(ExecState *exec,
-                                       FunctionPrototypeImp *funcProto, int i, int len)
-  : InternalFunctionImp(funcProto), id(i)
+// ------------------------------ Functions ---------------------------
+    
+JSValue* regExpProtoFuncTest(ExecState* exec, JSObject* thisObj, const List& args)
 {
-  Value protect(this);
-  putDirect(lengthPropertyName, len, DontDelete|ReadOnly|DontEnum);
+    if (!thisObj->inherits(&RegExpImp::info))
+        return throwError(exec, TypeError);
+
+    return static_cast<RegExpImp*>(thisObj)->test(exec, args);
 }
 
-bool RegExpProtoFuncImp::implementsCall() const
+JSValue* regExpProtoFuncExec(ExecState* exec, JSObject* thisObj, const List& args)
 {
-  return true;
+    if (!thisObj->inherits(&RegExpImp::info))
+        return throwError(exec, TypeError);
+
+    return static_cast<RegExpImp*>(thisObj)->exec(exec, args);
 }
 
-Value RegExpProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &args)
+JSValue* regExpProtoFuncCompile(ExecState* exec, JSObject* thisObj, const List& args)
 {
-  if (!thisObj.inherits(&RegExpImp::info)) {
-    if (thisObj.inherits(&RegExpPrototypeImp::info)) {
-      switch (id) {
-        case ToString: return String("//");
-      }
-    }
-    Object err = Error::create(exec,TypeError);
-    exec->setException(err);
-    return err;
-  }
+    if (!thisObj->inherits(&RegExpImp::info))
+        return throwError(exec, TypeError);
 
-  RegExpImp *reimp = static_cast<RegExpImp*>(thisObj.imp());
-  RegExp *re = reimp->regExp();
-  String s;
-  UString str;
-  switch (id) {
-  case Exec:      // 15.10.6.2
-  case Test:
-  {
-    s = args[0].toString(exec);
-    int length = s.value().size();
-    Value lastIndex = thisObj.get(exec,"lastIndex");
-    int i = lastIndex.isNull() ? 0 : lastIndex.toInt32(exec);
-    bool globalFlag = thisObj.get(exec,"global").toBoolean(exec);
-    if (!globalFlag)
-      i = 0;
-    if (i < 0 || i > length) {
-      thisObj.put(exec,"lastIndex", Number(0), DontDelete | DontEnum);
-      if (id == Test)
-        return Boolean(false);
-      else
-        return Null();
+    RefPtr<RegExp> regExp;
+    JSValue* arg0 = args[0];
+    JSValue* arg1 = args[1];
+    
+    if (arg0->isObject(&RegExpImp::info)) {
+        if (!arg1->isUndefined())
+            return throwError(exec, TypeError, "Cannot supply flags when constructing one RegExp from another.");
+        regExp = static_cast<RegExpImp*>(arg0)->regExp();
+    } else {
+        UString pattern = args.isEmpty() ? UString("") : arg0->toString(exec);
+        UString flags = arg1->isUndefined() ? UString("") : arg1->toString(exec);
+        regExp = new RegExp(pattern, flags);
     }
-    RegExpObjectImp* regExpObj = static_cast<RegExpObjectImp*>(exec->lexicalInterpreter()->builtinRegExp().imp());
-    int **ovector = regExpObj->registerRegexp( re, s.value() );
 
-    str = re->match(s.value(), i, 0L, ovector);
-    regExpObj->setSubPatterns(re->subPatterns());
+    if (!regExp->isValid())
+        return throwError(exec, SyntaxError, UString("Invalid regular expression: ").append(regExp->errorMessage()));
 
-    if (id == Test)
-      return Boolean(!str.isNull());
+    static_cast<RegExpImp*>(thisObj)->setRegExp(regExp.release());
+    static_cast<RegExpImp*>(thisObj)->setLastIndex(0);
+    return jsUndefined();
+}
 
-    if (str.isNull()) // no match
-    {
-      if (globalFlag)
-        thisObj.put(exec,"lastIndex",Number(0), DontDelete | DontEnum);
-      return Null();
+JSValue* regExpProtoFuncToString(ExecState* exec, JSObject* thisObj, const List&)
+{
+    if (!thisObj->inherits(&RegExpImp::info)) {
+        if (thisObj->inherits(&RegExpPrototype::info))
+            return jsString("//");
+        return throwError(exec, TypeError);
     }
-    else // success
-    {
-      if (globalFlag)
-        thisObj.put(exec,"lastIndex",Number( (*ovector)[1] ), DontDelete | DontEnum);
-      return regExpObj->arrayOfMatches(exec,str);
-    }
-  }
-  break;
-  case ToString:
-    s = thisObj.get(exec,"source").toString(exec);
-    str = "/";
-    str += s.value();
-    str += "/";
-    if (thisObj.get(exec,"global").toBoolean(exec)) {
-      str += "g";
-    }
-    if (thisObj.get(exec,"ignoreCase").toBoolean(exec)) {
-      str += "i";
-    }
-    if (thisObj.get(exec,"multiline").toBoolean(exec)) {
-      str += "m";
-    }
-    return String(str);
-  }
 
-  return Undefined();
+    UString result = "/" + thisObj->get(exec, exec->propertyNames().source)->toString(exec) + "/";
+    if (thisObj->get(exec, exec->propertyNames().global)->toBoolean(exec))
+        result += "g";
+    if (thisObj->get(exec, exec->propertyNames().ignoreCase)->toBoolean(exec))
+        result += "i";
+    if (thisObj->get(exec, exec->propertyNames().multiline)->toBoolean(exec))
+        result += "m";
+    return jsString(result);
 }
 
 // ------------------------------ RegExpImp ------------------------------------
 
-const ClassInfo RegExpImp::info = {"RegExp", 0, 0, 0};
+const ClassInfo RegExpImp::info = { "RegExp", 0, &RegExpImpTable };
 
-RegExpImp::RegExpImp(RegExpPrototypeImp *regexpProto)
-  : ObjectImp(regexpProto), reg(0L)
+/* Source for regexp_object.lut.h
+@begin RegExpImpTable 5
+    global        RegExpImp::Global       DontDelete|ReadOnly|DontEnum
+    ignoreCase    RegExpImp::IgnoreCase   DontDelete|ReadOnly|DontEnum
+    multiline     RegExpImp::Multiline    DontDelete|ReadOnly|DontEnum
+    source        RegExpImp::Source       DontDelete|ReadOnly|DontEnum
+    lastIndex     RegExpImp::LastIndex    DontDelete|DontEnum
+@end
+*/
+
+RegExpImp::RegExpImp(RegExpPrototype* regexpProto, PassRefPtr<RegExp> regExp)
+  : JSObject(regexpProto)
+  , m_regExp(regExp)
+  , m_lastIndex(0)
 {
 }
 
 RegExpImp::~RegExpImp()
 {
-  delete reg;
+}
+
+bool RegExpImp::getOwnPropertySlot(ExecState* exec, const Identifier& propertyName, PropertySlot& slot)
+{
+  return getStaticValueSlot<RegExpImp, JSObject>(exec, &RegExpImpTable, this, propertyName, slot);
+}
+
+JSValue* RegExpImp::getValueProperty(ExecState*, int token) const
+{
+    switch (token) {
+        case Global:
+            return jsBoolean(m_regExp->global());
+        case IgnoreCase:
+            return jsBoolean(m_regExp->ignoreCase());
+        case Multiline:
+            return jsBoolean(m_regExp->multiline());
+        case Source:
+            return jsString(m_regExp->pattern());
+        case LastIndex:
+            return jsNumber(m_lastIndex);
+    }
+    
+    ASSERT_NOT_REACHED();
+    return 0;
+}
+
+void RegExpImp::put(ExecState* exec, const Identifier& propertyName, JSValue* value, int attributes)
+{
+    lookupPut<RegExpImp, JSObject>(exec, propertyName, value, attributes, &RegExpImpTable, this);
+}
+
+void RegExpImp::putValueProperty(ExecState* exec, int token, JSValue* value, int)
+{
+    UNUSED_PARAM(token);
+    ASSERT(token == LastIndex);
+    m_lastIndex = value->toInteger(exec);
+}
+
+bool RegExpImp::match(ExecState* exec, const List& args)
+{
+    RegExpObjectImp* regExpObj = exec->lexicalGlobalObject()->regExpConstructor();
+
+    UString input;
+    if (!args.isEmpty())
+        input = args[0]->toString(exec);
+    else {
+        input = regExpObj->input();
+        if (input.isNull()) {
+            throwError(exec, GeneralError, "No input.");
+            return false;
+        }
+    }
+
+    bool global = get(exec, exec->propertyNames().global)->toBoolean(exec);
+    int lastIndex = 0;
+    if (global) {
+        if (m_lastIndex < 0 || m_lastIndex > input.size()) {
+            m_lastIndex = 0;
+            return false;
+        }
+        lastIndex = static_cast<int>(m_lastIndex);
+    }
+
+    int foundIndex;
+    int foundLength;
+    regExpObj->performMatch(m_regExp.get(), input, lastIndex, foundIndex, foundLength);
+
+    if (global) {
+        lastIndex = foundIndex < 0 ? 0 : foundIndex + foundLength;
+        m_lastIndex = lastIndex;
+    }
+
+    return foundIndex >= 0;
+}
+
+JSValue* RegExpImp::test(ExecState* exec, const List& args)
+{
+    return jsBoolean(match(exec, args));
+}
+
+JSValue* RegExpImp::exec(ExecState* exec, const List& args)
+{
+    return match(exec, args)
+        ? exec->lexicalGlobalObject()->regExpConstructor()->arrayOfMatches(exec)
+        :  jsNull();
+}
+
+bool RegExpImp::implementsCall() const
+{
+    return true;
+}
+
+JSValue* RegExpImp::callAsFunction(ExecState* exec, JSObject*, const List& args)
+{
+    return RegExpImp::exec(exec, args);
 }
 
 // ------------------------------ RegExpObjectImp ------------------------------
 
-RegExpObjectImp::RegExpObjectImp(ExecState *exec,
-                                 FunctionPrototypeImp *funcProto,
-                                 RegExpPrototypeImp *regProto)
+const ClassInfo RegExpObjectImp::info = { "Function", &InternalFunctionImp::info, &RegExpObjectImpTable };
 
-  : InternalFunctionImp(funcProto), lastOvector(0L), lastNrSubPatterns(0)
+/* Source for regexp_object.lut.h
+@begin RegExpObjectImpTable 21
+  input           RegExpObjectImp::Input          None
+  $_              RegExpObjectImp::Input          DontEnum
+  multiline       RegExpObjectImp::Multiline      None
+  $*              RegExpObjectImp::Multiline      DontEnum
+  lastMatch       RegExpObjectImp::LastMatch      DontDelete|ReadOnly
+  $&              RegExpObjectImp::LastMatch      DontDelete|ReadOnly|DontEnum
+  lastParen       RegExpObjectImp::LastParen      DontDelete|ReadOnly
+  $+              RegExpObjectImp::LastParen      DontDelete|ReadOnly|DontEnum
+  leftContext     RegExpObjectImp::LeftContext    DontDelete|ReadOnly
+  $`              RegExpObjectImp::LeftContext    DontDelete|ReadOnly|DontEnum
+  rightContext    RegExpObjectImp::RightContext   DontDelete|ReadOnly
+  $'              RegExpObjectImp::RightContext   DontDelete|ReadOnly|DontEnum
+  $1              RegExpObjectImp::Dollar1        DontDelete|ReadOnly
+  $2              RegExpObjectImp::Dollar2        DontDelete|ReadOnly
+  $3              RegExpObjectImp::Dollar3        DontDelete|ReadOnly
+  $4              RegExpObjectImp::Dollar4        DontDelete|ReadOnly
+  $5              RegExpObjectImp::Dollar5        DontDelete|ReadOnly
+  $6              RegExpObjectImp::Dollar6        DontDelete|ReadOnly
+  $7              RegExpObjectImp::Dollar7        DontDelete|ReadOnly
+  $8              RegExpObjectImp::Dollar8        DontDelete|ReadOnly
+  $9              RegExpObjectImp::Dollar9        DontDelete|ReadOnly
+@end
+*/
+
+struct RegExpObjectImpPrivate {
+  // Global search cache / settings
+  RegExpObjectImpPrivate() : lastNumSubPatterns(0), multiline(false) { }
+  UString lastInput;
+  OwnArrayPtr<int> lastOvector;
+  unsigned lastNumSubPatterns : 31;
+  bool multiline              : 1;
+};
+
+RegExpObjectImp::RegExpObjectImp(ExecState* exec, FunctionPrototype* funcProto, RegExpPrototype* regProto)
+  : InternalFunctionImp(funcProto, "RegExp")
+  , d(new RegExpObjectImpPrivate)
 {
-  Value protect(this);
   // ECMA 15.10.5.1 RegExp.prototype
-  putDirect(prototypePropertyName, regProto, DontEnum|DontDelete|ReadOnly);
+  putDirect(exec->propertyNames().prototype, regProto, DontEnum | DontDelete | ReadOnly);
 
   // no. of arguments for constructor
-  putDirect(lengthPropertyName, NumberImp::two(), ReadOnly|DontDelete|DontEnum);
+  putDirect(exec->propertyNames().length, jsNumber(2), ReadOnly | DontDelete | DontEnum);
 }
 
-RegExpObjectImp::~RegExpObjectImp()
+/* 
+  To facilitate result caching, exec(), test(), match(), search(), and replace() dipatch regular
+  expression matching through the performMatch function. We use cached results to calculate, 
+  e.g., RegExp.lastMatch and RegExp.leftParen.
+*/
+void RegExpObjectImp::performMatch(RegExp* r, const UString& s, int startOffset, int& position, int& length, int** ovector)
 {
-  delete [] lastOvector;
+  OwnArrayPtr<int> tmpOvector;
+  position = r->match(s, startOffset, &tmpOvector);
+
+  if (ovector)
+    *ovector = tmpOvector.get();
+  
+  if (position != -1) {
+    ASSERT(tmpOvector);
+
+    length = tmpOvector[1] - tmpOvector[0];
+
+    d->lastInput = s;
+    d->lastOvector.set(tmpOvector.release());
+    d->lastNumSubPatterns = r->numSubpatterns();
+  }
 }
 
-int **RegExpObjectImp::registerRegexp( const RegExp* re, const UString& s )
+JSObject* RegExpObjectImp::arrayOfMatches(ExecState* exec) const
 {
-  lastString = s;
-  delete [] lastOvector;
-  lastOvector = 0;
-  lastNrSubPatterns = re->subPatterns();
-  return &lastOvector;
-}
-
-Object RegExpObjectImp::arrayOfMatches(ExecState *exec, const UString &result) const
-{
-  List list;
-  // The returned array contains 'result' as first item, followed by the list of matches
-  list.append(String(result));
-  if ( lastOvector )
-    for ( uint i = 1 ; i < lastNrSubPatterns + 1 ; ++i )
-    {
-      int start = lastOvector[2*i];
-      if (start == -1)
-        list.append(UndefinedImp::staticUndefined);
-      else {
-        UString substring = lastString.substr( start, lastOvector[2*i+1] - start );
-        list.append(String(substring));
-      }
-    }
-  Object arr = exec->lexicalInterpreter()->builtinArray().construct(exec, list);
-  arr.put(exec, "index", Number(lastOvector[0]));
-  arr.put(exec, "input", String(lastString));
+  unsigned lastNumSubpatterns = d->lastNumSubPatterns;
+  ArrayInstance* arr = new ArrayInstance(exec->lexicalGlobalObject()->arrayPrototype(), lastNumSubpatterns + 1);
+  for (unsigned i = 0; i <= lastNumSubpatterns; ++i) {
+    int start = d->lastOvector[2 * i];
+    if (start >= 0)
+      arr->put(exec, i, jsString(d->lastInput.substr(start, d->lastOvector[2 * i + 1] - start)));
+  }
+  arr->put(exec, exec->propertyNames().index, jsNumber(d->lastOvector[0]));
+  arr->put(exec, exec->propertyNames().input, jsString(d->lastInput));
   return arr;
 }
 
-Value RegExpObjectImp::get(ExecState *exec, const Identifier &p) const
+JSValue* RegExpObjectImp::getBackref(unsigned i) const
 {
-  UString s = p.ustring();
-  if (s[0] == '$' && lastOvector)
-  {
-    bool ok;
-    unsigned long i = s.substr(1).toULong(&ok);
-    if (ok)
-    {
-      if (i < lastNrSubPatterns + 1)
-      {
-        UString substring = lastString.substr( lastOvector[2*i], lastOvector[2*i+1] - lastOvector[2*i] );
-        return String(substring);
-      }
-      return String("");
-    }
-  }
-  return InternalFunctionImp::get(exec, p);
+  if (d->lastOvector && i <= d->lastNumSubPatterns)
+    return jsString(d->lastInput.substr(d->lastOvector[2 * i], d->lastOvector[2 * i + 1] - d->lastOvector[2 * i]));
+  return jsString("");
 }
 
+JSValue* RegExpObjectImp::getLastParen() const
+{
+  unsigned i = d->lastNumSubPatterns;
+  if (i > 0) {
+    ASSERT(d->lastOvector);
+    return jsString(d->lastInput.substr(d->lastOvector[2 * i], d->lastOvector[2 * i + 1] - d->lastOvector[2 * i]));
+  }
+  return jsString("");
+}
+
+JSValue *RegExpObjectImp::getLeftContext() const
+{
+  if (d->lastOvector)
+    return jsString(d->lastInput.substr(0, d->lastOvector[0]));
+  return jsString("");
+}
+
+JSValue *RegExpObjectImp::getRightContext() const
+{
+  if (d->lastOvector) {
+    UString s = d->lastInput;
+    return jsString(s.substr(d->lastOvector[1], s.size() - d->lastOvector[1]));
+  }
+  return jsString("");
+}
+
+bool RegExpObjectImp::getOwnPropertySlot(ExecState *exec, const Identifier& propertyName, PropertySlot& slot)
+{
+  return getStaticValueSlot<RegExpObjectImp, InternalFunctionImp>(exec, &RegExpObjectImpTable, this, propertyName, slot);
+}
+
+JSValue *RegExpObjectImp::getValueProperty(ExecState*, int token) const
+{
+  switch (token) {
+    case Dollar1:
+      return getBackref(1);
+    case Dollar2:
+      return getBackref(2);
+    case Dollar3:
+      return getBackref(3);
+    case Dollar4:
+      return getBackref(4);
+    case Dollar5:
+      return getBackref(5);
+    case Dollar6:
+      return getBackref(6);
+    case Dollar7:
+      return getBackref(7);
+    case Dollar8:
+      return getBackref(8);
+    case Dollar9:
+      return getBackref(9);
+    case Input:
+      return jsString(d->lastInput);
+    case Multiline:
+      return jsBoolean(d->multiline);
+    case LastMatch:
+      return getBackref(0);
+    case LastParen:
+      return getLastParen();
+    case LeftContext:
+      return getLeftContext();
+    case RightContext:
+      return getRightContext();
+    default:
+      ASSERT(0);
+  }
+
+  return jsString("");
+}
+
+void RegExpObjectImp::put(ExecState *exec, const Identifier &propertyName, JSValue *value, int attr)
+{
+  lookupPut<RegExpObjectImp, InternalFunctionImp>(exec, propertyName, value, attr, &RegExpObjectImpTable, this);
+}
+
+void RegExpObjectImp::putValueProperty(ExecState *exec, int token, JSValue *value, int)
+{
+  switch (token) {
+    case Input:
+      d->lastInput = value->toString(exec);
+      break;
+    case Multiline:
+      d->multiline = value->toBoolean(exec);
+      break;
+    default:
+      ASSERT(0);
+  }
+}
+  
 bool RegExpObjectImp::implementsConstruct() const
 {
   return true;
 }
 
 // ECMA 15.10.4
-Object RegExpObjectImp::construct(ExecState *exec, const List &args)
+JSObject *RegExpObjectImp::construct(ExecState *exec, const List &args)
 {
-  Object o = Object::dynamicCast(args[0]);
-  if (!o.isNull() && o.inherits(&RegExpImp::info)) {
-    if (args[1].type() != UndefinedType) {
-      Object err = Error::create(exec,TypeError);
-      exec->setException(err);
-      return err;
-    }
-    return o;
+  JSValue* arg0 = args[0];
+  JSValue* arg1 = args[1];
+  
+  if (arg0->isObject(&RegExpImp::info)) {
+    if (!arg1->isUndefined())
+      return throwError(exec, TypeError, "Cannot supply flags when constructing one RegExp from another.");
+    return static_cast<JSObject*>(arg0);
   }
   
-  UString p = args[0].type() == UndefinedType ? UString("") : args[0].toString(exec);
-  UString flags = args[1].type() == UndefinedType ? UString("") : args[1].toString(exec);
-
-  RegExpPrototypeImp *proto = static_cast<RegExpPrototypeImp*>(exec->lexicalInterpreter()->builtinRegExpPrototype().imp());
-  RegExpImp *dat = new RegExpImp(proto);
-  Object obj(dat); // protect from GC
-
-  bool global = (flags.find("g") >= 0);
-  bool ignoreCase = (flags.find("i") >= 0);
-  bool multiline = (flags.find("m") >= 0);
-  // TODO: throw a syntax error on invalid flags
-
-  dat->putDirect("global", global ? BooleanImp::staticTrue : BooleanImp::staticFalse, DontDelete | ReadOnly | DontEnum);
-  dat->putDirect("ignoreCase", ignoreCase ? BooleanImp::staticTrue : BooleanImp::staticFalse, DontDelete | ReadOnly | DontEnum);
-  dat->putDirect("multiline", multiline ? BooleanImp::staticTrue : BooleanImp::staticFalse, DontDelete | ReadOnly | DontEnum);
-
-  dat->putDirect("source", new StringImp(p), DontDelete | ReadOnly | DontEnum);
-  dat->putDirect("lastIndex", NumberImp::zero(), DontDelete | DontEnum);
-
-  int reflags = RegExp::None;
-  if (global)
-      reflags |= RegExp::Global;
-  if (ignoreCase)
-      reflags |= RegExp::IgnoreCase;
-  if (multiline)
-      reflags |= RegExp::Multiline;
-  dat->setRegExp(new RegExp(p, reflags));
-
-  return obj;
+  UString pattern = arg0->isUndefined() ? UString("") : arg0->toString(exec);
+  UString flags = arg1->isUndefined() ? UString("") : arg1->toString(exec);
+  
+  return createRegExpImp(exec, new RegExp(pattern, flags));
 }
 
-bool RegExpObjectImp::implementsCall() const
+JSObject* RegExpObjectImp::createRegExpImp(ExecState* exec, PassRefPtr<RegExp> regExp)
 {
-  return true;
+    return regExp->isValid()
+        ? new RegExpImp(static_cast<RegExpPrototype*>(exec->lexicalGlobalObject()->regExpPrototype()), regExp)
+        : throwError(exec, SyntaxError, UString("Invalid regular expression: ").append(regExp->errorMessage()));
 }
 
 // ECMA 15.10.3
-Value RegExpObjectImp::call(ExecState *exec, Object &/*thisObj*/,
-			    const List &args)
+JSValue *RegExpObjectImp::callAsFunction(ExecState *exec, JSObject * /*thisObj*/, const List &args)
 {
-  // TODO: handle RegExp argument case (15.10.3.1)
-
   return construct(exec, args);
+}
+
+const UString& RegExpObjectImp::input() const
+{
+    // Can detect a distinct initial state that is invisible to JavaScript, by checking for null
+    // state (since jsString turns null strings to empty strings).
+    return d->lastInput;
+}
+
 }
