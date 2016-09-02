@@ -27,6 +27,7 @@
 
 #include <JavaScriptCore/runtime.h>
 #include <JavaScriptCore/object.h>
+#include <JavaScriptCore/protect.h>
 
 namespace KJS {
 
@@ -59,9 +60,12 @@ public:
     void setInternalInstance (Bindings::Instance *i) { instance = i; }
     Bindings::Instance *getInternalInstance() const { return instance; }
 
-private:
+    virtual bool implementsCall() const;
+    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
     
     static const ClassInfo info;
+
+private:
     Bindings::Instance *instance;
     bool ownsInstance;
 };

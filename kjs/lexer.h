@@ -100,7 +100,6 @@ namespace KJS {
 
     bool isWhiteSpace() const;
     bool isLineTerminator();
-    bool isHexDigit(unsigned short c) const;
     bool isOctalDigit(unsigned short c) const;
 
     int matchPunctuator(unsigned short c1, unsigned short c2,
@@ -115,6 +114,7 @@ namespace KJS {
                                 unsigned short c3, unsigned short c4);
     static bool isIdentLetter(unsigned short c);
     static bool isDecimalDigit(unsigned short c);
+    static bool isHexDigit(unsigned short c);
 
 #ifdef KJS_DEBUG_MEM
     /**
@@ -123,6 +123,7 @@ namespace KJS {
     static void globalClear();
 #endif
 
+    bool sawError() const { return error; }
     void doneParsing();
 
   private:
@@ -139,6 +140,7 @@ namespace KJS {
 #ifndef KJS_PURE_ECMA
     int bol;     // begin of line
 #endif
+    bool error;
 
     // current and following unicode characters
     unsigned short current, next1, next2, next3;

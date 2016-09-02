@@ -39,6 +39,26 @@
 #include "error_object.h"
 #include "nodes.h"
 
+#ifndef NDEBUG
+#define JAVASCRIPT_CALL_TRACING Yes
+#endif
+
+#ifdef JAVASCRIPT_CALL_TRACING
+static bool _traceJavaScript = false;
+
+extern "C" {
+    void setTraceJavaScript(bool f)
+    {
+        _traceJavaScript = f;
+    }
+
+    static bool traceJavaScript()
+    {
+        return _traceJavaScript;
+    }
+}
+#endif
+
 namespace KJS {
 
 // ------------------------------ Object ---------------------------------------
@@ -56,6 +76,23 @@ Value Object::call(ExecState *exec, Object &thisObj, const List &args)
 { 
 #if KJS_MAX_STACK > 0
   static int depth = 0; // sum of all concurrent interpreters
+
+#ifdef JAVASCRIPT_CALL_TRACING
+    static bool tracing = false;
+    if (traceJavaScript() && !tracing) {
+        tracing = true;
+        for (int i = 0; i < depth; i++)
+            putchar (' ');
+        printf ("*** calling:  %s\n", toString(exec).ascii());
+        for (int j = 0; j < args.size(); j++) {
+            for (int i = 0; i < depth; i++)
+                putchar (' ');
+            printf ("*** arg[%d] = %s\n", j, args[j].toString(exec).ascii());
+        }
+        tracing = false;
+    }
+#endif
+
   if (++depth > KJS_MAX_STACK) {
     --depth;
     Object err = Error::create(exec, RangeError,
@@ -69,6 +106,16 @@ Value Object::call(ExecState *exec, Object &thisObj, const List &args)
 
 #if KJS_MAX_STACK > 0
   --depth;
+#endif
+
+#ifdef JAVASCRIPT_CALL_TRACING
+    if (traceJavaScript() && !tracing) {
+        tracing = true;
+        for (int i = 0; i < depth; i++)
+            putchar (' ');
+        printf ("*** returning:  %s\n", ret.toString(exec).ascii());
+        tracing = false;
+    }
 #endif
 
   return ret;
@@ -366,6 +413,11 @@ Object ObjectImp::construct(ExecState */*exec*/, const List &/*args*/)
 {
   assert(false);
   return Object(0);
+}
+
+Object ObjectImp::construct(ExecState *exec, const List &args, const UString &/*sourceURL*/, int /*lineNumber*/)
+{
+  return construct(exec, args);
 }
 
 bool ObjectImp::implementsCall() const

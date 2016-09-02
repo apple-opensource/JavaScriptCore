@@ -25,6 +25,8 @@
 #include <Foundation/Foundation.h>
 
 #include <objc_class.h>
+#include <objc_instance.h>
+#include <objc_runtime.h>
 #include <objc_utility.h>
 #include <WebScriptObject.h>
 
@@ -83,7 +85,7 @@ const char *ObjcClass::name() const
     return _isa->name;
 }
 
-MethodList ObjcClass::methodsNamed(const char *_name) const
+MethodList ObjcClass::methodsNamed(const char *_name, Instance *instance) const
 {
     MethodList methodList;
     char name[4096];
@@ -113,8 +115,10 @@ MethodList ObjcClass::methodsNamed(const char *_name) const
                 NSString *mappedName = 0;
             
                 // See if the class wants to exclude the selector from visibility in JavaScript.
-                if ([(id)thisClass isSelectorExcludedFromWebScript:objcMethod->method_name]) {
-                    continue;
+                if ([(id)thisClass respondsToSelector:@selector(isSelectorExcludedFromWebScript:)]){
+                    if ([(id)thisClass isSelectorExcludedFromWebScript:objcMethod->method_name]) {
+                        continue;
+                    }
                 }
                 
                 // See if the class want to provide a different name for the selector in JavaScript.
@@ -135,14 +139,14 @@ MethodList ObjcClass::methodsNamed(const char *_name) const
         } 
         thisClass = thisClass->super_class;
     }
-
-    CFRelease (methodName);
     
+    CFRelease (methodName);
+
     return methodList;
 }
 
 
-Field *ObjcClass::fieldNamed(const char *name) const
+Field *ObjcClass::fieldNamed(const char *name, Instance *instance) const
 {
     ClassStructPtr thisClass = _isa;
 
@@ -153,38 +157,82 @@ Field *ObjcClass::fieldNamed(const char *name) const
         return aField;
     }
 
-    while (thisClass != 0) {
-        struct objc_ivar_list *fieldsInClass = thisClass->ivars;
-        if (fieldsInClass) {
-            int i, numFieldsInClass = fieldsInClass->ivar_count;
-            for (i = 0; i < numFieldsInClass; i++) {
-                Ivar objcIVar = &fieldsInClass->ivar_list[i];
-                NSString *mappedName = 0;
-
-                // See if the class wants to exclude the selector from visibility in JavaScript.
-                if ([(id)thisClass isKeyExcludedFromWebScript:objcIVar->ivar_name]) {
+    id targetObject = (static_cast<ObjcInstance*>(instance))->getObject();
+    id attributes = [targetObject attributeKeys];
+    if (attributes != nil) {
+        // Class overrides attributeKeys, use that array of key names.
+        unsigned i, count = [attributes count];
+        for (i = 0; i < count; i++) {
+            NSString *keyName = [attributes objectAtIndex: i];
+            const char *UTF8KeyName = [keyName UTF8String]; // ObjC actually only supports ASCII names.
+            
+            // See if the class wants to exclude the selector from visibility in JavaScript.
+            if ([(id)thisClass respondsToSelector:@selector(isKeyExcludedFromWebScript:)]) {
+                if ([(id)thisClass isKeyExcludedFromWebScript:UTF8KeyName]) {
                     continue;
                 }
-                
-                // See if the class want to provide a different name for the selector in JavaScript.
-                // Note that we do not do any checks to guarantee uniqueness. That's the responsiblity
-                // of the class.
-                if ([(id)thisClass respondsToSelector:@selector(webScriptNameForKey:)]){
-                    mappedName = [(id)thisClass webScriptNameForKey:objcIVar->ivar_name];
-                }
+            }
+            
+            // See if the class want to provide a different name for the selector in JavaScript.
+            // Note that we do not do any checks to guarantee uniqueness. That's the responsiblity
+            // of the class.
+            NSString *mappedName = 0;
+            if ([(id)thisClass respondsToSelector:@selector(webScriptNameForKey:)]){
+                mappedName = [(id)thisClass webScriptNameForKey:UTF8KeyName];
+            }
 
-                if ((mappedName && [mappedName isEqual:(NSString *)fieldName]) ||
-                    strcmp(objcIVar->ivar_name,name) == 0) {
-                    aField = new ObjcField (objcIVar);
-                    CFDictionaryAddValue ((CFMutableDictionaryRef)_fields, fieldName, aField);
-                    break;
-                }
+            if ((mappedName && [mappedName isEqual:(NSString *)fieldName]) ||
+                [keyName isEqual:(NSString *)fieldName]) {
+                aField = new ObjcField ((CFStringRef)keyName);
+                CFDictionaryAddValue ((CFMutableDictionaryRef)_fields, fieldName, aField);
+                break;
             }
         }
-        thisClass = thisClass->super_class;
+    }
+    else {
+        // Class doesn't override attributeKeys, so fall back on class runtime
+        // introspection.
+    
+        while (thisClass != 0) {
+            struct objc_ivar_list *fieldsInClass = thisClass->ivars;
+            if (fieldsInClass) {
+                int i, numFieldsInClass = fieldsInClass->ivar_count;
+                for (i = 0; i < numFieldsInClass; i++) {
+                    Ivar objcIVar = &fieldsInClass->ivar_list[i];
+                    NSString *mappedName = 0;
+
+                    // See if the class wants to exclude the selector from visibility in JavaScript.
+                    if ([(id)thisClass respondsToSelector:@selector(isKeyExcludedFromWebScript:)]) {
+                        if ([(id)thisClass isKeyExcludedFromWebScript:objcIVar->ivar_name]) {
+                            continue;
+                        }
+                    }
+                    
+                    // See if the class want to provide a different name for the selector in JavaScript.
+                    // Note that we do not do any checks to guarantee uniqueness. That's the responsiblity
+                    // of the class.
+                    if ([(id)thisClass respondsToSelector:@selector(webScriptNameForKey:)]){
+                        mappedName = [(id)thisClass webScriptNameForKey:objcIVar->ivar_name];
+                    }
+
+                    if ((mappedName && [mappedName isEqual:(NSString *)fieldName]) ||
+                        strcmp(objcIVar->ivar_name,name) == 0) {
+                        aField = new ObjcField (objcIVar);
+                        CFDictionaryAddValue ((CFMutableDictionaryRef)_fields, fieldName, aField);
+                        break;
+                    }
+                }
+            }
+            thisClass = thisClass->super_class;
+        }
+
+        CFRelease (fieldName);
     }
 
-    CFRelease (fieldName);
-
     return aField;
-};
+}
+
+KJS::Value ObjcClass::fallbackObject (ExecState *exec, Instance *instance, const Identifier &propertyName)
+{
+    return Object (new ObjcFallbackObjectImp(static_cast<ObjcInstance*>(instance), propertyName));
+}

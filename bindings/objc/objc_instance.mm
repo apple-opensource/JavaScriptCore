@@ -36,6 +36,8 @@
 }
 #endif
 
+#include <JavaScriptCore/objc_runtime.h>
+
 using namespace KJS::Bindings;
 using namespace KJS;
 
@@ -138,52 +140,75 @@ NS_DURING
     [invocation setTarget:_instance];
     unsigned i, count = args.size();
     
-    if (count != [signature numberOfArguments] - 2){
-        return Undefined();
+    if (method->isFallbackMethod()) {
+        // invokeUndefinedMethodFromWebScript:withArguments: implementation must return an
+        // object.
+        if (strcmp ([signature methodReturnType], "@") != 0) {
+            OBJC_LOG ("incorrect signature for invokeUndefinedMethodFromWebScript:withArguments:, expected object return type");
+            delete method;
+            return Undefined();
+        }
+        
+        // Invoke invokeUndefinedMethodFromWebScript:withArguments:, pass JavaScript function
+        // name as first (actually at 2) argument and array of args as second.
+        NSString *jsName = (NSString *)method->javaScriptName();
+        [invocation setArgument:&jsName atIndex:2];
+        
+        NSMutableArray *objcArgs = [NSMutableArray array];
+        for (i = 0; i < count; i++) {
+            ObjcValue value = convertValueToObjcValue (exec, args.at(i), ObjcObjectType);
+            [objcArgs addObject:value.objectValue];
+        }
+        [invocation setArgument:&objcArgs atIndex:3];
     }
-    
-    for (i = 2; i < count+2; i++) {
-        const char *type = [signature getArgumentTypeAtIndex:i];
-        ObjcValueType objcValueType = objcValueTypeForType (type);
+    else {
+        if (count != [signature numberOfArguments] - 2){
+            return Undefined();
+        }
+        
+        for (i = 2; i < count+2; i++) {
+            const char *type = [signature getArgumentTypeAtIndex:i];
+            ObjcValueType objcValueType = objcValueTypeForType (type);
 
-        // Must have a valid argument type.  This method signature should have
-        // been filtered already to ensure that it has acceptable argument
-        // types.
-        assert (objcValueType != ObjcInvalidType && objcValueType != ObjcVoidType);
-        
-        ObjcValue value = convertValueToObjcValue (exec, args.at(i-2), objcValueType);
-        
-        switch (objcValueType) {
-            case ObjcObjectType:
-                [invocation setArgument:&value.objectValue atIndex:i];
-                break;
-            case ObjcCharType:
-                [invocation setArgument:&value.charValue atIndex:i];
-                break;
-            case ObjcShortType:
-                [invocation setArgument:&value.shortValue atIndex:i];
-                break;
-            case ObjcIntType:
-                [invocation setArgument:&value.intValue atIndex:i];
-                break;
-            case ObjcLongType:
-                [invocation setArgument:&value.longValue atIndex:i];
-                break;
-            case ObjcFloatType:
-                [invocation setArgument:&value.floatValue atIndex:i];
-                break;
-            case ObjcDoubleType:
-                [invocation setArgument:&value.doubleValue atIndex:i];
-                break;
-            default:
-                // Should never get here.  Argument types are filtered (and
-                // the assert above should have fired in the impossible case
-                // of an invalid type anyway).
-                fprintf (stderr, "%s:  invalid type (%d)\n", __PRETTY_FUNCTION__, (int)objcValueType);
-                assert (true);
+            // Must have a valid argument type.  This method signature should have
+            // been filtered already to ensure that it has acceptable argument
+            // types.
+            assert (objcValueType != ObjcInvalidType && objcValueType != ObjcVoidType);
+            
+            ObjcValue value = convertValueToObjcValue (exec, args.at(i-2), objcValueType);
+            
+            switch (objcValueType) {
+                case ObjcObjectType:
+                    [invocation setArgument:&value.objectValue atIndex:i];
+                    break;
+                case ObjcCharType:
+                    [invocation setArgument:&value.charValue atIndex:i];
+                    break;
+                case ObjcShortType:
+                    [invocation setArgument:&value.shortValue atIndex:i];
+                    break;
+                case ObjcIntType:
+                    [invocation setArgument:&value.intValue atIndex:i];
+                    break;
+                case ObjcLongType:
+                    [invocation setArgument:&value.longValue atIndex:i];
+                    break;
+                case ObjcFloatType:
+                    [invocation setArgument:&value.floatValue atIndex:i];
+                    break;
+                case ObjcDoubleType:
+                    [invocation setArgument:&value.doubleValue atIndex:i];
+                    break;
+                default:
+                    // Should never get here.  Argument types are filtered (and
+                    // the assert above should have fired in the impossible case
+                    // of an invalid type anyway).
+                    fprintf (stderr, "%s:  invalid type (%d)\n", __PRETTY_FUNCTION__, (int)objcValueType);
+                    assert (true);
+            }
         }
     }
-
+    
     // Invoke the ObjectiveC method.
     [invocation invoke];
 
@@ -209,7 +234,7 @@ NS_DURING
         [invocation getReturnValue:buffer];
         resultValue = convertObjcValueToValue (exec, buffer, objcValueType);
     }
-    
+
 NS_HANDLER
     
     resultValue = Undefined();
@@ -219,6 +244,128 @@ NS_ENDHANDLER
     return resultValue;
 }
 
+Value ObjcInstance::invokeDefaultMethod (KJS::ExecState *exec, const List &args)
+{
+    Value resultValue;
+    
+NS_DURING
+
+    if (![_instance respondsToSelector:@selector(invokeDefaultMethodWithArguments:)])
+        return Undefined();
+    
+    NSMethodSignature *signature = [_instance methodSignatureForSelector:@selector(invokeDefaultMethodWithArguments:)];
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
+    [invocation setSelector:@selector(invokeDefaultMethodWithArguments:)];
+    [invocation setTarget:_instance];
+    unsigned i, count = args.size();
+    
+    // invokeDefaultMethodWithArguments: implementation must return an
+    // object.
+    if (strcmp ([signature methodReturnType], "@") != 0) {
+        OBJC_LOG ("incorrect signature for invokeDefaultMethodWithArguments:, expected object return type");
+        return Undefined();
+    }
+    
+    NSMutableArray *objcArgs = [NSMutableArray array];
+    for (i = 0; i < count; i++) {
+        ObjcValue value = convertValueToObjcValue (exec, args.at(i), ObjcObjectType);
+        [objcArgs addObject:value.objectValue];
+    }
+    [invocation setArgument:&objcArgs atIndex:2];
+    
+    // Invoke the ObjectiveC method.
+    [invocation invoke];
+
+    // Get the return value type, should always be "@" because of
+    // check above.
+    const char *type = [signature methodReturnType];
+    ObjcValueType objcValueType = objcValueTypeForType (type);
+    
+    // Get the return value and convert it to a KJS::Value.  Length
+    // of return value will never exceed the size of a pointer, so we're
+    // OK we 32 here.
+    char buffer[32];
+    [invocation getReturnValue:buffer];
+    resultValue = convertObjcValueToValue (exec, buffer, objcValueType);
+
+NS_HANDLER
+    
+    resultValue = Undefined();
+    
+NS_ENDHANDLER
+
+    return resultValue;
+}
+
+void ObjcInstance::setValueOfField (KJS::ExecState *exec, const Field *aField, const KJS::Value &aValue) const
+{
+    aField->setValueToInstance (exec, this, aValue);
+}
+
+bool ObjcInstance::supportsSetValueOfUndefinedField ()
+{
+    id targetObject = getObject();
+    
+    if ([targetObject respondsToSelector:@selector(setValue:forUndefinedKey:)])
+	return true;
+	
+    return false;
+}
+
+void ObjcInstance::setValueOfUndefinedField (KJS::ExecState *exec, const KJS::Identifier &property, const KJS::Value &aValue)
+{
+    id targetObject = getObject();
+    
+    // This check is not really necessary because NSObject implements
+    // setValue:forUndefinedKey:, and unfortnately the default implementation
+    // throws an exception.
+    if ([targetObject respondsToSelector:@selector(setValue:forUndefinedKey:)]){
+        
+        NS_DURING
+        
+            ObjcValue objcValue = convertValueToObjcValue (exec, aValue, ObjcObjectType);
+            [targetObject setValue:objcValue.objectValue forUndefinedKey:[NSString stringWithCString:property.ascii()]];
+        
+        NS_HANDLER
+            
+            // Do nothing.  Class did not override valueForUndefinedKey:.
+            
+        NS_ENDHANDLER
+        
+    }
+}
+
+Value ObjcInstance::getValueOfField (KJS::ExecState *exec, const Field *aField) const {  
+    return aField->valueFromInstance (exec, this);
+}
+
+KJS::Value ObjcInstance::getValueOfUndefinedField (KJS::ExecState *exec, const KJS::Identifier &property, KJS::Type hint) const
+{
+    Value result = Undefined();
+    
+    id targetObject = getObject();
+    
+    // This check is not really necessary because NSObject implements
+    // valueForUndefinedKey:, and unfortnately the default implementation
+    // throws an exception.
+    if ([targetObject respondsToSelector:@selector(valueForUndefinedKey:)]){
+        id objcValue;
+        
+        NS_DURING
+        
+            objcValue = [targetObject valueForUndefinedKey:[NSString stringWithCString:property.ascii()]];
+            result = convertObjcValueToValue (exec, &objcValue, ObjcObjectType);
+        
+        NS_HANDLER
+            
+            // Do nothing.  Class did not override valueForUndefinedKey:.
+            
+        NS_ENDHANDLER
+        
+    }
+    
+    return result;
+}
 
 KJS::Value ObjcInstance::defaultValue (KJS::Type hint) const
 {
@@ -248,9 +395,7 @@ KJS::Value ObjcInstance::defaultValue (KJS::Type hint) const
 
 KJS::Value ObjcInstance::stringValue() const
 {
-    // FIXME:  Implement something sensible, like calling toString...
-    KJS::String v("");
-    return v;
+    return convertNSStringToString ([getObject() description]);
 }
 
 KJS::Value ObjcInstance::numberValue() const

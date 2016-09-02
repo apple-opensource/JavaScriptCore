@@ -2,7 +2,7 @@
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2004 Apple Computer, Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -42,10 +42,14 @@
 #include "dtoa.h"
 
 #if APPLE_CHANGES
+
+#include <unicode/uchar.h>
+
 // malloc_good_size is not prototyped anywhere!
 extern "C" {
   size_t malloc_good_size(size_t size);
 }
+
 #endif
 
 namespace KJS {
@@ -138,27 +142,38 @@ bool KJS::operator==(const KJS::CString& c1, const KJS::CString& c2)
   return len == c2.size() && (len == 0 || memcmp(c1.c_str(), c2.c_str(), len) == 0);
 }
 
+// Hack here to avoid a global with a constructor; point to an unsigned short instead of a UChar.
+static unsigned short almostUChar;
+static UChar *const nonNullUCharPointer = reinterpret_cast<UChar *>(&almostUChar);
 UString::Rep UString::Rep::null = { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
-UString::Rep UString::Rep::empty = { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+UString::Rep UString::Rep::empty = { 0, 0, 1, 0, 0, 0, nonNullUCharPointer, 0, 0, 0, 0 };
 const int normalStatBufferSize = 4096;
 static char *statBuffer = 0;
 static int statBufferSize = 0;
 
 UChar UChar::toLower() const
 {
+#if APPLE_CHANGES
+  return static_cast<unsigned short>(u_tolower(uc));
+#else
   // ### properly support unicode tolower
   if (uc >= 256 || islower(uc))
     return *this;
 
   return (unsigned char)tolower(uc);
+#endif
 }
 
 UChar UChar::toUpper() const
 {
+#if APPLE_CHANGES
+  return static_cast<unsigned short>(u_toupper(uc));
+#else
   if (uc >= 256 || isupper(uc))
     return *this;
 
   return (unsigned char)toupper(uc);
+#endif
 }
 
 UCharReference& UCharReference::operator=(UChar c)
@@ -593,6 +608,41 @@ UString UString::from(double d)
   return UString(buf);
 }
 
+UString UString::spliceSubstringsWithSeparators(const Range *substringRanges, int rangeCount, const UString *separators, int separatorCount) const
+{
+  int totalLength = 0;
+
+  for (int i = 0; i < rangeCount; i++) {
+    totalLength += substringRanges[i].length;
+  }
+  for (int i = 0; i < separatorCount; i++) {
+    totalLength += separators[i].size();
+  }
+
+  UChar *buffer = static_cast<UChar *>(malloc(totalLength * sizeof(UChar)));
+
+  int maxCount = MAX(rangeCount, separatorCount);
+  int bufferPos = 0;
+  for (int i = 0; i < maxCount; i++) {
+    if (i < rangeCount) {
+      memcpy(buffer + bufferPos, data() + substringRanges[i].position, substringRanges[i].length * sizeof(UChar));
+      bufferPos += substringRanges[i].length;
+    }
+    if (i < separatorCount) {
+      memcpy(buffer + bufferPos, separators[i].data(), separators[i].size() * sizeof(UChar));
+      bufferPos += separators[i].size();
+    }
+  }
+
+  UString::Rep *rep = UString::Rep::create(buffer, totalLength);
+  UString result = UString(rep);
+  rep->deref();
+
+  return result;
+}
+
+
+
 UString &UString::append(const UString &t)
 {
   int thisSize = size();
@@ -614,7 +664,7 @@ UString &UString::append(const UString &t)
     rep->_hash = 0;
   } else if (thisOffset + thisSize == usedCapacity()) {
     // this reaches the end of the buffer - extend it
-    expandCapacity(length);
+    expandCapacity(thisOffset + length);
     memcpy(const_cast<UChar *>(data() + thisSize), t.data(), tSize * sizeof(UChar));
     Rep *newRep = Rep::create(rep, 0, length);
     release();
@@ -1056,14 +1106,19 @@ int UString::rfind(UChar ch, int pos) const
 
 UString UString::substr(int pos, int len) const
 {
+  int s = size();
+
   if (pos < 0)
     pos = 0;
-  else if (pos >= (int) size())
-    pos = size();
+  else if (pos >= s)
+    pos = s;
   if (len < 0)
-    len = size();
-  if (pos + len >= (int) size())
-    len = size() - pos;
+    len = s;
+  if (pos + len >= s)
+    len = s - pos;
+
+  if (pos == 0 && len == s)
+    return *this;
 
   UString::Rep *newRep = Rep::create(rep, pos, len);
   UString result(newRep);
@@ -1303,168 +1358,6 @@ CString UString::UTF8String() const
     delete [] buffer;
   }
   return result;
-}
-
-struct StringOffset {
-    int offset;
-    int locationInOffsetsArray;
-};
-
-static int compareStringOffsets(const void *a, const void *b)
-{
-    const StringOffset *oa = static_cast<const StringOffset *>(a);
-    const StringOffset *ob = static_cast<const StringOffset *>(b);
-    
-    if (oa->offset < ob->offset) {
-        return -1;
-    }
-    if (oa->offset > ob->offset) {
-        return +1;
-    }
-    return 0;
-}
-
-const int sortedOffsetsFixedBufferSize = 128;
-
-static StringOffset *createSortedOffsetsArray(const int offsets[], int numOffsets,
-    StringOffset sortedOffsetsFixedBuffer[sortedOffsetsFixedBufferSize])
-{
-    // Allocate the sorted offsets.
-    StringOffset *sortedOffsets;
-    if (numOffsets <= sortedOffsetsFixedBufferSize) {
-        sortedOffsets = sortedOffsetsFixedBuffer;
-    } else {
-        sortedOffsets = new StringOffset [numOffsets];
-    }
-
-    // Copy offsets and sort them.
-    // (Since qsort showed up on profiles, hand code for numbers up to 3.)
-
-    switch (numOffsets) {
-        case 0:
-            break;
-        case 1:
-            sortedOffsets[0].offset = offsets[0];
-            sortedOffsets[0].locationInOffsetsArray = 0;
-            break;
-        case 2: {
-            if (offsets[0] <= offsets[1]) {
-                sortedOffsets[0].offset = offsets[0];
-                sortedOffsets[0].locationInOffsetsArray = 0;
-                sortedOffsets[1].offset = offsets[1];
-                sortedOffsets[1].locationInOffsetsArray = 1;
-            } else {
-                sortedOffsets[0].offset = offsets[1];
-                sortedOffsets[0].locationInOffsetsArray = 1;
-                sortedOffsets[1].offset = offsets[0];
-                sortedOffsets[1].locationInOffsetsArray = 0;
-            }
-            break;
-        }
-        case 3: {
-            int i0, i1, i2;
-            if (offsets[0] <= offsets[1]) {
-                if (offsets[0] <= offsets[2]) {
-                    i0 = 0;
-                    if (offsets[1] <= offsets[2]) {
-                        i1 = 1; i2 = 2;
-                    } else {
-                        i1 = 2; i2 = 1;
-                    }
-                } else {
-                    i0 = 2; i1 = 0; i2 = 1;
-                }
-            } else {
-                if (offsets[1] <= offsets[2]) {
-                    i0 = 1;
-                    if (offsets[0] <= offsets[2]) {
-                        i1 = 0; i2 = 2;
-                    } else {
-                        i1 = 2; i2 = 0;
-                    }
-                } else {
-                    i0 = 2; i1 = 1; i2 = 0;
-                }
-            }
-            sortedOffsets[0].offset = offsets[i0];
-            sortedOffsets[0].locationInOffsetsArray = i0;
-            sortedOffsets[1].offset = offsets[i1];
-            sortedOffsets[1].locationInOffsetsArray = i1;
-            sortedOffsets[2].offset = offsets[i2];
-            sortedOffsets[2].locationInOffsetsArray = i2;
-            break;
-        }
-        default:
-            for (int i = 0; i != numOffsets; ++i) {
-                sortedOffsets[i].offset = offsets[i];
-                sortedOffsets[i].locationInOffsetsArray = i;
-            }
-            qsort(sortedOffsets, numOffsets, sizeof(StringOffset), compareStringOffsets);
-    }
-
-    return sortedOffsets;
-}
-
-// Note: This function assumes valid UTF-8.
-// It can even go into an infinite loop if the passed in string is not valid UTF-8.
-void convertUTF16OffsetsToUTF8Offsets(const char *s, int *offsets, int numOffsets)
-{
-    // Allocate buffer.
-    StringOffset fixedBuffer[sortedOffsetsFixedBufferSize];
-    StringOffset *sortedOffsets = createSortedOffsetsArray(offsets, numOffsets, fixedBuffer);
-
-    // Walk through sorted offsets and string, adjusting all the offests.
-    // Offsets that are off the ends of the string map to the edges of the string.
-    int UTF16Offset = 0;
-    const char *p = s;
-    for (int oi = 0; oi != numOffsets; ++oi) {
-        const int nextOffset = sortedOffsets[oi].offset;
-        while (*p && UTF16Offset < nextOffset) {
-            // Skip to the next character.
-            const int sequenceLength = inlineUTF8SequenceLength(*p);
-            assert(sequenceLength >= 1 && sequenceLength <= 4);
-            p += sequenceLength;
-            // Characters that take a 4 byte sequence in UTF-8 take two bytes in UTF-16.
-            UTF16Offset += sequenceLength < 4 ? 1 : 2;
-        }
-        offsets[sortedOffsets[oi].locationInOffsetsArray] = p - s;
-    }
-
-    // Free buffer.
-    if (sortedOffsets != fixedBuffer) {
-        delete [] sortedOffsets;
-    }
-}
-
-// Note: This function assumes valid UTF-8.
-// It can even go into an infinite loop if the passed in string is not valid UTF-8.
-void convertUTF8OffsetsToUTF16Offsets(const char *s, int *offsets, int numOffsets)
-{
-    // Allocate buffer.
-    StringOffset fixedBuffer[sortedOffsetsFixedBufferSize];
-    StringOffset *sortedOffsets = createSortedOffsetsArray(offsets, numOffsets, fixedBuffer);
-
-    // Walk through sorted offsets and string, adjusting all the offests.
-    // Offsets that are off the end of the string map to the edges of the string.
-    int UTF16Offset = 0;
-    const char *p = s;
-    for (int oi = 0; oi != numOffsets; ++oi) {
-        const int nextOffset = sortedOffsets[oi].offset;
-        while (*p && (p - s) < nextOffset) {
-            // Skip to the next character.
-            const int sequenceLength = inlineUTF8SequenceLength(*p);
-            assert(sequenceLength >= 1 && sequenceLength <= 4);
-            p += sequenceLength;
-            // Characters that take a 4 byte sequence in UTF-8 take two bytes in UTF-16.
-            UTF16Offset += sequenceLength < 4 ? 1 : 2;
-        }
-        offsets[sortedOffsets[oi].locationInOffsetsArray] = UTF16Offset;
-    }
-
-    // Free buffer.
-    if (sortedOffsets != fixedBuffer) {
-        delete [] sortedOffsets;
-    }
 }
 
 } // namespace KJS

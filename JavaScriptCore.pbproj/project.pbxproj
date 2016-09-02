@@ -6,8 +6,6 @@
 	objectVersion = 39;
 	objects = {
 		014CEA440018CDF011CA2923 = {
-			buildRules = (
-			);
 			buildSettings = {
 				DEBUG_CFLAGS = "";
 				GCC_DYNAMIC_NO_PIC = NO;
@@ -24,8 +22,6 @@
 			name = Development;
 		};
 		014CEA450018CDF011CA2923 = {
-			buildRules = (
-			);
 			buildSettings = {
 				COPY_PHASE_STRIP = YES;
 				GCC_ENABLE_FIX_AND_CONTINUE = NO;
@@ -50,6 +46,7 @@
 		034768DFFF38A50411DB9C8B = {
 			children = (
 				034768E0FF38A50411DB9C8B,
+				45E12D7706A49A6C00E9DF84,
 			);
 			isa = PBXGroup;
 			name = Products;
@@ -58,8 +55,7 @@
 		};
 		034768E0FF38A50411DB9C8B = {
 			explicitFileType = wrapper.framework;
-			fallbackIsa = PBXFileReference;
-			isa = PBXFrameworkReference;
+			isa = PBXFileReference;
 			path = JavaScriptCore.framework;
 			refType = 3;
 			sourceTree = BUILT_PRODUCTS_DIR;
@@ -89,6 +85,8 @@
 			projectDirPath = "";
 			targets = (
 				0867D69CFE84028FC02AAC07,
+				45E12D7606A49A6C00E9DF84,
+				45E12D7F06A49AD600E9DF84,
 			);
 		};
 		0867D691FE84028FC02AAC07 = {
@@ -106,11 +104,11 @@
 		};
 		0867D69AFE84028FC02AAC07 = {
 			children = (
+				9322A00306C341D3009067BB,
 				51F0EC0705C86C9A00E6DF1B,
 				51F0EB6105C86C6B00E6DF1B,
 				6560A4CF04B3B3E7008AE952,
 				6560A63D04B3B69F008AE952,
-				51856D980562F158008B9D83,
 			);
 			isa = PBXGroup;
 			name = Frameworks;
@@ -131,12 +129,14 @@
 				DYLIB_CURRENT_VERSION = 1;
 				FRAMEWORK_SEARCH_PATHS = "";
 				FRAMEWORK_VERSION = A;
+				GCC_ENABLE_OBJC_GC = YES;
+				GCC_FAST_OBJC_DISPATCH = YES;
 				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
 				HEADER_SEARCH_PATHS = "";
 				INSTALL_PATH = "${SYSTEM_LIBRARY_DIR}/Frameworks/WebKit.framework/Versions/A/Frameworks";
 				LIBRARY_SEARCH_PATHS = "";
 				LOCAL_SEG1_ADDR = 0x8000000;
-				MACOSX_DEPLOYMENT_TARGET = 10.2;
+				MACOSX_DEPLOYMENT_TARGET = 10.3;
 				OPTIMIZATION_CFLAGS = "-Os -falign-loops=16";
 				OTHER_CFLAGS = "$(DEBUG_CFLAGS) -DAPPLE_CHANGES -DHAVE_CONFIG_H";
 				OTHER_LDFLAGS = "$(STYLE_LDFLAGS) -sub_library libobjc";
@@ -166,7 +166,7 @@
 	<key>CFBundleExecutable</key>
 	<string>JavaScriptCore</string>
 	<key>CFBundleGetInfoString</key>
-	<string>2.0, Copyright 2004 Apple Computer, Inc.; Copyright 1999-2001 Harri Porten &lt;porten@kde.org&gt;; Copyright 2001 Peter Kelly &lt;pmk@post.com&gt;; Copyright 1997-2001 University of Cambridge; Copyright 1991, 2000, 2001 by Lucent Technologies.</string>
+	<string>312, Copyright 2005 Apple Computer, Inc.; Copyright 1999-2001 Harri Porten &lt;porten@kde.org&gt;; Copyright 2001 Peter Kelly &lt;pmk@post.com&gt;; Copyright 1997-2001 University of Cambridge; Copyright 1991, 2000, 2001 by Lucent Technologies.</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.JavaScriptCore</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -176,9 +176,9 @@
 	<key>CFBundlePackageType</key>
 	<string>FMWK</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>312</string>
 	<key>CFBundleVersion</key>
-	<string>146.1</string>
+	<string>312</string>
 </dict>
 </plist>
 ";
@@ -262,6 +262,9 @@
 				650B68DB0639033F009D42DE,
 				51863F70065420E800E9E8DD,
 				700DA118065984CE00747C0B,
+				51CA3B5006CC2166005600E3,
+				51DFF2CA06CC36F6006F1ECC,
+				84ABF1DF070B628C00A3AC05,
 			);
 			isa = PBXHeadersBuildPhase;
 			runOnlyForDeploymentPostprocessing = 0;
@@ -337,6 +340,8 @@
 				65AB004A06261CBA0076DE63,
 				650B68DA0639033F009D42DE,
 				51863FC506542D3100E9E8DD,
+				517EF37406D695930007C1BA,
+				8442A378074175C2000AE2ED,
 			);
 			isa = PBXSourcesBuildPhase;
 			runOnlyForDeploymentPostprocessing = 0;
@@ -346,9 +351,9 @@
 			files = (
 				6560A4D004B3B3E7008AE952,
 				6560A63E04B3B69F008AE952,
-				51856D990562F158008B9D83,
 				51F0EB6205C86C6B00E6DF1B,
 				51F0EC0805C86C9A00E6DF1B,
+				9322A00406C341D3009067BB,
 			);
 			isa = PBXFrameworksBuildPhase;
 			runOnlyForDeploymentPostprocessing = 0;
@@ -440,6 +445,141 @@
 //082
 //083
 //084
+//450
+//451
+//452
+//453
+//454
+		45E12D7206A49A6C00E9DF84 = {
+			buildActionMask = 2147483647;
+			files = (
+			);
+			isa = PBXHeadersBuildPhase;
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45E12D7306A49A6C00E9DF84 = {
+			buildActionMask = 2147483647;
+			files = (
+				45E12D8906A49B0F00E9DF84,
+			);
+			isa = PBXSourcesBuildPhase;
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45E12D7406A49A6C00E9DF84 = {
+			buildActionMask = 2147483647;
+			files = (
+				45E12DBA06A49B5400E9DF84,
+			);
+			isa = PBXFrameworksBuildPhase;
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45E12D7506A49A6C00E9DF84 = {
+			buildActionMask = 2147483647;
+			files = (
+			);
+			isa = PBXRezBuildPhase;
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		45E12D7606A49A6C00E9DF84 = {
+			buildPhases = (
+				45E12D7206A49A6C00E9DF84,
+				45E12D7306A49A6C00E9DF84,
+				45E12D7406A49A6C00E9DF84,
+				45E12D7506A49A6C00E9DF84,
+			);
+			buildSettings = {
+				OTHER_CFLAGS = "";
+				OTHER_LDFLAGS = "";
+				OTHER_REZFLAGS = "";
+				PRODUCT_NAME = testkjs;
+				REZ_EXECUTABLE = YES;
+				SECTORDER_FLAGS = "";
+				WARNING_CFLAGS = "-Wmost -Wno-four-char-constants -Wno-unknown-pragmas";
+			};
+			dependencies = (
+			);
+			isa = PBXToolTarget;
+			name = testkjs;
+			productInstallPath = /usr/local/bin;
+			productName = testkjs;
+			productReference = 45E12D7706A49A6C00E9DF84;
+		};
+		45E12D7706A49A6C00E9DF84 = {
+			explicitFileType = "compiled.mach-o.executable";
+			includeInIndex = 0;
+			isa = PBXFileReference;
+			path = testkjs;
+			refType = 3;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		45E12D7F06A49AD600E9DF84 = {
+			buildPhases = (
+			);
+			buildSettings = {
+				OTHER_CFLAGS = "";
+				OTHER_LDFLAGS = "";
+				OTHER_REZFLAGS = "";
+				PRODUCT_NAME = All;
+				SECTORDER_FLAGS = "";
+				WARNING_CFLAGS = "-Wmost -Wno-four-char-constants -Wno-unknown-pragmas";
+			};
+			dependencies = (
+				45E12D8306A49AEF00E9DF84,
+				45E12D8106A49AE900E9DF84,
+			);
+			isa = PBXAggregateTarget;
+			name = All;
+			productName = All;
+		};
+		45E12D8006A49AE900E9DF84 = {
+			containerPortal = 0867D690FE84028FC02AAC07;
+			isa = PBXContainerItemProxy;
+			proxyType = 1;
+			remoteGlobalIDString = 45E12D7606A49A6C00E9DF84;
+			remoteInfo = testkjs;
+		};
+		45E12D8106A49AE900E9DF84 = {
+			isa = PBXTargetDependency;
+			target = 45E12D7606A49A6C00E9DF84;
+			targetProxy = 45E12D8006A49AE900E9DF84;
+		};
+		45E12D8206A49AEF00E9DF84 = {
+			containerPortal = 0867D690FE84028FC02AAC07;
+			isa = PBXContainerItemProxy;
+			proxyType = 1;
+			remoteGlobalIDString = 0867D69CFE84028FC02AAC07;
+			remoteInfo = JavaScriptCore;
+		};
+		45E12D8306A49AEF00E9DF84 = {
+			isa = PBXTargetDependency;
+			target = 0867D69CFE84028FC02AAC07;
+			targetProxy = 45E12D8206A49AEF00E9DF84;
+		};
+		45E12D8806A49B0F00E9DF84 = {
+			fileEncoding = 30;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			path = testkjs.cpp;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		45E12D8906A49B0F00E9DF84 = {
+			fileRef = 45E12D8806A49B0F00E9DF84;
+			isa = PBXBuildFile;
+			settings = {
+			};
+		};
+		45E12DBA06A49B5400E9DF84 = {
+			fileRef = 034768E0FF38A50411DB9C8B;
+			isa = PBXBuildFile;
+			settings = {
+			};
+		};
+//450
+//451
+//452
+//453
+//454
 //510
 //511
 //512
@@ -587,6 +727,9 @@
 			fileRef = 517BE7F40610E39600221947;
 			isa = PBXBuildFile;
 			settings = {
+				ATTRIBUTES = (
+					Private,
+				);
 			};
 		};
 		517D52DC056BF2F5003851BD = {
@@ -649,6 +792,21 @@
 			settings = {
 				ATTRIBUTES = (
 				);
+			};
+		};
+		517EF37306D695930007C1BA = {
+			fileEncoding = 30;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.objcpp;
+			name = jni_objc.mm;
+			path = bindings/jni/jni_objc.mm;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		517EF37406D695930007C1BA = {
+			fileRef = 517EF37306D695930007C1BA;
+			isa = PBXBuildFile;
+			settings = {
 			};
 		};
 		5182A45605FFCF4B00CBD2F2 = {
@@ -806,9 +964,12 @@
 				700DA117065984CE00747C0B,
 				51863F6F065420E800E9E8DD,
 				51863FC406542D3100E9E8DD,
+				51CA3B4F06CC2166005600E3,
 				5199B265061BB1300070C006,
 				5199B1BD061B65BC0070C006,
 				5199B1BE061B65BC0070C006,
+				51DFF2C906CC36F6006F1ECC,
+				84ABF1DE070B628C00A3AC05,
 				5182A53A06012C3000CBD2F2,
 				5182A53B06012C3000CBD2F2,
 				5182A45605FFCF4B00CBD2F2,
@@ -825,6 +986,7 @@
 				517D5348056BFB5D003851BD,
 				513DF74005C0861F00F89391,
 				513DF74105C0861F00F89391,
+				517EF37306D695930007C1BA,
 				511B0877056468BB0080E486,
 				511B0876056468BB0080E486,
 				51856D8F0562EE95008B9D83,
@@ -850,25 +1012,12 @@
 				518CF93805C72271003CF905,
 				51F0EC9605C88DC700E6DF1B,
 				51F0EC9705C88DC700E6DF1B,
+				8442A376074175C2000AE2ED,
 			);
 			isa = PBXGroup;
 			name = bindings;
 			refType = 4;
 			sourceTree = "<group>";
-		};
-		51856D980562F158008B9D83 = {
-			isa = PBXFileReference;
-			lastKnownFileType = wrapper.framework;
-			name = JavaVM.framework;
-			path = /System/Library/Frameworks/JavaVM.framework;
-			refType = 0;
-			sourceTree = "<absolute>";
-		};
-		51856D990562F158008B9D83 = {
-			fileRef = 51856D980562F158008B9D83;
-			isa = PBXBuildFile;
-			settings = {
-			};
 		};
 		51863F6F065420E800E9E8DD = {
 			fileEncoding = 30;
@@ -976,6 +1125,9 @@
 			fileRef = 5199B1BE061B65BC0070C006;
 			isa = PBXBuildFile;
 			settings = {
+				ATTRIBUTES = (
+					Private,
+				);
 			};
 		};
 		5199B265061BB1300070C006 = {
@@ -1034,6 +1186,39 @@
 		};
 		51C4974205C0A5D4006FBFF5 = {
 			fileRef = 51C4974105C0A5D4006FBFF5;
+			isa = PBXBuildFile;
+			settings = {
+			};
+		};
+		51CA3B4F06CC2166005600E3 = {
+			fileEncoding = 30;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = npapi.h;
+			path = bindings/npapi.h;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		51CA3B5006CC2166005600E3 = {
+			fileRef = 51CA3B4F06CC2166005600E3;
+			isa = PBXBuildFile;
+			settings = {
+				ATTRIBUTES = (
+					Private,
+				);
+			};
+		};
+		51DFF2C906CC36F6006F1ECC = {
+			fileEncoding = 30;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = npruntime_priv.h;
+			path = bindings/npruntime_priv.h;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		51DFF2CA06CC36F6006F1ECC = {
+			fileRef = 51DFF2C906CC36F6006F1ECC;
 			isa = PBXBuildFile;
 			settings = {
 			};
@@ -1579,6 +1764,49 @@
 //702
 //703
 //704
+//840
+//841
+//842
+//843
+//844
+		8442A376074175C2000AE2ED = {
+			fileEncoding = 4;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.c;
+			name = softlinking.c;
+			path = bindings/softlinking.c;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		8442A378074175C2000AE2ED = {
+			fileRef = 8442A376074175C2000AE2ED;
+			isa = PBXBuildFile;
+			settings = {
+			};
+		};
+		84ABF1DE070B628C00A3AC05 = {
+			fileEncoding = 4;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = npruntime_impl.h;
+			path = bindings/npruntime_impl.h;
+			refType = 4;
+			sourceTree = "<group>";
+		};
+		84ABF1DF070B628C00A3AC05 = {
+			fileRef = 84ABF1DE070B628C00A3AC05;
+			isa = PBXBuildFile;
+			settings = {
+				ATTRIBUTES = (
+					Private,
+				);
+			};
+		};
+//840
+//841
+//842
+//843
+//844
 //930
 //931
 //932
@@ -1611,6 +1839,20 @@
 		};
 		931C6CF2038EE8DE008635CE = {
 			fileRef = 931C6CF0038EE8DE008635CE;
+			isa = PBXBuildFile;
+			settings = {
+			};
+		};
+		9322A00306C341D3009067BB = {
+			isa = PBXFileReference;
+			lastKnownFileType = "compiled.mach-o.dylib";
+			name = libicucore.dylib;
+			path = /usr/lib/libicucore.dylib;
+			refType = 0;
+			sourceTree = "<absolute>";
+		};
+		9322A00406C341D3009067BB = {
+			fileRef = 9322A00306C341D3009067BB;
 			isa = PBXBuildFile;
 			settings = {
 			};
@@ -1841,8 +2083,6 @@
 			};
 		};
 		F58C8A1D025BD408018635CA = {
-			buildRules = (
-			);
 			buildSettings = {
 				INSTALL_PATH = "@executable_path/../Frameworks";
 				SECTORDER_FLAGS = "";
@@ -1870,6 +2110,7 @@
 		};
 		F5C290E50284F960018635CA = {
 			children = (
+				45E12D8806A49B0F00E9DF84,
 				F692A8540255597D01FF60F7,
 				F692A8C802555BA201FF60F7,
 				F692A8C902555BA201FF60F7,
@@ -1994,9 +2235,8 @@
 			sourceTree = "<group>";
 		};
 		F692A8540255597D01FF60F7 = {
-			fallbackIsa = PBXFileReference;
 			fileEncoding = 30;
-			isa = PBXExecutableFileReference;
+			isa = PBXFileReference;
 			lastKnownFileType = text.script.perl;
 			path = create_hash_table;
 			refType = 4;

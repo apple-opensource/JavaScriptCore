@@ -49,7 +49,7 @@ using namespace KJS::Bindings;
 
 #define LOG_EXCEPTION(exec) \
     if (Interpreter::shouldPrintExceptions()) \
-        NSLog (@"%s:%d:  JavaScript exception:  %s\n", __FILE__, __LINE__, exec->exception().toObject(exec).get(exec, messagePropertyName).toString(exec).ascii());
+        NSLog (@"%s:%d:[%d]  JavaScript exception:  %s\n", __FILE__, __LINE__, getpid(), exec->exception().toObject(exec).get(exec, messagePropertyName).toString(exec).ascii());
 
 @implementation WebScriptObjectPrivate
 
@@ -59,21 +59,22 @@ using namespace KJS::Bindings;
 
 static void _didExecute(WebScriptObject *obj)
 {
-    ExecState *exec = obj->_private->root->interpreter()->globalExec();
+    ExecState *exec = [obj _executionContext]->interpreter()->globalExec();
     KJSDidExecuteFunctionPtr func = Instance::didExecuteFunction();
     if (func)
-        func (exec, static_cast<KJS::ObjectImp*>(obj->_private->root->rootObjectImp()));
+        func (exec, static_cast<KJS::ObjectImp*>([obj _executionContext]->rootObjectImp()));
 }
 
-- (void)_initializeWithObjectImp:(KJS::ObjectImp *)imp root:(const Bindings::RootObject *)root
+- (void)_initializeWithObjectImp:(KJS::ObjectImp *)imp originExecutionContext:(const Bindings::RootObject *)originExecutionContext executionContext:(const Bindings::RootObject *)executionContext
 {
     _private->imp = imp;
-    _private->root = root;    
+    _private->executionContext = executionContext;    
+    _private->originExecutionContext = originExecutionContext;    
 
-    addNativeReference (root, imp);
+    addNativeReference (executionContext, imp);
 }
 
-- _initWithObjectImp:(KJS::ObjectImp *)imp root:(const Bindings::RootObject *)root
+- _initWithObjectImp:(KJS::ObjectImp *)imp originExecutionContext:(const Bindings::RootObject *)originExecutionContext executionContext:(const Bindings::RootObject *)executionContext
 {
     assert (imp != 0);
     //assert (root != 0);
@@ -82,7 +83,7 @@ static void _didExecute(WebScriptObject *obj)
 
     _private = [[WebScriptObjectPrivate alloc] init];
 
-    [self _initializeWithObjectImp:imp root:root];
+    [self _initializeWithObjectImp:imp originExecutionContext:originExecutionContext executionContext:executionContext];
     
     return self;
 }
@@ -95,6 +96,38 @@ static void _didExecute(WebScriptObject *obj)
         [self _initializeScriptDOMNodeImp];
     }
     return _private->imp;
+}
+
+- (const KJS::Bindings::RootObject *)_executionContext
+{
+    return _private->executionContext;
+}
+
+- (void)_setExecutionContext:(const KJS::Bindings::RootObject *)context
+{
+    _private->executionContext = context;
+}
+
+
+- (const KJS::Bindings::RootObject *)_originExecutionContext
+{
+    return _private->originExecutionContext;
+}
+
+- (void)_setOriginExecutionContext:(const KJS::Bindings::RootObject *)originExecutionContext
+{
+    _private->originExecutionContext = originExecutionContext;
+}
+
+- (BOOL)_isSafeScript
+{
+    if ([self _originExecutionContext]) {
+	Interpreter *originInterpreter = [self _originExecutionContext]->interpreter();
+	if (originInterpreter) {
+	    return originInterpreter->isSafeScript ([self _executionContext]->interpreter());
+	}
+    }
+    return true;
 }
 
 - (void)dealloc
@@ -114,7 +147,24 @@ static void _didExecute(WebScriptObject *obj)
 
 + (BOOL)throwException:(NSString *)exceptionMessage
 {
-    NSLog (@"%s:%d:  not yet implemented", __PRETTY_FUNCTION__, __LINE__);
+    InterpreterImp *first, *interp = InterpreterImp::firstInterpreter();
+
+    // This code assumes that we only ever have one running interpreter.  A
+    // good assumption for now, as we depend on that elsewhere.  However,
+    // in the future we may have the ability to run multiple interpreters,
+    // in which case this will have to change.
+    first = interp;
+    do {
+        ExecState *exec = interp->globalExec();
+        // If the interpreter has a context, we set the exception.
+        if (interp->context()) {
+            Object err = Error::create(exec, GeneralError, [exceptionMessage UTF8String]);
+            exec->setException (err);
+            return YES;
+        }
+        interp = interp->nextInterpreter();
+    } while (interp != first);
+    
     return NO;
 }
 
@@ -132,8 +182,15 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
 
 - (id)callWebScriptMethod:(NSString *)name withArguments:(NSArray *)args
 {
+    if (![self _executionContext])
+        return nil;
+
+    if (![self _isSafeScript])
+	return nil;
+
     // Lookup the function object.
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
+
     Interpreter::lock();
     
     Value v = convertObjcValueToValue(exec, &name, ObjcObjectType);
@@ -159,7 +216,7 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
     }
 
     // Convert and return the result of the function call.
-    id resultObj = [WebScriptObject _convertValueToObjcValue:result root:_private->root];
+    id resultObj = [WebScriptObject _convertValueToObjcValue:result originExecutionContext:[self _originExecutionContext] executionContext:[self _executionContext]];
 
     _didExecute(self);
         
@@ -168,11 +225,32 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
 
 - (id)evaluateWebScript:(NSString *)script
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return nil;
+
+    if (![self _isSafeScript])
+	return nil;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
+
     Object thisObj = Object(const_cast<ObjectImp*>([self _imp]));
+    Value result;
+    
     Interpreter::lock();
+    
     Value v = convertObjcValueToValue(exec, &script, ObjcObjectType);
-    KJS::Value result = _private->root->interpreter()->evaluate(UString(), 0, v.toString(exec)).value();
+    Completion completion = [self _executionContext]->interpreter()->evaluate(UString(), 0, v.toString(exec));
+    ComplType type = completion.complType();
+    
+    if (type == Normal) {
+        result = completion.value();
+        if (result.isNull()) {
+            result = Undefined();
+        }
+    }
+    else
+        result = Undefined();
+
     Interpreter::unlock();
     
     if (exec->hadException()) {
@@ -180,7 +258,7 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
         result = Undefined();
     }
 
-    id resultObj = [WebScriptObject _convertValueToObjcValue:result root:_private->root];
+    id resultObj = [WebScriptObject _convertValueToObjcValue:result originExecutionContext:[self _originExecutionContext] executionContext:[self _executionContext]];
 
     _didExecute(self);
     
@@ -189,7 +267,14 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
 
 - (void)setValue:(id)value forKey:(NSString *)key
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return;
+
+    if (![self _isSafeScript])
+	return;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
+
     Interpreter::lock();
     Value v = convertObjcValueToValue(exec, &key, ObjcObjectType);
     [self _imp]->put (exec, Identifier (v.toString(exec)), (convertObjcValueToValue(exec, &value, ObjcObjectType)));
@@ -204,7 +289,14 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
 
 - (id)valueForKey:(NSString *)key
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return nil;
+        
+    if (![self _isSafeScript])
+	return nil;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
+
     Interpreter::lock();
     Value v = convertObjcValueToValue(exec, &key, ObjcObjectType);
     Value result = [self _imp]->get (exec, Identifier (v.toString(exec)));
@@ -215,16 +307,23 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
         result = Undefined();
     }
 
-    id resultObj = [WebScriptObject _convertValueToObjcValue:result root:_private->root];
+    id resultObj = [WebScriptObject _convertValueToObjcValue:result originExecutionContext:[self _originExecutionContext] executionContext:[self _executionContext]];
 
     _didExecute(self);
     
     return resultObj;
 }
 
-- (void)removeWebScriptKey:(NSString *)key;
+- (void)removeWebScriptKey:(NSString *)key
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return;
+        
+    if (![self _isSafeScript])
+	return;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
+
     Interpreter::lock();
     Value v = convertObjcValueToValue(exec, &key, ObjcObjectType);
     [self _imp]->deleteProperty (exec, Identifier (v.toString(exec)));
@@ -239,9 +338,12 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
 
 - (NSString *)stringRepresentation
 {
+    if (![self _isSafeScript])
+	return @"Undefined";
+
     Interpreter::lock();
     Object thisObj = Object(const_cast<ObjectImp*>([self _imp]));
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
     
     id result = convertValueToObjcValue(exec, thisObj, ObjcObjectType).objectValue;
 
@@ -254,9 +356,15 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
     return resultObj;
 }
 
-- (id)webScriptValueAtIndex:(unsigned int)index;
+- (id)webScriptValueAtIndex:(unsigned int)index
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return nil;
+
+    if (![self _isSafeScript])
+	return nil;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
     Interpreter::lock();
     Value result = [self _imp]->get (exec, (unsigned)index);
     Interpreter::unlock();
@@ -266,16 +374,22 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
         result = Undefined();
     }
 
-    id resultObj = [WebScriptObject _convertValueToObjcValue:result root:_private->root];
+    id resultObj = [WebScriptObject _convertValueToObjcValue:result originExecutionContext:[self _originExecutionContext] executionContext:[self _executionContext]];
 
     _didExecute(self);
 
     return resultObj;
 }
 
-- (void)setWebScriptValueAtIndex:(unsigned int)index value:(id)value;
+- (void)setWebScriptValueAtIndex:(unsigned int)index value:(id)value
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return;
+
+    if (![self _isSafeScript])
+	return;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
     Interpreter::lock();
     [self _imp]->put (exec, (unsigned)index, (convertObjcValueToValue(exec, &value, ObjcObjectType)));
     Interpreter::unlock();
@@ -287,29 +401,41 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
     _didExecute(self);
 }
 
-- (void)setException: (NSString *)description;
+- (void)setException: (NSString *)description
 {
-    ExecState *exec = _private->root->interpreter()->globalExec();
+    if (![self _executionContext])
+        return;
+
+    ExecState *exec = [self _executionContext]->interpreter()->globalExec();
     Object err = Error::create(exec, GeneralError, [description UTF8String]);
     exec->setException (err);
 }
 
-+ (id)_convertValueToObjcValue:(KJS::Value)value root:(const Bindings::RootObject *)root
++ (id)_convertValueToObjcValue:(KJS::Value)value originExecutionContext:(const Bindings::RootObject *)originExecutionContext executionContext:(const Bindings::RootObject *)executionContext
 {
     id result = 0;
 
     // First see if we have a ObjC instance.
     if (value.type() == KJS::ObjectType){
         ObjectImp *objectImp = static_cast<ObjectImp*>(value.imp());
-        if (strcmp(objectImp->classInfo()->className, "RuntimeObject") == 0) {
-            RuntimeObjectImp *imp = static_cast<RuntimeObjectImp *>(value.imp());
+	Interpreter *intepreter = executionContext->interpreter();
+	ExecState *exec = intepreter->globalExec();
+
+	if (objectImp->classInfo() != &KJS::RuntimeObjectImp::info) {
+	    Value runtimeObject = objectImp->get(exec, "__apple_runtime_object");
+	    if (!runtimeObject.isNull() && runtimeObject.type() == KJS::ObjectType)
+		objectImp = static_cast<RuntimeObjectImp*>(runtimeObject.imp());
+	}
+
+        if (objectImp->classInfo() == &KJS::RuntimeObjectImp::info) {
+            RuntimeObjectImp *imp = static_cast<RuntimeObjectImp *>(objectImp);
             ObjcInstance *instance = static_cast<ObjcInstance*>(imp->getInternalInstance());
             if (instance)
                 result = instance->getObject();
         }
         // Convert to a WebScriptObject
         else {
-            result = [[[WebScriptObject alloc] _initWithObjectImp:objectImp root:root] autorelease];
+	    result = (id)intepreter->createLanguageInstanceForValue (exec, Instance::ObjectiveCLanguage, value.toObject(exec), originExecutionContext, executionContext);
         }
     }
     
@@ -328,27 +454,36 @@ static KJS::List listFromNSArray(ExecState *exec, NSArray *array)
         result = [NSNumber numberWithDouble:n.value()];
     }
     
-    // Boolean?
+    else if (value.type() == KJS::BooleanType) {
+        KJS::BooleanImp *b = static_cast<KJS::BooleanImp*>(value.imp());
+        result = [NSNumber numberWithBool:b->value()];
+    }
+    
+    // Convert JavaScript Undefined types to WebUndefined
+    else if (value.type() == KJS::UndefinedType) {
+        result = [WebUndefined undefined];
+    }
+    
+    // Other types (UnspecifiedType and NullType) converted to 0.
+    
     return result;
 }
 
 @end
 
-
 @implementation WebUndefined
 
-static WebUndefined *sharedUndefined = 0;
-
-+ (WebUndefined *)undefined
++ (id)allocWithZone:(NSZone *)zone
 {
+    static WebUndefined *sharedUndefined = 0;
     if (!sharedUndefined)
-        sharedUndefined = [[WebUndefined alloc] init];
+        sharedUndefined = [super allocWithZone:NULL];
     return sharedUndefined;
 }
 
 - (id)initWithCoder:(NSCoder *)coder
 {
-    return [WebUndefined undefined];
+    return self;
 }
 
 - (void)encodeWithCoder:(NSCoder *)encoder
@@ -357,33 +492,38 @@ static WebUndefined *sharedUndefined = 0;
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    return [WebUndefined undefined];
+    return self;
 }
 
-- (id)retain {
-    return [WebUndefined undefined];
+- (id)retain
+{
+    return self;
 }
 
-- (void)release {
+- (void)release
+{
 }
 
-- (unsigned)retainCount {
-    return 0xFFFFFFFF;
+- (unsigned)retainCount
+{
+    return UINT_MAX;
 }
 
-- (id)autorelease {
-    return [WebUndefined undefined];
+- (id)autorelease
+{
+    return self;
 }
 
-- (void)dealloc {
+- (void)dealloc
+{
+    assert(false);
+    return;
+    [super dealloc]; // make -Wdealloc-check happy
 }
 
-- (id)copy {
-    return [WebUndefined undefined];
-}
-
-- (id)replacementObjectForPortCoder:(NSPortCoder *)encoder {
-    return [WebUndefined undefined];
++ (WebUndefined *)undefined
+{
+    return [WebUndefined allocWithZone:NULL];
 }
 
 @end

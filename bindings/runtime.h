@@ -68,8 +68,8 @@ public:
     virtual const char *name() const = 0;
     virtual RuntimeType type() const = 0;
 
-    virtual KJS::Value valueFromInstance(KJS::ExecState *exec, const Instance *instance) const = 0;
-    virtual void setValueToInstance(KJS::ExecState *exec, const Instance *instance, const KJS::Value &aValue) const = 0;
+    virtual KJS::Value valueFromInstance(ExecState *exec, const Instance *instance) const = 0;
+    virtual void setValueToInstance(ExecState *exec, const Instance *instance, const Value &aValue) const = 0;
 
     virtual ~Field() {};
 };
@@ -110,17 +110,19 @@ class Class
 public:
     virtual const char *name() const = 0;
     
-    virtual MethodList methodsNamed(const char *name) const = 0;
+    virtual MethodList methodsNamed(const char *name, Instance *instance) const = 0;
     
     virtual Constructor *constructorAt(long i) const = 0;
     virtual long numConstructors() const = 0;
     
-    virtual Field *fieldNamed(const char *name) const = 0;
+    virtual Field *fieldNamed(const char *name, Instance *instance) const = 0;
 
+    virtual Value fallbackObject(ExecState *exec, Bindings::Instance *instance, const Identifier &propertyName) { return Undefined(); }
+    
     virtual ~Class() {};
 };
 
-typedef void (*KJSDidExecuteFunctionPtr)(KJS::ExecState *exec, KJS::ObjectImp *rootObject);
+typedef void (*KJSDidExecuteFunctionPtr)(ExecState *exec, ObjectImp *rootObject);
 
 class Instance
 {
@@ -134,9 +136,15 @@ public:
     static void setDidExecuteFunction (KJSDidExecuteFunctionPtr func);
     static KJSDidExecuteFunctionPtr didExecuteFunction ();
     
-    static Instance *createBindingForLanguageInstance (BindingLanguage language, void *instance);
+    static Instance *createBindingForLanguageInstance (BindingLanguage language, void *nativeInstance, const RootObject *r = 0);
+    static void *createLanguageInstanceForValue (ExecState *exec, BindingLanguage language, const Object &value, const RootObject *origin, const RootObject *current);
+    static Object createRuntimeObject (BindingLanguage language, void *nativeInstance, const RootObject *r = 0);
 
-    static Object createRuntimeObject (BindingLanguage language, void *myInterface);
+    Instance () : _executionContext(0) {};
+    
+    Instance (const Instance &other);
+
+    Instance &operator=(const Instance &other);
 
     // These functions are called before and after the main entry points into
     // the native implementations.  They can be used to establish and cleanup
@@ -146,23 +154,33 @@ public:
     
     virtual Class *getClass() const = 0;
     
-    virtual KJS::Value getValueOfField (KJS::ExecState *exec, const Field *aField) const;
-    virtual void setValueOfField (KJS::ExecState *exec, const Field *aField, const KJS::Value &aValue) const;
+    virtual Value getValueOfField (ExecState *exec, const Field *aField) const;
+    virtual Value getValueOfUndefinedField (ExecState *exec, const Identifier &property, Type hint) const { return Undefined(); };
+    virtual void setValueOfField (ExecState *exec, const Field *aField, const Value &aValue) const;
+    virtual bool supportsSetValueOfUndefinedField () { return false; };
+    virtual void setValueOfUndefinedField (ExecState *exec, const Identifier &property, const Value &aValue) {};
     
-    virtual KJS::Value invokeMethod (KJS::ExecState *exec, const MethodList &method, const KJS::List &args) = 0;
+    virtual Value invokeMethod (ExecState *exec, const MethodList &method, const List &args) = 0;
+    virtual Value invokeDefaultMethod (ExecState *exec, const List &args) = 0;
     
-    virtual KJS::Value defaultValue (KJS::Type hint) const = 0;
+    virtual Value defaultValue (Type hint) const = 0;
     
-    virtual KJS::Value valueOf() const { return KJS::String(getClass()->name()); };
+    virtual Value valueOf() const { return String(getClass()->name()); };
+    
+    void setExecutionContext (const RootObject *r) { _executionContext = r; }
+    const RootObject *executionContext() const { return _executionContext; }
     
     virtual ~Instance() {};
+
+protected:
+    const RootObject *_executionContext;
 };
 
 class Array
 {
 public:
-    virtual void setValueAt(KJS::ExecState *exec, unsigned int index, const KJS::Value &aValue) const = 0;
-    virtual KJS::Value valueAt(KJS::ExecState *exec, unsigned int index) const = 0;
+    virtual void setValueAt(ExecState *exec, unsigned int index, const Value &aValue) const = 0;
+    virtual Value valueAt(ExecState *exec, unsigned int index) const = 0;
     virtual unsigned int getLength() const = 0;
     virtual ~Array() {};
 };

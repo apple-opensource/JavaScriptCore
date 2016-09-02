@@ -28,7 +28,6 @@
 using namespace KJS;
 using namespace KJS::Bindings;
 
-
 // Java does NOT always call finalize (and thus KJS_JSObject_JSFinalize) when
 // it collects an objects.  This presents some difficulties.  We must ensure
 // the a JSObject's corresponding JavaScript object doesn't get collected.  We
@@ -115,7 +114,7 @@ const Bindings::RootObject *KJS::Bindings::rootForImp (ObjectImp *imp)
         for(i = 0; i < count; i++) {
             CFMutableDictionaryRef referencesDictionary = (CFMutableDictionaryRef)allValues[i];
             if (CFDictionaryGetValue(referencesDictionary, imp) != 0) {
-                rootObject = (const Bindings::RootObject *)allKeys[0];
+                rootObject = (const Bindings::RootObject *)allKeys[i];
                 break;
             }
         }
@@ -129,6 +128,7 @@ const Bindings::RootObject *KJS::Bindings::rootForImp (ObjectImp *imp)
 const Bindings::RootObject *KJS::Bindings::rootForInterpreter (KJS::Interpreter *interpreter)
 {
     CFMutableDictionaryRef refsByRoot = getReferencesByRootDictionary ();
+    const Bindings::RootObject *aRootObject = 0, *result = 0;
     
     if (refsByRoot) {
         const void **allValues = 0;
@@ -140,15 +140,17 @@ const Bindings::RootObject *KJS::Bindings::rootForInterpreter (KJS::Interpreter 
         allValues = (const void **)malloc (sizeof(void *) * count);
         CFDictionaryGetKeysAndValues (refsByRoot, allKeys, allValues);
         for(i = 0; i < count; i++) {
-            const Bindings::RootObject *aRootObject = (const Bindings::RootObject *)allKeys[i];
-            if (aRootObject->interpreter() == interpreter)
-                return aRootObject;
+            aRootObject = (const Bindings::RootObject *)allKeys[i];
+            if (aRootObject->interpreter() == interpreter) {
+                result = aRootObject;
+                break;
+            }
         }
         
         free ((void *)allKeys);
         free ((void *)allValues);
     }
-    return 0;
+    return result;
 }
 
 void KJS::Bindings::addNativeReference (const Bindings::RootObject *root, ObjectImp *imp)
@@ -174,6 +176,9 @@ void KJS::Bindings::addNativeReference (const Bindings::RootObject *root, Object
 
 void KJS::Bindings::removeNativeReference (ObjectImp *imp)
 {
+    if (!imp)
+	return;
+	
     CFMutableDictionaryRef referencesDictionary = findReferenceDictionary (imp);
 
     if (referencesDictionary) {
@@ -346,4 +351,10 @@ void RootObject::removeAllNativeReferences ()
         delete this;
     }
 }
+
+void RootObject::setInterpreter (KJS::Interpreter *i)
+{
+    _interpreter = i;
+}
+
 

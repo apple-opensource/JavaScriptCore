@@ -3,7 +3,7 @@
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2002 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001 Peter Kelly (pmk@post.com)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2004 Apple Computer, Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -94,6 +94,7 @@ static inline void lockInterpreter()
   pthread_once(&interpreterLockOnce, initializeInterpreterLock);
   pthread_mutex_lock(&interpreterLock);
   interpreterLockCount++;
+  Collector::registerThread();
 }
 
 static inline void unlockInterpreter()
@@ -272,6 +273,8 @@ double NumberImp::toNumber(ExecState *) const
 
 UString NumberImp::toString(ExecState *) const
 {
+  if (val == 0.0) // +0.0 or -0.0
+    return "0";
   return UString::from(val);
 }
 
@@ -453,12 +456,13 @@ ProgramNode *Parser::parse(const UString &sourceURL, int startingLineNumber,
   //extern int kjsyydebug;
   //kjsyydebug=1;
   int parseError = kjsyyparse();
+  bool lexError = Lexer::curr()->sawError();
   Lexer::curr()->doneParsing();
   ProgramNode *prog = progNode;
   progNode = 0;
   sid = -1;
 
-  if (parseError) {
+  if (parseError || lexError) {
     int eline = Lexer::curr()->lineNo();
     if (errLine)
       *errLine = eline;
@@ -847,6 +851,7 @@ Completion InterpreterImp::evaluate(const UString &code, const Value &thisV, con
     // execute the code
     ContextImp ctx(globalObj, this, thisObj);
     ExecState newExec(m_interpreter,&ctx);
+    progNode->processVarDecls(&newExec);
     res = progNode->execute(&newExec);
   }
 

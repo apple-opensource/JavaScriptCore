@@ -130,7 +130,8 @@ Completion Interpreter::evaluate(const UString &sourceURL, int startingLineNumbe
     ExecState *exec = rep->globalExec();
     char *f = strdup(sourceURL.ascii());
     const char *message = comp.value().toObject(exec).toString(exec).ascii();
-    printf("%s:%s\n", f, message);
+    printf("[%d] %s:%s\n", getpid(), f, message);
+
     free(f);
     unlock();
   }
@@ -334,6 +335,13 @@ void Interpreter::setShouldPrintExceptions(bool print)
 {
   printExceptions = print;
 }
+
+
+void *Interpreter::createLanguageInstanceForValue (ExecState *exec, Bindings::Instance::BindingLanguage language, const Object &value, const Bindings::RootObject *origin, const Bindings::RootObject *current)
+{
+    return Bindings::Instance::createLanguageInstanceForValue (exec, language, value, origin, current);
+}
+
 #endif
 
 void Interpreter::saveBuiltins (SavedBuiltins &builtins) const

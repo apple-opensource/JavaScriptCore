@@ -39,15 +39,31 @@ class Value;
 namespace Bindings
 {
 
+class ObjcInstance;
+
 class ObjcField : public Field
 {
 public:
     ObjcField(Ivar ivar);
+
+    ObjcField(CFStringRef name);
     
-    ~ObjcField() {};
+    ~ObjcField() {
+        if (_name)
+            CFRelease (_name);
+    };
 
     ObjcField(const ObjcField &other) : Field() {
         _ivar = other._ivar;
+
+        if (other._name != _name) {
+            if (_name)
+                CFRelease (_name);
+            if (other._name)
+                _name = (CFStringRef)CFRetain (other._name);
+            else 
+                _name = 0;
+        }
     };
     
     ObjcField &operator=(const ObjcField &other) {
@@ -55,6 +71,15 @@ public:
             return *this;
 
         _ivar = other._ivar;
+        
+        if (other._name != _name) {
+            if (_name)
+                CFRelease (_name);
+            if (other._name)
+                _name = (CFStringRef)CFRetain (other._name);
+            else 
+                _name = 0;
+        }
         
         return *this;
     };
@@ -64,9 +89,10 @@ public:
     
     virtual const char *name() const;
     virtual RuntimeType type() const;
-    
+        
 private:
     Ivar _ivar;
+    CFStringRef _name;
 };
 
 
@@ -77,6 +103,8 @@ public:
 
     ObjcMethod(struct objc_class *aClass, const char *_selector);
     ~ObjcMethod () {
+        if (_javaScriptName);
+            CFRelease (_javaScriptName);
     };
 
     ObjcMethod(const ObjcMethod &other) : Method() {
@@ -100,9 +128,14 @@ public:
     
     NSMethodSignature *getMethodSignature() const;
     
+    bool isFallbackMethod() const { return strcmp(_selector, "invokeUndefinedMethodFromWebScript:withArguments:") == 0; }
+    void setJavaScriptName (CFStringRef n);
+    CFStringRef javaScriptName() const { return _javaScriptName; }
+    
 private:
     struct objc_class *_objcClass;
     const char *_selector;
+    CFStringRef _javaScriptName;
 };
 
 class ObjcArray : public Array
@@ -126,6 +159,43 @@ public:
 
 private:
     ObjectStructPtr _array;
+};
+
+class ObjcFallbackObjectImp : public KJS::ObjectImp {
+public:
+    ObjcFallbackObjectImp(ObjectImp *proto);
+        
+    ObjcFallbackObjectImp(ObjcInstance *i, const KJS::Identifier propertyName);
+
+    const ClassInfo *classInfo() const { return &info; }
+
+    virtual Value get(ExecState *exec, const Identifier &propertyName) const;
+
+    virtual void put(ExecState *exec, const Identifier &propertyName,
+                     const Value &value, int attr = None);
+
+    virtual bool canPut(ExecState *exec, const Identifier &propertyName) const;
+
+    virtual bool implementsCall() const;
+    virtual Value call(ExecState *exec, Object &thisObj, const List &args);
+
+    virtual bool hasProperty(ExecState *exec,
+			     const Identifier &propertyName) const;
+
+
+    virtual bool deleteProperty(ExecState *exec,
+                                const Identifier &propertyName);
+
+    virtual Value defaultValue(ExecState *exec, Type hint) const;
+
+    virtual Type type() const;
+    virtual bool toBoolean(ExecState *exec) const;
+
+private:
+    static const ClassInfo info;
+
+    ObjcInstance *_instance;
+    KJS::Identifier _item;
 };
 
 } // namespace Bindings

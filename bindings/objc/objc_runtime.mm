@@ -43,6 +43,7 @@ ObjcMethod::ObjcMethod(ClassStructPtr aClass, const char *name)
 {
     _objcClass = aClass;
     _selector = name;   // Assume ObjC runtime keeps these around forever.
+    _javaScriptName = 0;
 }
 
 const char *ObjcMethod::name() const
@@ -61,22 +62,44 @@ NSMethodSignature *ObjcMethod::getMethodSignature() const
     return [(id)_objcClass instanceMethodSignatureForSelector:(SEL)_selector];
 }
 
+void ObjcMethod::setJavaScriptName (CFStringRef n)
+{
+    if (n != _javaScriptName) {
+        if (_javaScriptName != 0)
+            CFRelease (_javaScriptName);
+        _javaScriptName = (CFStringRef)CFRetain (n);
+    }
+}
+
 // ---------------------- ObjcField ----------------------
 
 
 ObjcField::ObjcField(Ivar ivar) 
 {
     _ivar = ivar;    // Assume ObjectiveC runtime will keep this alive forever
+    _name = 0;
+}
+
+ObjcField::ObjcField(CFStringRef name) 
+{
+    _ivar = 0;
+    _name = (CFStringRef)CFRetain(name);
 }
 
 const char *ObjcField::name() const 
 {
-    return _ivar->ivar_name;
+    if (_ivar)
+        return _ivar->ivar_name;
+    return [(NSString *)_name UTF8String];
 }
 
 RuntimeType ObjcField::type() const 
-{
-    return _ivar->ivar_type;
+{ 
+    if (_ivar)
+        return _ivar->ivar_type;
+    
+    // Type is irrelevant if we use KV to set/get the value.
+    return "";
 }
 
 Value ObjcField::valueFromInstance(KJS::ExecState *exec, const Instance *instance) const
@@ -87,7 +110,7 @@ Value ObjcField::valueFromInstance(KJS::ExecState *exec, const Instance *instanc
 
     NS_DURING
     
-        NSString *key = [NSString stringWithCString:_ivar->ivar_name];
+        NSString *key = [NSString stringWithCString:name()];
         objcValue = [targetObject valueForKey:key];
         
     NS_HANDLER
@@ -113,7 +136,7 @@ static id convertValueToObjcObject (KJS::ExecState *exec, const KJS::Value &valu
         newRoot->setInterpreter (exec->interpreter());
         root = newRoot;
     }
-    return [WebScriptObject _convertValueToObjcValue:value root:root];
+    return [WebScriptObject _convertValueToObjcValue:value originExecutionContext:root executionContext:root ];
 }
 
 
@@ -124,9 +147,9 @@ void ObjcField::setValueToInstance(KJS::ExecState *exec, const Instance *instanc
     
     NS_DURING
     
-        NSString *key = [NSString stringWithCString:_ivar->ivar_name];
+        NSString *key = [NSString stringWithCString:name()];
         [targetObject setValue:value forKey:key];
-        
+
     NS_HANDLER
         
         Value aValue = Error::create(exec, GeneralError, [[localException reason] lossyCString]);
@@ -227,4 +250,111 @@ NS_ENDHANDLER
 unsigned int ObjcArray::getLength() const
 {
     return [_array count];
+}
+
+
+const ClassInfo ObjcFallbackObjectImp::info = {"ObjcFallbackObject", 0, 0, 0};
+
+ObjcFallbackObjectImp::ObjcFallbackObjectImp(ObjectImp *proto)
+  : ObjectImp(proto)
+{
+    _instance = 0;
+}
+
+ObjcFallbackObjectImp::ObjcFallbackObjectImp(ObjcInstance *i, const KJS::Identifier propertyName) : ObjectImp ((ObjectImp *)0)
+{
+    _instance = i;
+    _item = propertyName;
+}
+
+Value ObjcFallbackObjectImp::get(ExecState *exec, const Identifier &propertyName) const
+{
+    return Undefined();
+}
+
+void ObjcFallbackObjectImp::put(ExecState *exec, const Identifier &propertyName,
+                 const Value &value, int attr)
+{
+}
+
+bool ObjcFallbackObjectImp::canPut(ExecState *exec, const Identifier &propertyName) const
+{
+    return false;
+}
+
+
+Type ObjcFallbackObjectImp::type() const
+{
+    id targetObject = _instance->getObject();
+    
+    if ([targetObject respondsToSelector:@selector(invokeUndefinedMethodFromWebScript:withArguments:)])
+	return ObjectType;
+    
+    return UndefinedType;
+}
+
+bool ObjcFallbackObjectImp::implementsCall() const
+{
+    id targetObject = _instance->getObject();
+    
+    if ([targetObject respondsToSelector:@selector(invokeUndefinedMethodFromWebScript:withArguments:)])
+	return true;
+    
+    return false;
+}
+
+Value ObjcFallbackObjectImp::call(ExecState *exec, Object &thisObj, const List &args)
+{
+    Value result = Undefined();
+    
+    RuntimeObjectImp *imp = static_cast<RuntimeObjectImp*>(thisObj.imp());
+    if (imp) {
+        Instance *instance = imp->getInternalInstance();
+        
+        instance->begin();
+
+        ObjcInstance *objcInstance = static_cast<ObjcInstance*>(instance);
+        id targetObject = objcInstance->getObject();
+        
+        if ([targetObject respondsToSelector:@selector(invokeUndefinedMethodFromWebScript:withArguments:)]){
+            MethodList methodList;
+            ObjcClass *objcClass = static_cast<ObjcClass*>(instance->getClass());
+            ObjcMethod *fallbackMethod = new ObjcMethod (objcClass->isa(), (const char *)@selector(invokeUndefinedMethodFromWebScript:withArguments:));
+            fallbackMethod->setJavaScriptName((CFStringRef)[NSString stringWithCString:_item.ascii()]);
+            methodList.addMethod ((Method *)fallbackMethod);
+            result = instance->invokeMethod(exec, methodList, args);
+            delete fallbackMethod;
+        }
+                
+        instance->end();
+    }
+
+    return result;
+}
+
+bool ObjcFallbackObjectImp::hasProperty(ExecState *exec,
+                         const Identifier &propertyName) const
+{
+    return false;
+}
+
+bool ObjcFallbackObjectImp::deleteProperty(ExecState *exec,
+                            const Identifier &propertyName)
+{
+    return false;
+}
+
+Value ObjcFallbackObjectImp::defaultValue(ExecState *exec, Type hint) const
+{
+    return _instance->getValueOfUndefinedField(exec, _item, hint);
+}
+
+bool ObjcFallbackObjectImp::toBoolean(ExecState *exec) const
+{
+    id targetObject = _instance->getObject();
+    
+    if ([targetObject respondsToSelector:@selector(invokeUndefinedMethodFromWebScript:withArguments:)])
+	return true;
+    
+    return false;
 }

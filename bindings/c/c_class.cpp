@@ -23,6 +23,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 #include <c_class.h>
+#include <c_instance.h>
+#include <c_runtime.h>
 
 using namespace KJS::Bindings;
 
@@ -44,8 +46,8 @@ void CClass::_commonCopy(const CClass &other) {
 void CClass::_commonInit (NPClass *aClass)
 {
     _isa = aClass;
-    _methods = CFDictionaryCreateMutable(NULL, 16, &kCFTypeDictionaryKeyCallBacks, NULL);
-    _fields = CFDictionaryCreateMutable(NULL, 16, &kCFTypeDictionaryKeyCallBacks, NULL);
+    _methods = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, NULL);
+    _fields = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, NULL);
 }
 
 
@@ -81,7 +83,7 @@ const char *CClass::name() const
     return "";
 }
 
-MethodList CClass::methodsNamed(const char *_name) const
+MethodList CClass::methodsNamed(const char *_name, Instance *instance) const
 {
     MethodList methodList;
 
@@ -93,13 +95,13 @@ MethodList CClass::methodsNamed(const char *_name) const
         return methodList;
     }
     
-    if (NPN_IsValidIdentifier (_name)) {
-        NPIdentifier ident = NPN_GetIdentifier (_name);
-        if (_isa->hasMethod && _isa->hasMethod (_isa, ident)){
-            Method *aMethod = new CMethod (ident);
-            CFDictionaryAddValue ((CFMutableDictionaryRef)_methods, methodName, aMethod);
-            methodList.addMethod (aMethod);
-        }
+    NPIdentifier ident = _NPN_GetStringIdentifier (_name);
+    const CInstance *inst = static_cast<const CInstance*>(instance);
+    NPObject *obj = inst->getObject();
+    if (_isa->hasMethod && _isa->hasMethod (obj, ident)){
+        Method *aMethod = new CMethod (ident);
+        CFDictionaryAddValue ((CFMutableDictionaryRef)_methods, methodName, aMethod);
+        methodList.addMethod (aMethod);
     }
 
     CFRelease (methodName);
@@ -108,7 +110,7 @@ MethodList CClass::methodsNamed(const char *_name) const
 }
 
 
-Field *CClass::fieldNamed(const char *name) const
+Field *CClass::fieldNamed(const char *name, Instance *instance) const
 {
     CFStringRef fieldName = CFStringCreateWithCString(NULL, name, kCFStringEncodingASCII);
     Field *aField = (Field *)CFDictionaryGetValue (_fields, fieldName);
@@ -117,12 +119,12 @@ Field *CClass::fieldNamed(const char *name) const
         return aField;
     }
 
-    if (NPN_IsValidIdentifier (name)) {
-        NPIdentifier ident = NPN_GetIdentifier (name);
-        if (_isa->hasProperty && _isa->hasProperty (_isa, ident)){
-            aField = new CField (ident);
-            CFDictionaryAddValue ((CFMutableDictionaryRef)_fields, fieldName, aField);
-        }
+    NPIdentifier ident = _NPN_GetStringIdentifier (name);
+    const CInstance *inst = static_cast<const CInstance*>(instance);
+    NPObject *obj = inst->getObject();
+    if (_isa->hasProperty && _isa->hasProperty (obj, ident)){
+        aField = new CField (ident);
+        CFDictionaryAddValue ((CFMutableDictionaryRef)_fields, fieldName, aField);
     }
     
     CFRelease (fieldName);

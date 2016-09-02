@@ -98,9 +98,9 @@ public:
 
     virtual const char *name() const { return _name; };
     
-    virtual MethodList methodsNamed(const char *name) const;
+    virtual MethodList methodsNamed(const char *name, Instance *instance) const;
     
-    virtual Field *fieldNamed(const char *name) const;
+    virtual Field *fieldNamed(const char *name, Instance *instance) const;
     
     virtual Constructor *constructorAt(long i) const {
         return &_constructors[i]; 

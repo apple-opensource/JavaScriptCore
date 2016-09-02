@@ -159,7 +159,7 @@ JavaClass *JavaClass::classForInstance (jobject instance)
     return aClass;
 }
 
-MethodList JavaClass::methodsNamed(const char *name) const
+MethodList JavaClass::methodsNamed(const char *name, Instance *instance) const
 {
     CFStringRef methodName = CFStringCreateWithCString(NULL, name, kCFStringEncodingASCII);
     MethodList *methodList = (MethodList *)CFDictionaryGetValue(_methods, methodName);
@@ -170,7 +170,7 @@ MethodList JavaClass::methodsNamed(const char *name) const
 }
 
 
-Field *JavaClass::fieldNamed(const char *name) const
+Field *JavaClass::fieldNamed(const char *name, Instance *instance) const
 {
     CFStringRef fieldName = CFStringCreateWithCString(NULL, name, kCFStringEncodingASCII);
     Field *aField = (Field *)CFDictionaryGetValue(_fields, fieldName);

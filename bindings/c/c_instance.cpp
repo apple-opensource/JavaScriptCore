@@ -27,6 +27,9 @@
 #include <c_runtime.h>
 #include <c_utility.h>
 
+#include <JavaScriptCore/npruntime_impl.h>
+#include <JavaScriptCore/npruntime_priv.h>
+
 #ifdef NDEBUG
 #define C_LOG(formatAndArgs...) ((void)0)
 #else
@@ -41,19 +44,23 @@ using namespace KJS;
 
 CInstance::CInstance (NPObject *o) 
 {
-    _object = NPN_RetainObject (o);
+    _object = _NPN_RetainObject (o);
+    _class = 0;
+    setExecutionContext (0);
 };
 
 CInstance::~CInstance () 
 {
-    NPN_ReleaseObject (_object);
+    _NPN_ReleaseObject (_object);
     delete _class;
 }
 
 
 CInstance::CInstance (const CInstance &other) : Instance() 
 {
-    _object = NPN_RetainObject (other._object);
+    _object = _NPN_RetainObject (other._object);
+    _class = 0;
+    setExecutionContext (other.executionContext());
 };
 
 CInstance &CInstance::operator=(const CInstance &other){
@@ -61,8 +68,9 @@ CInstance &CInstance::operator=(const CInstance &other){
         return *this;
     
     NPObject *_oldObject = _object;
-    _object= NPN_RetainObject (other._object);
-    NPN_ReleaseObject (_oldObject);
+    _object= _NPN_RetainObject (other._object);
+    _NPN_ReleaseObject (_oldObject);
+    _class = 0;
     
     return *this;
 };
@@ -97,8 +105,8 @@ Value CInstance::invokeMethod (KJS::ExecState *exec, const MethodList &methodLis
     CMethod *method = 0;
     method = static_cast<CMethod*>(methodList.methodAt(0));
 
-    NPIdentifier ident = NPN_GetIdentifier (method->name());
-    if (!_object->_class->hasMethod (_object->_class, ident)) {
+    NPIdentifier ident = _NPN_GetStringIdentifier (method->name());
+    if (!_object->_class->hasMethod (_object, ident)) {
         return Undefined();
     }
 
@@ -116,21 +124,64 @@ Value CInstance::invokeMethod (KJS::ExecState *exec, const MethodList &methodLis
 
     // Invoke the 'C' method.
     NPVariant resultVariant;
+    VOID_TO_NPVARIANT(resultVariant);
     _object->_class->invoke (_object, ident, cArgs, count, &resultVariant);
 
     for (i = 0; i < count; i++) {
-        NPN_ReleaseVariantValue (&cArgs[i]);
+        _NPN_ReleaseVariantValue (&cArgs[i]);
     }
 
-    if (resultVariant.type != NPVariantVoidType) {
+    if (cArgs != localBuffer)
+        free ((void *)cArgs);
+            
+    if (!NPVARIANT_IS_VOID(resultVariant)) {
         resultValue = convertNPVariantToValue (exec, &resultVariant);
         
-        if (cArgs != localBuffer)
-            free ((void *)cArgs);
-            
-        NPN_ReleaseVariantValue (&resultVariant);
+        _NPN_ReleaseVariantValue (&resultVariant);
         
         return resultValue;
+    }
+    
+    return Undefined();
+}
+
+
+Value CInstance::invokeDefaultMethod (KJS::ExecState *exec, const List &args)
+{
+    Value resultValue;
+
+    if (_object->_class->invokeDefault) {     
+        unsigned i, count = args.size();
+        NPVariant *cArgs;
+        NPVariant localBuffer[128];
+        if (count > 128)
+            cArgs = (NPVariant *)malloc (sizeof(NPVariant)*count);
+        else
+            cArgs = localBuffer;
+        
+        for (i = 0; i < count; i++) {
+            convertValueToNPVariant (exec, args.at(i), &cArgs[i]);
+        }
+
+        // Invoke the 'C' method.
+        NPVariant resultVariant;
+        VOID_TO_NPVARIANT(resultVariant);
+        _object->_class->invokeDefault (_object, cArgs, count, &resultVariant);
+
+        for (i = 0; i < count; i++) {
+            _NPN_ReleaseVariantValue (&cArgs[i]);
+        }
+
+        if (cArgs != localBuffer)
+            free ((void *)cArgs);
+                
+        if (!NPVARIANT_IS_VOID(resultVariant)) {
+            resultValue = convertNPVariantToValue (exec, &resultVariant);
+            
+            _NPN_ReleaseVariantValue (&resultVariant);
+            
+            return resultValue;
+        }
     }
     
     return Undefined();
@@ -154,8 +205,9 @@ KJS::Value CInstance::defaultValue (KJS::Type hint) const
 
 KJS::Value CInstance::stringValue() const
 {
-    // FIXME:  Implement something sensible, like calling toString...
-    KJS::String v("");
+    char buf[1024];
+    snprintf (buf, 1024, "NPObject %p, NPClass %p", _object, _object->_class);
+    KJS::String v(buf);
     return v;
 }
 
