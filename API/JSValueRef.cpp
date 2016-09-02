@@ -1,4 +1,3 @@
-// -*- mode: c++; c-basic-offset: 4 -*-
 /*
  * Copyright (C) 2006, 2007 Apple Inc. All rights reserved.
  *
@@ -31,13 +30,12 @@
 #include "APICast.h"
 #include "JSCallbackObject.h"
 
-#include <kjs/JSType.h>
-#include <kjs/JSGlobalObject.h>
-#include <kjs/internal.h>
-#include <kjs/operations.h>
-#include <kjs/protect.h>
-#include <kjs/ustring.h>
-#include <kjs/value.h>
+#include <runtime/JSGlobalObject.h>
+#include <runtime/JSString.h>
+#include <runtime/Operations.h>
+#include <runtime/Protect.h>
+#include <runtime/UString.h>
+#include <runtime/JSValue.h>
 
 #include <wtf/Assertions.h>
 
@@ -45,69 +43,64 @@
 
 JSType JSValueGetType(JSContextRef, JSValueRef value)
 {
-    KJS::JSValue* jsValue = toJS(value);
-    switch (jsValue->type()) {
-        case KJS::UndefinedType:
-            return kJSTypeUndefined;
-        case KJS::NullType:
-            return kJSTypeNull;
-        case KJS::BooleanType:
-            return kJSTypeBoolean;
-        case KJS::NumberType:
-            return kJSTypeNumber;
-        case KJS::StringType:
-            return kJSTypeString;
-        case KJS::ObjectType:
-            return kJSTypeObject;
-        default:
-            ASSERT(!"JSValueGetType: unknown type code.\n");
-            return kJSTypeUndefined;
-    }
+    JSC::JSValuePtr jsValue = toJS(value);
+    if (jsValue.isUndefined())
+        return kJSTypeUndefined;
+    if (jsValue.isNull())
+        return kJSTypeNull;
+    if (jsValue.isBoolean())
+        return kJSTypeBoolean;
+    if (jsValue.isNumber())
+        return kJSTypeNumber;
+    if (jsValue.isString())
+        return kJSTypeString;
+    ASSERT(jsValue.isObject());
+    return kJSTypeObject;
 }
 
-using namespace KJS; // placed here to avoid conflict between KJS::JSType and JSType, above.
+using namespace JSC; // placed here to avoid conflict between JSC::JSType and JSType, above.
 
 bool JSValueIsUndefined(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isUndefined();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isUndefined();
 }
 
 bool JSValueIsNull(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isNull();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isNull();
 }
 
 bool JSValueIsBoolean(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isBoolean();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isBoolean();
 }
 
 bool JSValueIsNumber(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isNumber();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isNumber();
 }
 
 bool JSValueIsString(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isString();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isString();
 }
 
 bool JSValueIsObject(JSContextRef, JSValueRef value)
 {
-    JSValue* jsValue = toJS(value);
-    return jsValue->isObject();
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.isObject();
 }
 
 bool JSValueIsObjectOfClass(JSContextRef, JSValueRef value, JSClassRef jsClass)
 {
-    JSValue* jsValue = toJS(value);
+    JSValuePtr jsValue = toJS(value);
     
-    if (JSObject* o = jsValue->getObject()) {
+    if (JSObject* o = jsValue.getObject()) {
         if (o->inherits(&JSCallbackObject<JSGlobalObject>::info))
             return static_cast<JSCallbackObject<JSGlobalObject>*>(o)->inherits(jsClass);
         else if (o->inherits(&JSCallbackObject<JSObject>::info))
@@ -118,12 +111,14 @@ bool JSValueIsObjectOfClass(JSContextRef, JSValueRef value, JSClassRef jsClass)
 
 bool JSValueIsEqual(JSContextRef ctx, JSValueRef a, JSValueRef b, JSValueRef* exception)
 {
-    JSLock lock;
     ExecState* exec = toJS(ctx);
-    JSValue* jsA = toJS(a);
-    JSValue* jsB = toJS(b);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
 
-    bool result = equal(exec, jsA, jsB); // false if an exception is thrown
+    JSValuePtr jsA = toJS(a);
+    JSValuePtr jsB = toJS(b);
+
+    bool result = JSValuePtr::equal(exec, jsA, jsB); // false if an exception is thrown
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec->exception());
@@ -132,27 +127,26 @@ bool JSValueIsEqual(JSContextRef ctx, JSValueRef a, JSValueRef b, JSValueRef* ex
     return result;
 }
 
-bool JSValueIsStrictEqual(JSContextRef ctx, JSValueRef a, JSValueRef b)
+bool JSValueIsStrictEqual(JSContextRef, JSValueRef a, JSValueRef b)
 {
-    JSLock lock;
-    ExecState* exec = toJS(ctx);
-    JSValue* jsA = toJS(a);
-    JSValue* jsB = toJS(b);
+    JSValuePtr jsA = toJS(a);
+    JSValuePtr jsB = toJS(b);
     
-    bool result = strictEqual(exec, jsA, jsB); // can't throw because it doesn't perform value conversion
-    ASSERT(!exec->hadException());
+    bool result = JSValuePtr::strictEqual(jsA, jsB);
     return result;
 }
 
 bool JSValueIsInstanceOfConstructor(JSContextRef ctx, JSValueRef value, JSObjectRef constructor, JSValueRef* exception)
 {
-    JSLock lock;
     ExecState* exec = toJS(ctx);
-    JSValue* jsValue = toJS(value);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    JSValuePtr jsValue = toJS(value);
     JSObject* jsConstructor = toJS(constructor);
-    if (!jsConstructor->implementsHasInstance())
+    if (!jsConstructor->structure()->typeInfo().implementsHasInstance())
         return false;
-    bool result = jsConstructor->hasInstance(exec, jsValue); // false if an exception is thrown
+    bool result = jsConstructor->hasInstance(exec, jsValue, jsConstructor->get(exec, exec->propertyNames().prototype)); // false if an exception is thrown
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec->exception());
@@ -176,33 +170,40 @@ JSValueRef JSValueMakeBoolean(JSContextRef, bool value)
     return toRef(jsBoolean(value));
 }
 
-JSValueRef JSValueMakeNumber(JSContextRef, double value)
+JSValueRef JSValueMakeNumber(JSContextRef ctx, double value)
 {
-    JSLock lock;
-    return toRef(jsNumber(value));
+    ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    return toRef(jsNumber(exec, value));
 }
 
-JSValueRef JSValueMakeString(JSContextRef, JSStringRef string)
+JSValueRef JSValueMakeString(JSContextRef ctx, JSStringRef string)
 {
-    JSLock lock;
-    UString::Rep* rep = toJS(string);
-    return toRef(jsString(UString(rep)));
+    ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    return toRef(jsString(exec, string->ustring()));
 }
 
 bool JSValueToBoolean(JSContextRef ctx, JSValueRef value)
 {
     ExecState* exec = toJS(ctx);
-    JSValue* jsValue = toJS(value);
-    return jsValue->toBoolean(exec);
+    JSValuePtr jsValue = toJS(value);
+    return jsValue.toBoolean(exec);
 }
 
 double JSValueToNumber(JSContextRef ctx, JSValueRef value, JSValueRef* exception)
 {
-    JSLock lock;
-    JSValue* jsValue = toJS(value);
     ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
 
-    double number = jsValue->toNumber(exec);
+    JSValuePtr jsValue = toJS(value);
+
+    double number = jsValue.toNumber(exec);
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec->exception());
@@ -214,27 +215,31 @@ double JSValueToNumber(JSContextRef ctx, JSValueRef value, JSValueRef* exception
 
 JSStringRef JSValueToStringCopy(JSContextRef ctx, JSValueRef value, JSValueRef* exception)
 {
-    JSLock lock;
-    JSValue* jsValue = toJS(value);
     ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    JSValuePtr jsValue = toJS(value);
     
-    JSStringRef stringRef = toRef(jsValue->toString(exec).rep()->ref());
+    RefPtr<OpaqueJSString> stringRef(OpaqueJSString::create(jsValue.toString(exec)));
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec->exception());
         exec->clearException();
-        stringRef = 0;
+        stringRef.clear();
     }
-    return stringRef;
+    return stringRef.release().releaseRef();
 }
 
 JSObjectRef JSValueToObject(JSContextRef ctx, JSValueRef value, JSValueRef* exception)
 {
-    JSLock lock;
     ExecState* exec = toJS(ctx);
-    JSValue* jsValue = toJS(value);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    JSValuePtr jsValue = toJS(value);
     
-    JSObjectRef objectRef = toRef(jsValue->toObject(exec));
+    JSObjectRef objectRef = toRef(jsValue.toObject(exec));
     if (exec->hadException()) {
         if (exception)
             *exception = toRef(exec->exception());
@@ -244,16 +249,22 @@ JSObjectRef JSValueToObject(JSContextRef ctx, JSValueRef value, JSValueRef* exce
     return objectRef;
 }    
 
-void JSValueProtect(JSContextRef, JSValueRef value)
+void JSValueProtect(JSContextRef ctx, JSValueRef value)
 {
-    JSLock lock;
-    JSValue* jsValue = toJS(value);
+    ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    JSValuePtr jsValue = toJS(value);
     gcProtect(jsValue);
 }
 
-void JSValueUnprotect(JSContextRef, JSValueRef value)
+void JSValueUnprotect(JSContextRef ctx, JSValueRef value)
 {
-    JSLock lock;
-    JSValue* jsValue = toJS(value);
+    ExecState* exec = toJS(ctx);
+    exec->globalData().heap.registerThread();
+    JSLock lock(exec);
+
+    JSValuePtr jsValue = toJS(value);
     gcUnprotect(jsValue);
 }

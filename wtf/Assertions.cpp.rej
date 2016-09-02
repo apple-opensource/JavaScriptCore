@@ -1,0 +1,35 @@
+***************
+*** 63,88 ****
+          CFRelease(str);
+          CFRelease(cfFormat);
+      } else
+- #elif COMPILER(MSVC) && !PLATFORM(WIN_CE)
+-     if (IsDebuggerPresent()) {
+-         size_t size = 1024;
+- 
+-         do {
+-             char* buffer = (char*)malloc(size);
+- 
+-             if (buffer == NULL)
+-                 break;
+- 
+-             if (_vsnprintf(buffer, size, format, args) != -1) {
+-                 OutputDebugStringA(buffer);
+-                 free(buffer);
+-                 break;
+-             }
+- 
+-             free(buffer);
+-             size *= 2;
+-         } while (size > 1024);
+-     }
+      vfprintf(stderr, format, args);
+  }
+  
+--- 63,68 ----
+          CFRelease(str);
+          CFRelease(cfFormat);
+      } else
+      vfprintf(stderr, format, args);
+  }
+  
