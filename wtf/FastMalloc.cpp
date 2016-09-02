@@ -1338,9 +1338,7 @@ void TCMalloc_PageHeap::IncrementalScavenge(Length n) {
   scavenge_counter_ -= n;
   if (scavenge_counter_ >= 0) return;  // Not yet time to scavenge
 
-  // If there is nothing to release, wait for so many pages before
-  // scavenging again.  With 4K pages, this comes to 16MB of memory.
-  static const size_t kDefaultReleaseDelay = 1 << 8;
+  static const size_t kDefaultReleaseDelay = 64;
 
   // Find index of free list to scavenge
   size_t index = scavenge_index_ + 1;
@@ -1355,7 +1353,7 @@ void TCMalloc_PageHeap::IncrementalScavenge(Length n) {
                              static_cast<size_t>(s->length << kPageShift));
       DLL_Prepend(&slist->returned, s);
 
-      scavenge_counter_ = std::max<size_t>(64UL, std::min<size_t>(kDefaultReleaseDelay, kDefaultReleaseDelay - (free_pages_ / kDefaultReleaseDelay)));
+      scavenge_counter_ = std::max<size_t>(16UL, std::min<size_t>(kDefaultReleaseDelay, kDefaultReleaseDelay - (free_pages_ / kDefaultReleaseDelay)));
 
       if (index == kMaxPages && !DLL_IsEmpty(&slist->normal))
         scavenge_index_ = index - 1;

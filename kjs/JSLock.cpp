@@ -149,20 +149,19 @@ int JSLock::lockCount()
 extern "C" {
 #endif
 
-int JSLockDropAllLocks(void)
+static JSLock::DropAllLocks* sLockDropper = NULL;
+    
+void JSLockDropAllLocks(void)
 {
-    KJS::JSLock::lock();
-    int lockCount = KJS::JSLock::lockCount();
-    for (int i = 0; i < lockCount; i++)
-        KJS::JSLock::unlock();
-    return lockCount - 1;
+    ASSERT(sLockDropper == NULL);
+    sLockDropper = new JSLock::DropAllLocks();
 }
 
-void JSLockRecoverAllLocks(int lockCount)
+void JSLockRecoverAllLocks(void)
 {
-    ASSERT(KJS::JSLock::lockCount() == 0);
-    for (int i = 0; i < lockCount; i++)
-        KJS::JSLock::lock();
+    ASSERT(sLockDropper != NULL);
+    delete sLockDropper;
+    sLockDropper = NULL;
 }    
 
 static pthread_t javaScriptCollectionThread = 0;

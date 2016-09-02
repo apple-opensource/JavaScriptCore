@@ -8,8 +8,8 @@
 extern "C" { 
 #endif
 
-int JSLockDropAllLocks(void);
-void JSLockRecoverAllLocks(int lockCount);
+void JSLockDropAllLocks(void);
+void JSLockRecoverAllLocks(void);
 void JSSetJavaScriptCollectionThread (pthread_t thread);
 pthread_t JSJavaScriptCollectionThread (void);
 
