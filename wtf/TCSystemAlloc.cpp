@@ -55,12 +55,6 @@
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-#if PLATFORM(DARWIN) && defined(VM_MEMORY_TCMALLOC)
-static const int mmapFileDescriptor = VM_MAKE_TAG(VM_MEMORY_TCMALLOC);
-#else
-static const int mmapFileDescriptor = -1;
-#endif
-
 // Structure for discovering alignment
 union MemoryAligner {
   void*  p;
@@ -178,7 +172,7 @@ static void* TryMmap(size_t size, size_t *actual_size, size_t alignment) {
   void* result = mmap(NULL, size + extra,
                       PROT_READ | PROT_WRITE,
                       MAP_PRIVATE|MAP_ANONYMOUS,
-                      mmapFileDescriptor, 0);
+                      -1, 0);
   if (result == reinterpret_cast<void*>(MAP_FAILED)) {
     mmap_failure = true;
     return NULL;
@@ -430,7 +424,7 @@ void TCMalloc_SystemRelease(void* start, size_t length)
 #endif
 
 #if HAVE(MMAP)
-  void* newAddress = mmap(start, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, mmapFileDescriptor, 0);
+  void* newAddress = mmap(start, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
   // If the mmap failed then that's ok, we just won't return the memory to the system.
   ASSERT_UNUSED(newAddress, newAddress == start || newAddress == reinterpret_cast<void*>(MAP_FAILED));
   return;

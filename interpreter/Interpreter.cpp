@@ -343,7 +343,7 @@ NEVER_INLINE bool Interpreter::resolveGlobal(CallFrame* callFrame, Instruction* 
     PropertySlot slot(globalObject);
     if (globalObject->getPropertySlot(callFrame, ident, slot)) {
         JSValuePtr result = slot.getValue(callFrame, ident);
-        if (slot.isCacheable() && !globalObject->structure()->isDictionary()) {
+        if (slot.isCacheable() && !globalObject->structure()->isDictionary() && slot.slotBase() == globalObject) {
             if (vPC[4].u.structure)
                 vPC[4].u.structure->deref();
             globalObject->structure()->ref();
@@ -5338,7 +5338,7 @@ JSValueEncodedAsPointer* Interpreter::cti_op_resolve_global(STUB_ARGS)
     PropertySlot slot(globalObject);
     if (globalObject->getPropertySlot(callFrame, ident, slot)) {
         JSValuePtr result = slot.getValue(callFrame, ident);
-        if (slot.isCacheable() && !globalObject->structure()->isDictionary()) {
+        if (slot.isCacheable() && !globalObject->structure()->isDictionary() && slot.slotBase() == globalObject) {
             GlobalResolveInfo& globalResolveInfo = callFrame->codeBlock()->globalResolveInfo(globalResolveInfoIndex);
             if (globalResolveInfo.structure)
                 globalResolveInfo.structure->deref();

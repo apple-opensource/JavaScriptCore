@@ -107,7 +107,9 @@ namespace JSC {
         WillExecuteStatement
     };
 
-    enum { MaxReentryDepth = 128 };
+    // We use a smaller reentrancy limit on iPhone because of the high amount of
+    // stack space required on the web thread.
+    enum { MaxReentryDepth = 100 };
 
     class Interpreter {
         friend class JIT;
