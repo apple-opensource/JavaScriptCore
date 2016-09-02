@@ -378,10 +378,9 @@ Value StringProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &arg
     // That doesn't match the ECMA standard, but is needed for site compatibility.
     dpos = a0.isA(UndefinedType) ? 0 : a0.toInteger(exec);
     if (dpos >= 0 && dpos < len) // false for NaN
-      d = s[static_cast<int>(dpos)].unicode();
+      result = Number(s[static_cast<int>(dpos)].unicode());
     else
-      d = NaN;
-    result = Number(d);
+      result = Number(NaN);
     break;
   case Concat: {
     ListIterator it = args.begin();
@@ -403,8 +402,7 @@ Value StringProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &arg
       } else
         dpos = 0;
     }
-    d = s.find(u2, static_cast<int>(dpos));
-    result = Number(d);
+    result = Number(s.find(u2, static_cast<int>(dpos)));
     break;
   case LastIndexOf:
     u2 = a0.toString(exec);
@@ -419,8 +417,7 @@ Value StringProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &arg
       } else
         dpos = 0;
     }
-    d = s.rfind(u2, static_cast<int>(dpos));
-    result = Number(d);
+    result = Number(s.rfind(u2, static_cast<int>(dpos)));
     break;
   case Match:
   case Search: {
@@ -743,7 +740,7 @@ Value StringObjectFuncImp::call(ExecState *exec, Object &/*thisObj*/, const List
 {
   UString s;
   if (args.size()) {
-    UChar *buf = new UChar[args.size()];
+    UChar *buf = static_cast<UChar *>(kjs_fast_malloc(args.size() * sizeof(UChar)));
     UChar *p = buf;
     ListIterator it = args.begin();
     while (it != args.end()) {
