@@ -1643,6 +1643,11 @@ JSCell* DFG_OPERATION operationMakeRope2(ExecState* exec, JSString* left, JSStri
     VM& vm = exec->vm();
     NativeCallFrameTracer tracer(&vm, exec);
 
+    if (sumOverflows<int32_t>(left->length(), right->length())) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
+
     return JSRopeString::create(vm, left, right);
 }
 
@@ -1650,6 +1655,11 @@ JSCell* DFG_OPERATION operationMakeRope3(ExecState* exec, JSString* a, JSString*
 {
     VM& vm = exec->vm();
     NativeCallFrameTracer tracer(&vm, exec);
+
+    if (sumOverflows<int32_t>(a->length(), b->length(), c->length())) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
 
     return JSRopeString::create(vm, a, b, c);
 }
