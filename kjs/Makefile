@@ -18,7 +18,7 @@ SHELL = /bin/bash
 srcdir = .
 top_srcdir = ../..
 
-prefix = /Users/mjs/Work/symroots
+prefix = /Volumes/Data/deployment-symroots
 exec_prefix = ${prefix}
 
 bindir = ${exec_prefix}/bin
@@ -38,10 +38,10 @@ pkglibdir = $(libdir)/Labyrinth
 pkgincludedir = $(includedir)/Labyrinth
 top_builddir = ../..
 
-ACLOCAL = ${SHELL} /Users/mjs/Work/src/Labyrinth/missing --run aclocal-1.6
-AUTOCONF = ${SHELL} /Users/mjs/Work/src/Labyrinth/missing --run autoconf
-AUTOMAKE = ${SHELL} /Users/mjs/Work/src/Labyrinth/missing --run automake-1.6
-AUTOHEADER = ${SHELL} /Users/mjs/Work/src/Labyrinth/missing --run autoheader
+ACLOCAL = ${SHELL} /Volumes/Data/src/Labyrinth/missing --run aclocal-1.6
+AUTOCONF = ${SHELL} /Volumes/Data/src/Labyrinth/missing --run autoconf
+AUTOMAKE = ${SHELL} /Volumes/Data/src/Labyrinth/missing --run automake-1.6
+AUTOHEADER = ${SHELL} /Volumes/Data/src/Labyrinth/missing --run autoheader
 
 am__cd = CDPATH="$${ZSH_VERSION+.}$(PATH_SEPARATOR)" && cd
 INSTALL = /usr/bin/install -c
@@ -60,36 +60,36 @@ NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
 host_alias = 
-host_triplet = powerpc-apple-darwin7.2.0
+host_triplet = powerpc-apple-darwin8.0.0
 
 EXEEXT = 
 OBJEXT = o
 PATH_SEPARATOR = :
-AMTAR = ${SHELL} /Users/mjs/Work/src/Labyrinth/missing --run tar
+AMTAR = ${SHELL} /Volumes/Data/src/Labyrinth/missing --run tar
 AWK = awk
-BUILDSTYLE = Development
+BUILDSTYLE = Deployment
 CC = gcc
-CFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -Wbad-function-cast -Wmissing-declarations -Wnested-externs -g -DAPPLE_CHANGES -fno-common
+CFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -Wbad-function-cast -Wmissing-declarations -Wnested-externs -Os -DNDEBUG -DAPPLE_CHANGES -fno-common
 CPP = gcc -E
 CXX = g++
-CXXFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -g -DAPPLE_CHANGES -fno-common
+CXXFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -Os -DNDEBUG -DAPPLE_CHANGES -fno-common
 DEPDIR = .deps
-FOUNDATION_ROOT = /Users/mjs/Work/src/Foundation
+FOUNDATION_ROOT = /Volumes/Data/src/Foundation
 GPERF = gperf
 INSTALL_STRIP_PROGRAM = ${SHELL} $(install_sh) -c -s
 KWQ_INCLUDES = -I$(top_srcdir)/WebCore/kwq -I$(top_srcdir)/WebCore/ForwardingHeaders
 OBJC = gcc
-OBJCFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -Wbad-function-cast -Wmissing-declarations -Wnested-externs -g -DAPPLE_CHANGES -fno-common
+OBJCFLAGS = -Werror -Wall -W -Wcast-align -Wchar-subscripts -Wformat-security -Wmissing-format-attribute -Wmissing-prototypes -Wpointer-arith -Wwrite-strings -Wno-format-y2k -Wno-unused-parameter -Wbad-function-cast -Wmissing-declarations -Wnested-externs -Os -DNDEBUG -DAPPLE_CHANGES -fno-common
 PACKAGE = Labyrinth
 RANLIB = ranlib
 STRIP = 
 SYMROOTS = $(prefix)
-TESTS_SUBDIR = Tests
+TESTS_SUBDIR = 
 VERSION = not-versioned
 YACC = bison
 am__include = include
 am__quote = 
-install_sh = /Users/mjs/Work/src/Labyrinth/install-sh
+install_sh = /Volumes/Data/src/Labyrinth/install-sh
 YACCFLAGS = -d --output-file=grammar.cpp --file-prefix=grammar --name-prefix=kjsyy
 
 GRAMMAR_FILES = grammar.h grammar.cpp.h grammar.cpp
