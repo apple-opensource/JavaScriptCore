@@ -1,7 +1,7 @@
 // -*- c-basic-offset: 2 -*-
 /*
  *  This file is part of the KDE libraries
- *  Copyright (C) 2004 Apple Computer, Inc.
+ *  Copyright (C) 2005 Apple Computer, Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -21,39 +21,26 @@
  */
 
 
-#ifndef _KJS_PROTECTED_VALUES_H_
-#define _KJS_PROTECTED_VALUES_H_
+#ifndef _FAST_MALLOC_H_
+#define _FAST_MALLOC_H_
+
+// This is a copy of dlmalloc, a fast single-threaded malloc implementation.
+// JavaScriptCore is multi-threaded, but certain actions can only take place under
+// the global collector lock. Therefore, these functions should only be used
+// while holding the collector lock (this is true whenenever the interpreter is
+// executing or GC is taking place).
 
 namespace KJS {
-    class ValueImp;
 
-    class ProtectedValues {
-	struct KeyValue {
-	    ValueImp *key;
-	    int value;
-	};
+void *kjs_fast_malloc(size_t n);
+void *kjs_fast_calloc(size_t n_elements, size_t element_size);
+void kjs_fast_free(void* p);
+void *kjs_fast_realloc(void* p, size_t n);
 
-    public:
-	static void increaseProtectCount(ValueImp *key);
-	static void decreaseProtectCount(ValueImp *key);
+};
 
-	static int getProtectCount(ValueImp *key);
+#define KJS_FAST_ALLOCATED \
+void* operator new(size_t s) { return KJS::kjs_fast_malloc(s); } \
+void operator delete(void* p) { KJS::kjs_fast_free(p); }
 
-    private:
-	static void insert(ValueImp *key, int value);
-	static void expand();
-	static void shrink();
-	static void rehash(int newTableSize);
-	static unsigned computeHash(ValueImp *pointer);
-
-	// let the collector scan the table directly for protected values
-	friend class Collector;
-
-	static KeyValue *_table;
-	static int _tableSize;
-	static int _tableSizeMask;
-	static int _keyCount;
-    };
-}
-
-#endif
+#endif /* _FAST_MALLOC_H_ */
