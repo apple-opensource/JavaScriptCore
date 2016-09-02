@@ -1,0 +1,89 @@
+? diffs
+Index: JavaScriptCore.pbproj/project.pbxproj
+===================================================================
+RCS file: /local/home/cvs/Labyrinth/JavaScriptCore/JavaScriptCore.pbproj/project.pbxproj,v
+retrieving revision 1.138
+retrieving revision 1.138.4.1
+diff -u -r1.138 -r1.138.4.1
+--- project.pbxproj	2003/06/15 01:27:43	1.138
++++ project.pbxproj	2003/07/01 16:44:31	1.138.4.1
+@@ -11,9 +11,7 @@
+ 			buildSettings = {
+ 				COPY_PHASE_STRIP = NO;
+ 				DEBUG_CFLAGS = "";
+-				INSTALL_PATH = "@executable_path/../Frameworks";
+ 				OPTIMIZATION_CFLAGS = "-O0";
+-				OTHER_LDFLAGS = "-seg1addr $(LOCAL_SEG1_ADDR)";
+ 			};
+ 			isa = PBXBuildStyle;
+ 			name = Development;
+@@ -24,8 +22,6 @@
+ 			buildSettings = {
+ 				COPY_PHASE_STRIP = YES;
+ 				DEBUGGING_SYMBOLS = NO;
+-				INSTALL_PATH = "@executable_path/../Frameworks";
+-				OTHER_LDFLAGS = "-seg1addr $(LOCAL_SEG1_ADDR)";
+ 			};
+ 			isa = PBXBuildStyle;
+ 			name = Deployment;
+@@ -112,7 +108,6 @@
+ 				0867D69EFE84028FC02AAC07,
+ 				0867D69FFE84028FC02AAC07,
+ 				0867D6A0FE84028FC02AAC07,
+-				F692A8D8025563E401FF60F7,
+ 			);
+ 			buildSettings = {
+ 				COPY_PHASE_STRIP = NO;
+@@ -123,13 +118,12 @@
+ 				FRAMEWORK_VERSION = A;
+ 				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
+ 				HEADER_SEARCH_PATHS = "";
+-				INSTALL_PATH = "${SYSTEM_LIBRARY_DIR}/Frameworks/WebKit.framework/Frameworks";
++				INSTALL_PATH = /Library/Frameworks;
+ 				LIBRARY_SEARCH_PATHS = "";
+ 				LOCAL_SEG1_ADDR = 0x8000000;
+ 				MACOSX_DEPLOYMENT_TARGET = 10.2;
+ 				OPTIMIZATION_CFLAGS = "-Os";
+ 				OTHER_CFLAGS = "$(DEBUG_CFLAGS) -DAPPLE_CHANGES -DHAVE_CONFIG_H";
+-				OTHER_LDFLAGS = "-seg_addr_table_filename \"${SYSTEM_LIBRARY_DIR}/Frameworks/WebKit.framework/Frameworks/${PRODUCT_NAME}.framework/Versions/${FRAMEWORK_VERSION}/${PRODUCT_NAME}\" -umbrella WebKit -allowable_client JSGlue";
+ 				PRECOMPILE_PREFIX_HEADER = YES;
+ 				PREFIX_HEADER = JavaScriptCorePrefix.h;
+ 				PRODUCT_NAME = JavaScriptCore;
+@@ -142,7 +136,7 @@
+ 			);
+ 			isa = PBXFrameworkTarget;
+ 			name = JavaScriptCore;
+-			productInstallPath = "${SYSTEM_LIBRARY_DIR}/Frameworks/WebKit.framework/Frameworks";
++			productInstallPath = /Library/Frameworks;
+ 			productName = JavaScriptCore;
+ 			productReference = 034768E0FF38A50411DB9C8B;
+ 			productSettingsXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+@@ -853,8 +847,6 @@
+ 			buildSettings = {
+ 				COPY_PHASE_STRIP = NO;
+ 				DEBUG_CFLAGS = "";
+-				INSTALL_PATH = "@executable_path/../Frameworks";
+-				OTHER_LDFLAGS = "-seg1addr $(LOCAL_SEG1_ADDR)";
+ 			};
+ 			isa = PBXBuildStyle;
+ 			name = Mixed;
+@@ -1708,19 +1700,6 @@
+ 			isa = PBXBuildFile;
+ 			settings = {
+ 			};
+-		};
+-		F692A8D8025563E401FF60F7 = {
+-			buildActionMask = 2147483647;
+-			files = (
+-			);
+-			generatedFileNames = (
+-			);
+-			isa = PBXShellScriptBuildPhase;
+-			neededFileNames = (
+-			);
+-			runOnlyForDeploymentPostprocessing = 0;
+-			shellPath = /bin/sh;
+-			shellScript = "if [ -f ../Tools/Scripts/embed-into-alex ]; then sh ../Tools/Scripts/embed-into-alex; fi";
+ 		};
+ 	};
+ 	rootObject = 0867D690FE84028FC02AAC07;
