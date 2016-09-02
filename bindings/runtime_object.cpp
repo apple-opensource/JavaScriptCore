@@ -57,25 +57,28 @@ RuntimeObjectImp::RuntimeObjectImp(Bindings::Instance *i, bool oi) : ObjectImp (
 {
     ownsInstance = oi;
     instance = i;
-    _initializeClassInfoFromInstance();
 }
 
 Value RuntimeObjectImp::get(ExecState *exec, const Identifier &propertyName) const
 {
     instance->begin();
     
-    // See if the instance have a field with the specified name.
-    Field *aField = instance->getClass()->fieldNamed(propertyName.ascii());
-    if (aField) {
-        return instance->getValueOfField (aField); 
-    }
+    Class *aClass = instance->getClass();
     
-    // Now check if a method with specified name exists, if so return a function object for
-    // that method.
-    MethodList *methodList = instance->getClass()->methodsNamed(propertyName.ascii());
-    if (methodList) {
-        instance->end();
-        return Object (new RuntimeMethodImp(exec, propertyName, methodList));
+    if (aClass) {
+        // See if the instance have a field with the specified name.
+        Field *aField = aClass->fieldNamed(propertyName.ascii());
+        if (aField) {
+            return instance->getValueOfField (exec, aField); 
+        }
+        
+        // Now check if a method with specified name exists, if so return a function object for
+        // that method.
+        MethodList methodList = aClass->methodsNamed(propertyName.ascii());
+        if (methodList.length() > 0) {
+            instance->end();
+            return Object (new RuntimeMethodImp(exec, propertyName, methodList));
+        }
     }
     
     instance->end();
@@ -119,11 +122,11 @@ bool RuntimeObjectImp::hasProperty(ExecState *exec,
         return true;
     }
         
-    MethodList *methodList = instance->getClass()->methodsNamed(propertyName.ascii());
+    MethodList methodList = instance->getClass()->methodsNamed(propertyName.ascii());
 
     instance->end();
 
-    if (methodList)
+    if (methodList.length() > 0)
         return true;
         
     return false;
@@ -147,8 +150,3 @@ Value RuntimeObjectImp::defaultValue(ExecState *exec, Type hint) const
     return aValue;
 }
     
-void RuntimeObjectImp::_initializeClassInfoFromInstance()
-{
-    if (!instance)
-        return;
-}

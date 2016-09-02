@@ -126,7 +126,7 @@ Value MathObjectImp::getValueProperty(ExecState *, int token) const
 
 MathFuncImp::MathFuncImp(ExecState *exec, int i, int l)
   : InternalFunctionImp(
-    static_cast<FunctionPrototypeImp*>(exec->interpreter()->builtinFunctionPrototype().imp())
+    static_cast<FunctionPrototypeImp*>(exec->lexicalInterpreter()->builtinFunctionPrototype().imp())
     ), id(i)
 {
   Value protect(this);
@@ -233,14 +233,7 @@ Value MathFuncImp::call(ExecState *exec, Object &/*thisObj*/, const List &args)
     result = result / RAND_MAX;
     break;
   case MathObjectImp::Round:
-    if (isNaN(arg))
-      result = arg;
-    else if (isInf(arg) || isInf(-arg))
-      result = arg;
-    else if (arg == -0.5)
-      result = 0;
-    else
-      result = (double)(arg >= 0.0 ? int(arg + 0.5) : int(arg - 0.5));
+    result = ::floor(arg + 0.5);
     break;
   case MathObjectImp::Sin:
     result = ::sin(arg);

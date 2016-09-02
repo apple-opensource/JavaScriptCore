@@ -42,37 +42,16 @@ namespace Bindings
 class JavaString
 {
 public:
-    JavaString () : _characters(0), _uchars(0), _size(0) {};
+    JavaString () {};
     
     void _commonInit (JNIEnv *e, jstring s)
     {
-        // We could be more efficient:  only create
-        // _characters from _uchars on demand.  Maybe just
-        // use a UString?
-        _size = e->GetStringLength (s);
-        const char *c = getCharactersFromJStringInEnv (e, s);
-        _characters = strdup(c);
-        releaseCharactersForJStringInEnv (e, s, c);
+        int _size = e->GetStringLength (s);
         const jchar *uc = getUCharactersFromJStringInEnv (e, s);
-        _uchars = (jchar *)malloc (sizeof(jchar)*_size);
-        memcpy (_uchars,uc,_size*sizeof(jchar));
+        _ustring = UString((UChar *)uc,_size);
         releaseUCharactersForJStringInEnv (e, s, uc);
     }
     
-    void _commonCopy(const JavaString &other) 
-    {
-        _size = other._size;
-        _characters = strdup (other._characters);
-        _uchars = (jchar *)malloc (sizeof(jchar)*_size);
-        memcpy (_uchars,other._uchars,_size*sizeof(jchar));
-    }
-
-    void _commonDelete() 
-    {
-        free ((void *)_characters);
-        free ((void *)_uchars);
-    }
-
     JavaString (JNIEnv *e, jstring s) {
         _commonInit (e, s);
     }
@@ -81,37 +60,19 @@ public:
         _commonInit (getJNIEnv(), s);
     }
     
-    ~JavaString () {
-        _commonDelete();
+    const char *UTF8String() const { 
+        if (_utf8String.c_str() == 0)
+            _utf8String = _ustring.UTF8String();
+        return _utf8String.c_str();
     }
-
-    JavaString(const JavaString &other)
-    {
-        _commonCopy(other);
-    }
-
-    JavaString &operator=(const JavaString &other)
-    {
-        if (this == &other)
-            return *this;
-    
-        _commonDelete();
-        _commonCopy(other);
-        
-        return *this;
-    }
-
-    const char *UTF8String() const { return _characters; }
-    const jchar *uchars() const { return _uchars; }
-    int length() const { return _size; }
-    KJS::UString ustring() const { return KJS::UString ((const KJS::UChar *)uchars(),length()); }
+    const jchar *uchars() const { return (const jchar *)_ustring.data(); }
+    int length() const { return _ustring.size(); }
+    KJS::UString ustring() const { return _ustring; }
     
 private:
-    const char *_characters;
-    jchar *_uchars;
-    int _size;
+    UString _ustring;
+    mutable CString _utf8String;
 };
-
 
 class JavaParameter : public Parameter
 {
@@ -185,7 +146,6 @@ public:
         return *this;
     }
 
-    virtual KJS::Value value() const { return KJS::Value(0); }
     virtual Parameter *parameterAt(long i) const { return &_parameters[i]; };
     virtual long numParameters() const { return _numParameters; };
     
@@ -221,7 +181,7 @@ public:
         return *this;
     }
     
-    virtual KJS::Value valueFromInstance(const Instance *instance) const;
+    virtual KJS::Value valueFromInstance(KJS::ExecState *exec, const Instance *instance) const;
     virtual void setValueToInstance(KJS::ExecState *exec, const Instance *instance, const KJS::Value &aValue) const;
     
     virtual const char *name() const { return _name.UTF8String(); }
@@ -281,9 +241,8 @@ public:
         return *this;
     };
 
-    virtual KJS::Value value() const { return KJS::Value(0); }
     virtual const char *name() const { return _name.UTF8String(); };
-    virtual RuntimeType returnType() const { return _returnType.UTF8String(); };
+    RuntimeType returnType() const { return _returnType.UTF8String(); };
     virtual Parameter *parameterAt(long i) const { return &_parameters[i]; };
     virtual long numParameters() const { return _numParameters; };
     
@@ -325,7 +284,7 @@ public:
     };
 
     virtual void setValueAt(KJS::ExecState *exec, unsigned int index, const KJS::Value &aValue) const;
-    virtual KJS::Value valueAt(unsigned int index) const;
+    virtual KJS::Value valueAt(KJS::ExecState *exec, unsigned int index) const;
     virtual unsigned int getLength() const;
     
     virtual ~JavaArray();

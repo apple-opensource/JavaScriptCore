@@ -41,6 +41,13 @@
 #include <math.h>
 #include "dtoa.h"
 
+#if APPLE_CHANGES
+// malloc_good_size is not prototyped anywhere!
+extern "C" {
+  size_t malloc_good_size(size_t size);
+}
+#endif
+
 namespace KJS {
 
 extern const double NaN;
@@ -64,8 +71,13 @@ CString::CString(const char *c, int len)
 CString::CString(const CString &b)
 {
   length = b.length;
-  data = new char[length+1];
-  memcpy(data, b.data, length + 1);
+  if (length > 0 && b.data) {
+    data = new char[length+1];
+    memcpy(data, b.data, length + 1);
+  }
+  else {
+    data = 0;
+  }
 }
 
 CString::~CString()
@@ -109,8 +121,13 @@ CString &CString::operator=(const CString &str)
   if (data)
     delete [] data;
   length = str.length;
-  data = new char[length + 1];
-  memcpy(data, str.data, length + 1);
+  if (length > 0 && str.data) {
+    data = new char[length + 1];
+    memcpy(data, str.data, length + 1);
+  }
+  else {
+    data = 0;
+  }
 
   return *this;
 }
@@ -121,8 +138,8 @@ bool KJS::operator==(const KJS::CString& c1, const KJS::CString& c2)
   return len == c2.size() && (len == 0 || memcmp(c1.c_str(), c2.c_str(), len) == 0);
 }
 
-UString::Rep UString::Rep::null = { 0, 0, 0, 1, 1 };
-UString::Rep UString::Rep::empty = { 0, 0, 0, 1, 1 };
+UString::Rep UString::Rep::null = { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+UString::Rep UString::Rep::empty = { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
 const int normalStatBufferSize = 4096;
 static char *statBuffer = 0;
 static int statBufferSize = 0;
@@ -148,7 +165,7 @@ UCharReference& UCharReference::operator=(UChar c)
 {
   str->detach();
   if (offset < str->rep->len)
-    *(str->rep->dat + offset) = c;
+    *(str->rep->data() + offset) = c;
   /* TODO: lengthen string ? */
   return *this;
 }
@@ -156,7 +173,7 @@ UCharReference& UCharReference::operator=(UChar c)
 UChar& UCharReference::ref() const
 {
   if (offset < str->rep->len)
-    return *(str->rep->dat + offset);
+    return *(str->rep->data() + offset);
   else {
     static UChar callerBetterNotModifyThis('\0');
     return callerBetterNotModifyThis;
@@ -166,19 +183,58 @@ UChar& UCharReference::ref() const
 UString::Rep *UString::Rep::create(UChar *d, int l)
 {
   Rep *r = new Rep;
-  r->dat = d;
+  r->offset = 0;
   r->len = l;
-  r->capacity = l;
   r->rc = 1;
   r->_hash = 0;
+  r->isIdentifier = 0;
+  r->baseString = 0;
+  r->buf = d;
+  r->usedCapacity = l;
+  r->capacity = l;
+  r->usedPreCapacity = 0;
+  r->preCapacity = 0;
+  return r;
+}
+
+UString::Rep *UString::Rep::create(Rep *base, int offset, int length)
+{
+  assert(base);
+
+  int baseOffset = base->offset;
+
+  if (base->baseString) {
+    base = base->baseString;
+  }
+
+  assert(-(offset + baseOffset) <= base->usedPreCapacity);
+  assert(offset + baseOffset + length <= base->usedCapacity);
+
+  Rep *r = new Rep;
+  r->offset = baseOffset + offset;
+  r->len = length;
+  r->rc = 1;
+  r->_hash = 0;
+  r->isIdentifier = 0;
+  r->baseString = base;
+  base->ref();
+  r->buf = 0;
+  r->usedCapacity = 0;
+  r->capacity = 0;
+  r->usedPreCapacity = 0;
+  r->preCapacity = 0;
   return r;
 }
 
 void UString::Rep::destroy()
 {
-  if (capacity == capacityForIdentifier)
+  if (isIdentifier)
     Identifier::remove(this);
-  delete [] dat;
+  if (baseString) {
+    baseString->deref();
+  } else {
+    free(buf);
+  }
   delete this;
 }
 
@@ -255,6 +311,61 @@ unsigned UString::Rep::computeHash(const char *s)
     return h;
 }
 
+// put these early so they can be inlined
+inline int UString::expandedSize(int size, int otherSize) const
+{
+  int s = (size * 11 / 10) + 1 + otherSize;
+#if APPLE_CHANGES
+  s = malloc_good_size(s * sizeof(UChar)) / sizeof(UChar);
+#endif
+  return s;
+}
+
+inline int UString::usedCapacity() const
+{
+  return rep->baseString ? rep->baseString->usedCapacity : rep->usedCapacity;
+}
+
+inline int UString::usedPreCapacity() const
+{
+  return rep->baseString ? rep->baseString->usedPreCapacity : rep->usedPreCapacity;
+}
+
+void UString::expandCapacity(int requiredLength)
+{
+  Rep *r = rep->baseString ? rep->baseString : rep;
+
+  if (requiredLength > r->capacity) {
+    int newCapacity = expandedSize(requiredLength, r->preCapacity);
+    r->buf = static_cast<UChar *>(realloc(r->buf, newCapacity * sizeof(UChar)));
+    r->capacity = newCapacity - r->preCapacity;
+  }
+  if (requiredLength > r->usedCapacity) {
+    r->usedCapacity = requiredLength;
+  }
+}
+
+void UString::expandPreCapacity(int requiredPreCap)
+{
+  Rep *r = rep->baseString ? rep->baseString : rep;
+
+  if (requiredPreCap > r->preCapacity) {
+    int newCapacity = expandedSize(requiredPreCap, r->capacity);
+    int delta = newCapacity - r->capacity - r->preCapacity;
+
+    UChar *newBuf = static_cast<UChar *>(malloc(newCapacity * sizeof(UChar)));
+    memcpy(newBuf + delta, r->buf, (r->capacity + r->preCapacity) * sizeof(UChar));
+    free(r->buf);
+    r->buf = newBuf;
+
+    r->preCapacity = newCapacity - r->capacity;
+  }
+  if (requiredPreCap > r->usedPreCapacity) {
+    r->usedPreCapacity = requiredPreCap;
+  }
+}
+
+
 UString::UString()
 {
   attach(&Rep::null);
@@ -262,7 +373,7 @@ UString::UString()
 
 UString::UString(char c)
 {
-    UChar *d = new UChar[1];
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar)));
     d[0] = c;
     rep = Rep::create(d, 1);
 }
@@ -278,7 +389,7 @@ UString::UString(const char *c)
     attach(&Rep::empty);
     return;
   }
-  UChar *d = new UChar[length];
+  UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * length));
   for (int i = 0; i < length; i++)
     d[i].uc = c[i];
   rep = Rep::create(d, length);
@@ -290,7 +401,7 @@ UString::UString(const UChar *c, int length)
     attach(&Rep::empty);
     return;
   }
-  UChar *d = new UChar[length];
+  UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) *length));
   memcpy(d, c, length * sizeof(UChar));
   rep = Rep::create(d, length);
 }
@@ -303,7 +414,7 @@ UString::UString(UChar *c, int length, bool copy)
   }
   UChar *d;
   if (copy) {
-    d = new UChar[length];
+    d = static_cast<UChar *>(malloc(sizeof(UChar) * length));
     memcpy(d, c, length * sizeof(UChar));
   } else
     d = c;
@@ -313,22 +424,52 @@ UString::UString(UChar *c, int length, bool copy)
 UString::UString(const UString &a, const UString &b)
 {
   int aSize = a.size();
+  int aOffset = a.rep->offset;
   int bSize = b.size();
+  int bOffset = b.rep->offset;
   int length = aSize + bSize;
-  if (length == 0) {
-    attach(&Rep::empty);
-    return;
+
+  // possible cases:
+ 
+  if (aSize == 0) {
+    // a is empty
+    attach(b.rep);
+  } else if (bSize == 0) {
+    // b is empty
+    attach(a.rep);
+  } else if (aOffset + aSize == a.usedCapacity() && 4 * aSize >= bSize &&
+	     (-bOffset != b.usedPreCapacity() || aSize >= bSize)) {
+    // - a reaches the end of its buffer so it qualifies for shared append
+    // - also, it's at least a quarter the length of b - appending to a much shorter
+    //   string does more harm than good
+    // - however, if b qualifies for prepend and is longer than a, we'd rather prepend
+    UString x(a);
+    x.expandCapacity(aOffset + length);
+    memcpy(const_cast<UChar *>(a.data() + aSize), b.data(), bSize * sizeof(UChar));
+    rep = Rep::create(a.rep, 0, length);
+  } else if (-bOffset == b.usedPreCapacity() && 4 * bSize >= aSize) {
+    // - b reaches the beginning of its buffer so it qualifies for shared prepend
+    // - also, it's at least a quarter the length of a - prepending to a much shorter
+    //   string does more harm than good
+    UString y(b);
+    y.expandPreCapacity(-bOffset + aSize);
+    memcpy(const_cast<UChar *>(b.data() - aSize), a.data(), aSize * sizeof(UChar));
+    rep = Rep::create(b.rep, -aSize, length);
+  } else {
+    // a does not qualify for append, and b does not qualify for prepend, gotta make a whole new string
+    int newCapacity = expandedSize(length, 0);
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * newCapacity));
+    memcpy(d, a.data(), aSize * sizeof(UChar));
+    memcpy(d + aSize, b.data(), bSize * sizeof(UChar));
+    rep = Rep::create(d, length);
+    rep->capacity = newCapacity;
   }
-  UChar *d = new UChar[length];
-  memcpy(d, a.data(), aSize * sizeof(UChar));
-  memcpy(d + aSize, b.data(), bSize * sizeof(UChar));
-  rep = Rep::create(d, length);
 }
 
 const UString &UString::null()
 {
-    static UString n;
-    return n;
+  static UString n;
+  return n;
 }
 
 UString UString::from(int i)
@@ -454,70 +595,128 @@ UString UString::from(double d)
 
 UString &UString::append(const UString &t)
 {
-  int l = size();
-  int tLen = t.size();
-  int newLen = l + tLen;
-  if (rep->rc == 1 && newLen <= rep->capacity) {
-    memcpy(rep->dat+l, t.data(), tLen * sizeof(UChar));
-    rep->len = newLen;
+  int thisSize = size();
+  int thisOffset = rep->offset;
+  int tSize = t.size();
+  int length = thisSize + tSize;
+
+  // possible cases:
+  if (thisSize == 0) {
+    // this is empty
+    *this = t;
+  } else if (tSize == 0) {
+    // t is empty
+  } else if (!rep->baseString && rep->rc == 1) {
+    // this is direct and has refcount of 1 (so we can just alter it directly)
+    expandCapacity(thisOffset + length);
+    memcpy(const_cast<UChar *>(data() + thisSize), t.data(), tSize * sizeof(UChar));
+    rep->len = length;
     rep->_hash = 0;
-    return *this;
+  } else if (thisOffset + thisSize == usedCapacity()) {
+    // this reaches the end of the buffer - extend it
+    expandCapacity(length);
+    memcpy(const_cast<UChar *>(data() + thisSize), t.data(), tSize * sizeof(UChar));
+    Rep *newRep = Rep::create(rep, 0, length);
+    release();
+    rep = newRep;
+  } else {
+    // this is shared with someone using more capacity, gotta make a whole new string
+    int newCapacity = expandedSize(length, 0);
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * newCapacity));
+    memcpy(d, data(), thisSize * sizeof(UChar));
+    memcpy(const_cast<UChar *>(d + thisSize), t.data(), tSize * sizeof(UChar));
+    release();
+    rep = Rep::create(d, length);
+    rep->capacity = newCapacity;
   }
-  
-  int newCapacity = (newLen * 3 + 1) / 2;
-  UChar *n = new UChar[newCapacity];
-  memcpy(n, data(), l * sizeof(UChar));
-  memcpy(n+l, t.data(), tLen * sizeof(UChar));
-  release();
-  rep = Rep::create(n, newLen);
-  rep->capacity = newCapacity;
 
   return *this;
 }
 
 UString &UString::append(const char *t)
 {
-  int l = size();
-  int tLen = strlen(t);
-  int newLen = l + tLen;
-  if (rep->rc == 1 && newLen <= rep->capacity) {
-    for (int i = 0; i < tLen; ++i)
-      rep->dat[l+i] = t[i];
-    rep->len = newLen;
+  int thisSize = size();
+  int thisOffset = rep->offset;
+  int tSize = strlen(t);
+  int length = thisSize + tSize;
+
+  // possible cases:
+  if (thisSize == 0) {
+    // this is empty
+    *this = t;
+  } else if (tSize == 0) {
+    // t is empty, we'll just return *this below.
+  } else if (!rep->baseString && rep->rc == 1) {
+    // this is direct and has refcount of 1 (so we can just alter it directly)
+    expandCapacity(thisOffset + length);
+    UChar *d = const_cast<UChar *>(data());
+    for (int i = 0; i < tSize; ++i)
+      d[thisSize+i] = t[i];
+    rep->len = length;
     rep->_hash = 0;
-    return *this;
+  } else if (thisOffset + thisSize == usedCapacity()) {
+    // this string reaches the end of the buffer - extend it
+    expandCapacity(thisOffset + length);
+    UChar *d = const_cast<UChar *>(data());
+    for (int i = 0; i < tSize; ++i)
+      d[thisSize+i] = t[i];
+    Rep *newRep = Rep::create(rep, 0, length);
+    release();
+    rep = newRep;
+  } else {
+    // this is shared with someone using more capacity, gotta make a whole new string
+    int newCapacity = expandedSize(length, 0);
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * newCapacity));
+    memcpy(d, data(), thisSize * sizeof(UChar));
+    for (int i = 0; i < tSize; ++i)
+      d[thisSize+i] = t[i];
+    release();
+    rep = Rep::create(d, length);
+    rep->capacity = newCapacity;
   }
-  
-  int newCapacity = (newLen * 3 + 1) / 2;
-  UChar *n = new UChar[newCapacity];
-  memcpy(n, data(), l * sizeof(UChar));
-  for (int i = 0; i < tLen; ++i)
-    n[l+i] = t[i];
-  release();
-  rep = Rep::create(n, newLen);
-  rep->capacity = newCapacity;
 
   return *this;
 }
 
 UString &UString::append(unsigned short c)
 {
-  int l = size();
-  int newLen = l + 1;
-  if (rep->rc == 1 && newLen <= rep->capacity) {
-    rep->dat[l] = c;
-    rep->len = newLen;
+  int thisOffset = rep->offset;
+  int length = size();
+
+  // possible cases:
+  if (length == 0) {
+    // this is empty - must make a new rep because we don't want to pollute the shared empty one 
+    int newCapacity = expandedSize(1, 0);
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * newCapacity));
+    d[0] = c;
+    release();
+    rep = Rep::create(d, 1);
+    rep->capacity = newCapacity;
+  } else if (!rep->baseString && rep->rc == 1) {
+    // this is direct and has refcount of 1 (so we can just alter it directly)
+    expandCapacity(thisOffset + length + 1);
+    UChar *d = const_cast<UChar *>(data());
+    d[length] = c;
+    rep->len = length + 1;
     rep->_hash = 0;
-    return *this;
+  } else if (thisOffset + length == usedCapacity()) {
+    // this reaches the end of the string - extend it and share
+    expandCapacity(thisOffset + length + 1);
+    UChar *d = const_cast<UChar *>(data());
+    d[length] = c;
+    Rep *newRep = Rep::create(rep, 0, length + 1);
+    release();
+    rep = newRep;
+  } else {
+    // this is shared with someone using more capacity, gotta make a whole new string
+    int newCapacity = expandedSize((length + 1), 0);
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * newCapacity));
+    memcpy(d, data(), length * sizeof(UChar));
+    d[length] = c;
+    release();
+    rep = Rep::create(d, length);
+    rep->capacity = newCapacity;
   }
-  
-  int newCapacity = (newLen * 3 + 1) / 2;
-  UChar *n = new UChar[newCapacity];
-  memcpy(n, data(), l * sizeof(UChar));
-  n[l] = c;
-  release();
-  rep = Rep::create(n, newLen);
-  rep->capacity = newCapacity;
 
   return *this;
 }
@@ -568,12 +767,12 @@ UString &UString::operator=(const char *c)
 {
   int l = c ? strlen(c) : 0;
   UChar *d;
-  if (rep->rc == 1 && l <= rep->capacity) {
-    d = rep->dat;
+  if (rep->rc == 1 && l <= rep->capacity && !rep->baseString && rep->offset == 0 && rep->preCapacity == 0) {
+    d = rep->buf;
     rep->_hash = 0;
   } else {
     release();
-    d = new UChar[l];
+    d = static_cast<UChar *>(malloc(sizeof(UChar) * l));
     rep = Rep::create(d, l);
   }
   for (int i = 0; i < l; i++)
@@ -736,7 +935,7 @@ uint32_t UString::toStrictUInt32(bool *ok) const
   int len = rep->len;
   if (len == 0)
     return 0;
-  const UChar *p = rep->dat;
+  const UChar *p = rep->data();
   unsigned short c = p->unicode();
 
   // If the first digit is 0, only 0 itself is OK.
@@ -866,10 +1065,9 @@ UString UString::substr(int pos, int len) const
   if (pos + len >= (int) size())
     len = size() - pos;
 
-  UChar *tmp = new UChar[len];
-  memcpy(tmp, data()+pos, len * sizeof(UChar));
-  UString result(tmp, len);
-  delete [] tmp;
+  UString::Rep *newRep = Rep::create(rep, pos, len);
+  UString result(newRep);
+  newRep->deref();
 
   return result;
 }
@@ -882,9 +1080,9 @@ void UString::attach(Rep *r)
 
 void UString::detach()
 {
-  if (rep->rc > 1) {
+  if (rep->rc > 1 || rep->baseString) {
     int l = size();
-    UChar *n = new UChar[l];
+    UChar *n = static_cast<UChar *>(malloc(sizeof(UChar) * l));
     memcpy(n, data(), l * sizeof(UChar));
     release();
     rep = Rep::create(n, l);
@@ -901,7 +1099,7 @@ bool KJS::operator==(const UString& s1, const UString& s2)
   if (s1.rep->len != s2.rep->len)
     return false;
 
-  return (memcmp(s1.rep->dat, s2.rep->dat,
+  return (memcmp(s1.rep->data(), s2.rep->data(),
 		 s1.rep->len * sizeof(UChar)) == 0);
 }
 
@@ -964,13 +1162,8 @@ int KJS::compare(const UString& s1, const UString& s2)
   return (l1 < l2) ? 1 : -1;
 }
 
-// Given a first byte, gives the length of the UTF-8 sequence it begins.
-// Returns 0 for bytes that are not legal starts of UTF-8 sequences.
-// Only allows sequences of up to 4 bytes, since that works for all Unicode characters (U-00000000 to U-0010FFFF).
-int UTF8SequenceLength(char b0)
+inline int inlineUTF8SequenceLengthNonASCII(char b0)
 {
-  if ((b0 & 0x80) == 0)
-    return 1;
   if ((b0 & 0xC0) != 0xC0)
     return 0;
   if ((b0 & 0xE0) == 0xC0)
@@ -982,6 +1175,24 @@ int UTF8SequenceLength(char b0)
   return 0;
 }
 
+int UTF8SequenceLengthNonASCII(char b0)
+{
+  return inlineUTF8SequenceLengthNonASCII(b0);
+}
+
+inline int inlineUTF8SequenceLength(char b0)
+{
+  return (b0 & 0x80) == 0 ? 1 : UTF8SequenceLengthNonASCII(b0);
+}
+
+// Given a first byte, gives the length of the UTF-8 sequence it begins.
+// Returns 0 for bytes that are not legal starts of UTF-8 sequences.
+// Only allows sequences of up to 4 bytes, since that works for all Unicode characters (U-00000000 to U-0010FFFF).
+int UTF8SequenceLength(char b0)
+{
+  return (b0 & 0x80) == 0 ? 1 : inlineUTF8SequenceLengthNonASCII(b0);
+}
+
 // Takes a null-terminated C-style string with a UTF-8 sequence in it and converts it to a character.
 // Only allows Unicode characters (U-00000000 to U-0010FFFF).
 // Returns -1 if the sequence is not valid (including presence of extra bytes).
@@ -989,7 +1200,7 @@ int decodeUTF8Sequence(const char *sequence)
 {
   // Handle 0-byte sequences (never valid).
   const unsigned char b0 = sequence[0];
-  const int length = UTF8SequenceLength(b0);
+  const int length = inlineUTF8SequenceLength(b0);
   if (length == 0)
     return -1;
 
@@ -1126,14 +1337,70 @@ static StringOffset *createSortedOffsetsArray(const int offsets[], int numOffset
         sortedOffsets = new StringOffset [numOffsets];
     }
 
-    // Copy offsets.
-    for (int i = 0; i != numOffsets; ++i) {
-        sortedOffsets[i].offset = offsets[i];
-        sortedOffsets[i].locationInOffsetsArray = i;
-    }
+    // Copy offsets and sort them.
+    // (Since qsort showed up on profiles, hand code for numbers up to 3.)
 
-    // Sort them.
-    qsort(sortedOffsets, numOffsets, sizeof(StringOffset), compareStringOffsets);
+    switch (numOffsets) {
+        case 0:
+            break;
+        case 1:
+            sortedOffsets[0].offset = offsets[0];
+            sortedOffsets[0].locationInOffsetsArray = 0;
+            break;
+        case 2: {
+            if (offsets[0] <= offsets[1]) {
+                sortedOffsets[0].offset = offsets[0];
+                sortedOffsets[0].locationInOffsetsArray = 0;
+                sortedOffsets[1].offset = offsets[1];
+                sortedOffsets[1].locationInOffsetsArray = 1;
+            } else {
+                sortedOffsets[0].offset = offsets[1];
+                sortedOffsets[0].locationInOffsetsArray = 1;
+                sortedOffsets[1].offset = offsets[0];
+                sortedOffsets[1].locationInOffsetsArray = 0;
+            }
+            break;
+        }
+        case 3: {
+            int i0, i1, i2;
+            if (offsets[0] <= offsets[1]) {
+                if (offsets[0] <= offsets[2]) {
+                    i0 = 0;
+                    if (offsets[1] <= offsets[2]) {
+                        i1 = 1; i2 = 2;
+                    } else {
+                        i1 = 2; i2 = 1;
+                    }
+                } else {
+                    i0 = 2; i1 = 0; i2 = 1;
+                }
+            } else {
+                if (offsets[1] <= offsets[2]) {
+                    i0 = 1;
+                    if (offsets[0] <= offsets[2]) {
+                        i1 = 0; i2 = 2;
+                    } else {
+                        i1 = 2; i2 = 0;
+                    }
+                } else {
+                    i0 = 2; i1 = 1; i2 = 0;
+                }
+            }
+            sortedOffsets[0].offset = offsets[i0];
+            sortedOffsets[0].locationInOffsetsArray = i0;
+            sortedOffsets[1].offset = offsets[i1];
+            sortedOffsets[1].locationInOffsetsArray = i1;
+            sortedOffsets[2].offset = offsets[i2];
+            sortedOffsets[2].locationInOffsetsArray = i2;
+            break;
+        }
+        default:
+            for (int i = 0; i != numOffsets; ++i) {
+                sortedOffsets[i].offset = offsets[i];
+                sortedOffsets[i].locationInOffsetsArray = i;
+            }
+            qsort(sortedOffsets, numOffsets, sizeof(StringOffset), compareStringOffsets);
+    }
 
     return sortedOffsets;
 }
@@ -1154,7 +1421,7 @@ void convertUTF16OffsetsToUTF8Offsets(const char *s, int *offsets, int numOffset
         const int nextOffset = sortedOffsets[oi].offset;
         while (*p && UTF16Offset < nextOffset) {
             // Skip to the next character.
-            const int sequenceLength = UTF8SequenceLength(*p);
+            const int sequenceLength = inlineUTF8SequenceLength(*p);
             assert(sequenceLength >= 1 && sequenceLength <= 4);
             p += sequenceLength;
             // Characters that take a 4 byte sequence in UTF-8 take two bytes in UTF-16.
@@ -1185,7 +1452,7 @@ void convertUTF8OffsetsToUTF16Offsets(const char *s, int *offsets, int numOffset
         const int nextOffset = sortedOffsets[oi].offset;
         while (*p && (p - s) < nextOffset) {
             // Skip to the next character.
-            const int sequenceLength = UTF8SequenceLength(*p);
+            const int sequenceLength = inlineUTF8SequenceLength(*p);
             assert(sequenceLength >= 1 && sequenceLength <= 4);
             p += sequenceLength;
             // Characters that take a 4 byte sequence in UTF-8 take two bytes in UTF-16.

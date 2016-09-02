@@ -84,4 +84,21 @@ void ScopeChain::mark()
     }
 }
 
+ObjectImp *ScopeChain::bottom() const
+{
+    ScopeChainNode *last = 0;
+    for (ScopeChainNode *n = _node; n; n = n->next) {
+	if (!n->next) {
+	    last = n;
+	}
+    }
+    if (!last) {
+	return 0;
+    }
+
+    return last->object;
+}
+
+
+
 } // namespace KJS

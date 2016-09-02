@@ -26,6 +26,7 @@
 #define _RUNTIME_H_
 
 #include "list.h"
+#include "object.h"
 #include "value.h"
 
 namespace KJS 
@@ -36,10 +37,12 @@ namespace Bindings
 
 class Instance;
 class Method;
+class RootObject;
 
 // For now just use Java style type descriptors.
 typedef const char * RuntimeType;
 
+// FIXME:  Parameter should be removed from abstract runtime classes.
 class Parameter
 {
 public:
@@ -47,13 +50,14 @@ public:
     virtual ~Parameter() {};
 };
 
+// FIXME:  Constructor should be removed from abstract runtime classes
+// unless we want to support instantiation of runtime objects from
+// JavaScript.
 class Constructor
 {
 public:
     virtual Parameter *parameterAt(long i) const = 0;
     virtual long numParameters() const = 0;
-
-    virtual KJS::Value value() const = 0;
 
     virtual ~Constructor() {};
 };
@@ -64,7 +68,7 @@ public:
     virtual const char *name() const = 0;
     virtual RuntimeType type() const = 0;
 
-    virtual KJS::Value valueFromInstance(const Instance *instance) const = 0;
+    virtual KJS::Value valueFromInstance(KJS::ExecState *exec, const Instance *instance) const = 0;
     virtual void setValueToInstance(KJS::ExecState *exec, const Instance *instance, const KJS::Value &aValue) const = 0;
 
     virtual ~Field() {};
@@ -82,6 +86,9 @@ public:
     
     ~MethodList();
     
+    MethodList (const MethodList &other);
+    MethodList &operator=(const MethodList &other);
+
 private:
     Method **_methods;
     unsigned int _length;
@@ -92,12 +99,9 @@ class Method
 {
 public:
     virtual const char *name() const = 0;
-    virtual RuntimeType returnType() const = 0;
-    virtual Parameter *parameterAt(long i) const = 0;
+
     virtual long numParameters() const = 0;
-    
-    virtual KJS::Value value() const = 0;
-    
+        
     virtual ~Method() {};
 };
 
@@ -106,7 +110,7 @@ class Class
 public:
     virtual const char *name() const = 0;
     
-    virtual MethodList *methodsNamed(const char *name) const = 0;
+    virtual MethodList methodsNamed(const char *name) const = 0;
     
     virtual Constructor *constructorAt(long i) const = 0;
     virtual long numConstructors() const = 0;
@@ -116,15 +120,23 @@ public:
     virtual ~Class() {};
 };
 
+typedef void (*KJSDidExecuteFunctionPtr)(KJS::ExecState *exec, KJS::ObjectImp *rootObject);
+
 class Instance
 {
 public:
     typedef enum {
         JavaLanguage,
-        ObjectiveCLanguage
+        ObjectiveCLanguage,
+        CLanguage
     } BindingLanguage;
 
+    static void setDidExecuteFunction (KJSDidExecuteFunctionPtr func);
+    static KJSDidExecuteFunctionPtr didExecuteFunction ();
+    
     static Instance *createBindingForLanguageInstance (BindingLanguage language, void *instance);
+
+    static Object createRuntimeObject (BindingLanguage language, void *myInterface);
 
     // These functions are called before and after the main entry points into
     // the native implementations.  They can be used to establish and cleanup
@@ -134,10 +146,10 @@ public:
     
     virtual Class *getClass() const = 0;
     
-    virtual KJS::Value getValueOfField (const Field *aField) const;
+    virtual KJS::Value getValueOfField (KJS::ExecState *exec, const Field *aField) const;
     virtual void setValueOfField (KJS::ExecState *exec, const Field *aField, const KJS::Value &aValue) const;
     
-    virtual KJS::Value invokeMethod (KJS::ExecState *exec, const MethodList *method, const KJS::List &args) = 0;
+    virtual KJS::Value invokeMethod (KJS::ExecState *exec, const MethodList &method, const KJS::List &args) = 0;
     
     virtual KJS::Value defaultValue (KJS::Type hint) const = 0;
     
@@ -150,7 +162,7 @@ class Array
 {
 public:
     virtual void setValueAt(KJS::ExecState *exec, unsigned int index, const KJS::Value &aValue) const = 0;
-    virtual KJS::Value valueAt(unsigned int index) const = 0;
+    virtual KJS::Value valueAt(KJS::ExecState *exec, unsigned int index) const = 0;
     virtual unsigned int getLength() const = 0;
     virtual ~Array() {};
 };

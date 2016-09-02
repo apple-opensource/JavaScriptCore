@@ -16,8 +16,8 @@
  * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE COMPUTER, INC. OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
  * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-                                        * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-                                        * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
@@ -41,46 +41,6 @@ namespace KJS {
 namespace Bindings {
 
 class RootObject;
-
-typedef RootObject *(*FindRootObjectForNativeHandleFunctionPtr)(void *);
-
-class RootObject
-{
-public:
-    RootObject (const void *nativeHandle) : _nativeHandle(nativeHandle), _imp(0), _interpreter(0) {}
-    ~RootObject (){
-        _imp->deref();
-    }
-    
-    void setRootObjectImp (KJS::ObjectImp *i) { 
-        _imp = i;
-        _imp->ref();
-    }
-    
-    KJS::ObjectImp *rootObjectImp() const { return _imp; }
-    
-    void setInterpreter (KJS::Interpreter *i) { _interpreter = i; }
-    KJS::Interpreter *interpreter() const { return _interpreter; }
-
-    // Must be called from the thread that will be used to access JavaScript.
-    static void setFindRootObjectForNativeHandleFunction(FindRootObjectForNativeHandleFunctionPtr aFunc);
-    static FindRootObjectForNativeHandleFunctionPtr findRootObjectForNativeHandleFunction() {
-        return _findRootObjectForNativeHandleFunctionPtr;
-    }
-
-    static void removeAllJavaReferencesForRoot (Bindings::RootObject *root);
-    static CFRunLoopRef runLoop() { return _runLoop; }
-    static CFRunLoopSourceRef performJavaScriptSource() { return _performJavaScriptSource; }
-    
-private:
-    const void *_nativeHandle;
-    KJS::ObjectImp *_imp;
-    KJS::Interpreter *_interpreter;
-
-    static FindRootObjectForNativeHandleFunctionPtr _findRootObjectForNativeHandleFunctionPtr;
-    static CFRunLoopRef _runLoop;
-    static CFRunLoopSourceRef _performJavaScriptSource;
-};
 
 enum JSObjectCallType {
     CreateNative,
@@ -106,6 +66,7 @@ struct JSObjectCallContext
     CFRunLoopRef originatingLoop;
     jvalue result;
 };
+
 
 typedef struct JSObjectCallContext JSObjectCallContext;
 

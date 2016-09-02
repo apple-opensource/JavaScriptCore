@@ -101,9 +101,10 @@ void Lexer::globalClear()
 }
 #endif
 
-void Lexer::setCode(const UChar *c, unsigned int len)
+void Lexer::setCode(const UString &sourceURL, int startingLineNumber, const UChar *c, unsigned int len)
 {
-  yylineno = 1;
+  yylineno = 1 + startingLineNumber;
+  m_sourceURL = sourceURL;
   restrKeyword = false;
   delimited = false;
   eatNextIdentifier = false;
@@ -276,10 +277,7 @@ int Lexer::lex()
         state = InHexEscape;
       else if (current == 'u')
         state = InUnicodeEscape;
-      else if (isLineTerminator()) {
-        nextLine();
-        state = InString;
-      } else {
+      else {
         record16(singleEscape(current));
         state = InString;
       }

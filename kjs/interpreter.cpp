@@ -115,15 +115,20 @@ bool Interpreter::checkSyntax(const UString &code)
   return rep->checkSyntax(code);
 }
 
-Completion Interpreter::evaluate(const UString &code, const Value &thisV, const UString &filename)
+Completion Interpreter::evaluate(const UString &code, const Value &thisV, const UString &)
 {
-  Completion comp = rep->evaluate(code,thisV);
+  return evaluate(UString(), 0, code, thisV);
+}
+
+Completion Interpreter::evaluate(const UString &sourceURL, int startingLineNumber, const UString &code, const Value &thisV)
+{
+  Completion comp = rep->evaluate(code,thisV, sourceURL, startingLineNumber);
 
 #if APPLE_CHANGES
   if (shouldPrintExceptions() && comp.complType() == Throw) {
     lock();
     ExecState *exec = rep->globalExec();
-    char *f = strdup(filename.ascii());
+    char *f = strdup(sourceURL.ascii());
     const char *message = comp.value().toObject(exec).toString(exec).ascii();
     printf("%s:%s\n", f, message);
     free(f);
@@ -354,3 +359,19 @@ SavedBuiltins::~SavedBuiltins()
 
 void Interpreter::virtual_hook( int, void* )
 { /*BASE::virtual_hook( id, data );*/ }
+
+
+Interpreter *ExecState::lexicalInterpreter() const
+{
+  if (!_context) {
+    return dynamicInterpreter();
+  }
+
+  InterpreterImp *result = InterpreterImp::interpreterWithGlobalObject(_context->scopeChain().bottom());
+
+  if (!result) {
+    return dynamicInterpreter();
+  }
+
+  return result->interpreter();
+}

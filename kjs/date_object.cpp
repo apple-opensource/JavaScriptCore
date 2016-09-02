@@ -2,7 +2,7 @@
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2004 Apple Computer, Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -65,6 +65,7 @@ const time_t invalidDate = -1;
 // Originally, we wrote our own implementation that uses Core Foundation because of a performance problem in Mac OS X 10.2.
 // But we need to keep using this rather than the standard library functions because this handles a larger range of dates.
 
+#include <notify.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreServices/CoreServices.h>
 
@@ -117,6 +118,24 @@ static CFTimeZoneRef UTCTimeZone()
 
 static CFTimeZoneRef CopyLocalTimeZone()
 {
+    // Check for a time zone notification, and tell CoreFoundation to re-get the time zone if it happened.
+    // Some day, CoreFoundation may do this itself, but for now it needs our help.
+    static bool registered = false;
+    static int notificationToken;
+    if (!registered) {
+        uint32_t status = notify_register_check("com.apple.system.timezone", &notificationToken);
+        if (status == NOTIFY_STATUS_OK) {
+            registered = true;
+        }
+    }
+    if (registered) {
+        int notified;
+        uint32_t status = notify_check(notificationToken, &notified);
+        if (status == NOTIFY_STATUS_OK && notified) {
+            CFTimeZoneResetSystem();
+        }
+    }
+
     CFTimeZoneRef zone = CFTimeZoneCopyDefault();
     if (zone) {
         return zone;
@@ -325,7 +344,7 @@ Value DatePrototypeImp::get(ExecState *exec, const Identifier &propertyName) con
 
 DateProtoFuncImp::DateProtoFuncImp(ExecState *exec, int i, int len)
   : InternalFunctionImp(
-    static_cast<FunctionPrototypeImp*>(exec->interpreter()->builtinFunctionPrototype().imp())
+    static_cast<FunctionPrototypeImp*>(exec->lexicalInterpreter()->builtinFunctionPrototype().imp())
     ), id(abs(i)), utc(i<0)
   // We use a negative ID to denote the "UTC" variant.
 {
@@ -465,7 +484,7 @@ Value DateProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &args)
     break;
   case GetYear:
     // IE returns the full year even in getYear.
-    if ( exec->interpreter()->compatMode() == Interpreter::IECompat )
+    if ( exec->dynamicInterpreter()->compatMode() == Interpreter::IECompat )
       result = Number(1900 + t->tm_year);
     else
       result = Number(t->tm_year);
@@ -560,7 +579,7 @@ Value DateProtoFuncImp::call(ExecState *exec, Object &thisObj, const List &args)
   if (id == SetYear || id == SetMilliSeconds || id == SetSeconds ||
       id == SetMinutes || id == SetHours || id == SetDate ||
       id == SetMonth || id == SetFullYear ) {
-    time_t mktimeResult = mktime(t);
+    time_t mktimeResult = utc ? timegm(t) : mktime(t);
     if (mktimeResult == invalidDate)
       result = Number(NaN);
     else
@@ -661,7 +680,7 @@ Object DateObjectImp::construct(ExecState *exec, const List &args)
     }
   }
 
-  Object proto = exec->interpreter()->builtinDatePrototype();
+  Object proto = exec->lexicalInterpreter()->builtinDatePrototype();
   Object ret(new DateInstanceImp(proto.imp()));
   ret.setInternalValue(timeClip(value));
   return ret;

@@ -23,9 +23,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 #include <value.h>
+#include <interpreter.h>
 
-#include <runtime.h>
+#include <runtime_object.h>
 #include <jni_instance.h>
+#include <objc_instance.h>
+#include <c_instance.h>
 
 using namespace KJS;
 using namespace KJS::Bindings;
@@ -58,18 +61,62 @@ MethodList::~MethodList()
     delete [] _methods;
 }
 
+MethodList::MethodList (const MethodList &other) {
+    _length = other._length;
+    _methods = new Method *[_length];
+    if (_length > 0)
+        memcpy (_methods, other._methods, sizeof(Method *) * _length);
+}
+
+MethodList &MethodList::operator=(const MethodList &other)
+{
+    if (this == &other)
+        return *this;
+            
+    delete [] _methods;
+    
+    _length = other._length;
+    _methods = new Method *[_length];
+    if (_length > 0)
+        memcpy (_methods, other._methods, sizeof(Method *) * _length);
+
+    return *this;
+}
+
+
+static KJSDidExecuteFunctionPtr _DidExecuteFunction;
+
+void Instance::setDidExecuteFunction (KJSDidExecuteFunctionPtr func) { _DidExecuteFunction = func; }
+KJSDidExecuteFunctionPtr Instance::didExecuteFunction () { return _DidExecuteFunction; }
+
+Value Instance::getValueOfField (KJS::ExecState *exec, const Field *aField) const {  
+    return aField->valueFromInstance (exec, this);
+}
+
+void Instance::setValueOfField (KJS::ExecState *exec, const Field *aField, const Value &aValue) const {  
+    aField->setValueToInstance (exec, this, aValue);
+}
 
 Instance *Instance::createBindingForLanguageInstance (BindingLanguage language, void *instance)
 {
     if (language == Instance::JavaLanguage)
         return new Bindings::JavaInstance ((jobject)instance);
+    else if (language == Instance::ObjectiveCLanguage)
+        return new Bindings::ObjcInstance ((struct objc_object *)instance);
+
+    else if (language == Instance::CLanguage)
+        return new Bindings::CInstance ((NPObject *)instance);
+
     return 0;
 }
 
-Value Instance::getValueOfField (const Field *aField) const {  
-    return aField->valueFromInstance (this);
-}
-
-void Instance::setValueOfField (KJS::ExecState *exec, const Field *aField, const Value &aValue) const {  
-    return aField->setValueToInstance (exec, this, aValue);
+Object Instance::createRuntimeObject (BindingLanguage language, void *myInterface)
+{
+    Instance *interfaceObject = Instance::createBindingForLanguageInstance (language, (void *)myInterface);
+    
+    Interpreter::lock();
+    Object theObject(new RuntimeObjectImp(interfaceObject,true));
+    Interpreter::unlock();
+    
+    return theObject;
 }

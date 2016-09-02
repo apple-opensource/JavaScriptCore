@@ -293,7 +293,7 @@ Value ObjectImp::defaultValue(ExecState *exec, Type hint) const
 {
   if (hint != StringType && hint != NumberType) {
     /* Prefer String for Date objects */
-    if (_proto == exec->interpreter()->builtinDatePrototype().imp())
+    if (_proto == exec->lexicalInterpreter()->builtinDatePrototype().imp())
       hint = StringType;
     else
       hint = NumberType;
@@ -427,7 +427,9 @@ void ObjectImp::setInternalValue(const Value &v)
 
 void ObjectImp::setInternalValue(ValueImp *v)
 {
+#if !USE_CONSERVATIVE_GC
   v->setGcAllowed();
+#endif
   _internalValue = v;
 }
 
@@ -464,7 +466,9 @@ Object ObjectImp::toObject(ExecState */*exec*/) const
 
 void ObjectImp::putDirect(const Identifier &propertyName, ValueImp *value, int attr)
 {
+#if !USE_CONSERVATIVE_GC
     value->setGcAllowed();
+#endif
     _prop.put(propertyName, value, attr);
 }
 
@@ -488,31 +492,30 @@ const char * const errorNamesArr[] = {
 const char * const * const Error::errorNames = errorNamesArr;
 
 Object Error::create(ExecState *exec, ErrorType errtype, const char *message,
-                     int lineno, int sourceId)
+                     int lineno, int sourceId, const UString *sourceURL)
 {
   Object cons;
-
   switch (errtype) {
   case EvalError:
-    cons = exec->interpreter()->builtinEvalError();
+    cons = exec->lexicalInterpreter()->builtinEvalError();
     break;
   case RangeError:
-    cons = exec->interpreter()->builtinRangeError();
+    cons = exec->lexicalInterpreter()->builtinRangeError();
     break;
   case ReferenceError:
-    cons = exec->interpreter()->builtinReferenceError();
+    cons = exec->lexicalInterpreter()->builtinReferenceError();
     break;
   case SyntaxError:
-    cons = exec->interpreter()->builtinSyntaxError();
+    cons = exec->lexicalInterpreter()->builtinSyntaxError();
     break;
   case TypeError:
-    cons = exec->interpreter()->builtinTypeError();
+    cons = exec->lexicalInterpreter()->builtinTypeError();
     break;
   case URIError:
-    cons = exec->interpreter()->builtinURIError();
+    cons = exec->lexicalInterpreter()->builtinURIError();
     break;
   default:
-    cons = exec->interpreter()->builtinError();
+    cons = exec->lexicalInterpreter()->builtinError();
     break;
   }
 
@@ -527,6 +530,9 @@ Object Error::create(ExecState *exec, ErrorType errtype, const char *message,
   if (sourceId != -1)
     err.put(exec, "sourceId", Number(sourceId));
 
+  if(sourceURL)
+   err.put(exec,"sourceURL", String(*sourceURL));
+ 
   return err;
 
 /*
