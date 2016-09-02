@@ -59,14 +59,11 @@ namespace KJS  {
     ContextImp *_callingContext;
     FunctionImp *_function;
     const List *_arguments;
-    // because ContextImp is always allocated on the stack,
-    // there is no need to protect various pointers from conservative
-    // GC since they will be caught by the conservative sweep anyway!
-    Object activation;
+    ProtectedObject activation;
     
     ScopeChain scope;
-    Object variable;
-    Object thisVal;
+    ProtectedObject variable;
+    ProtectedObject thisVal;
 
     LabelStack ls;
     CodeType codeType;

@@ -23,7 +23,7 @@
 #include "reference.h"
 #include "internal.h"
 
-namespace KJS {
+using namespace KJS;
 
 // ------------------------------ Reference ------------------------------------
 
@@ -83,6 +83,10 @@ Reference Reference::makeValueReference(const Value& v)
   return valueRef;
 }
 
+Reference::Reference()
+{
+}
+
 Value Reference::getBase(ExecState *exec) const
 {
   if (baseIsValue) {
@@ -114,17 +118,16 @@ Value Reference::getValue(ExecState *exec) const
     return base;
   }
 
-  ValueImp *o = base.imp();
-  Type t = o ? o->dispatchType() : NullType;
+  Value o = getBase(exec);
 
-  if (t == NullType) {
+  if (o.isNull() || o.type() == NullType) {
     UString m = I18N_NOOP("Can't find variable: ") + getPropertyName(exec).ustring();
     Object err = Error::create(exec, ReferenceError, m.ascii());
     exec->setException(err);
     return err;
   }
 
-  if (t != ObjectType) {
+  if (o.type() != ObjectType) {
     UString m = I18N_NOOP("Base is not an object");
     Object err = Error::create(exec, ReferenceError, m.ascii());
     exec->setException(err);
@@ -132,14 +135,14 @@ Value Reference::getValue(ExecState *exec) const
   }
 
   if (propertyNameIsNumber)
-    return static_cast<ObjectImp*>(o)->get(exec, propertyNameAsNumber);
-  return static_cast<ObjectImp*>(o)->get(exec, prop);
+    return static_cast<ObjectImp*>(o.imp())->get(exec,propertyNameAsNumber);
+  return static_cast<ObjectImp*>(o.imp())->get(exec,prop);
 }
 
 void Reference::putValue(ExecState *exec, const Value &w)
 {
   if (baseIsValue) {
-    Object err = Error::create(exec, ReferenceError);
+    Object err = Error::create(exec,ReferenceError);
     exec->setException(err);
     return;
   }
@@ -147,16 +150,13 @@ void Reference::putValue(ExecState *exec, const Value &w)
 #ifdef KJS_VERBOSE
   printInfo(exec,(UString("setting property ")+getPropertyName(exec)).cstring().c_str(),w);
 #endif
-
-  ValueImp *o = base.imp();
-  Type t = o ? o->dispatchType() : NullType;
-
-  if (t == NullType)
-    o = exec->lexicalInterpreter()->globalObject().imp();
+  Value o = getBase(exec);
+  if (o.type() == NullType)
+    o = exec->lexicalInterpreter()->globalObject();
 
   if (propertyNameIsNumber)
-    return static_cast<ObjectImp*>(o)->put(exec, propertyNameAsNumber, w);
-  return static_cast<ObjectImp*>(o)->put(exec, prop, w);
+    return static_cast<ObjectImp*>(o.imp())->put(exec,propertyNameAsNumber, w);
+  return static_cast<ObjectImp*>(o.imp())->put(exec,prop, w);
 }
 
 bool Reference::deleteValue(ExecState *exec)
@@ -167,18 +167,20 @@ bool Reference::deleteValue(ExecState *exec)
     return false;
   }
 
-  ValueImp *o = base.imp();
-  Type t = o ? o->dispatchType() : NullType;
+  Value b = getBase(exec);
 
   // The spec doesn't mention what to do if the base is null... just return true
-  if (t != ObjectType) {
-    assert(t == NullType);
+  if (b.type() != ObjectType) {
+    assert(b.type() == NullType);
     return true;
   }
 
   if (propertyNameIsNumber)
-    return static_cast<ObjectImp*>(o)->deleteProperty(exec,propertyNameAsNumber);
-  return static_cast<ObjectImp*>(o)->deleteProperty(exec,prop);
+    return static_cast<ObjectImp*>(b.imp())->deleteProperty(exec,propertyNameAsNumber);
+  return static_cast<ObjectImp*>(b.imp())->deleteProperty(exec,prop);
 }
 
+bool Reference::isMutable()
+{ 
+  return !baseIsValue;
 }

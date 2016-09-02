@@ -120,8 +120,6 @@ namespace KJS {
         static const List &empty();
         
 	void mark() { if (_impBase->valueRefCount == 0) markValues(); }
-
-        static void markProtectedLists();
     private:
         ListImpBase *_impBase;
 	bool _needsMarking;
@@ -188,22 +186,6 @@ namespace KJS {
     inline ListIterator List::begin() const { return ListIterator(*this); }
     inline ListIterator List::end() const { return ListIterator(*this, size()); }
  
-    inline List &List::operator=(const List &b)
-    {
-        ListImpBase *bImpBase = b._impBase;
-        ++bImpBase->refCount;
-        deref();
-        _impBase = bImpBase;
-	if (!_needsMarking) {
-	    if (!_impBase->valueRefCount) {
-		refValues();
-	    }
-	    _impBase->valueRefCount++;
-	}
-
-        return *this;
-    }
-
- }; // namespace KJS
+}; // namespace KJS
 
 #endif // KJS_LIST_H

@@ -1,222 +1,71 @@
-=== JavaScriptCore-412.1 ===
+=== JavaScriptCore-412.3 ===
 
-2005-04-28  Vicki Murley  <vicki@apple.com>
+2005-05-26  Chris Petersen  <cpetersen@apple.com>
 
-	- changes for <rdar://problem/4098692> [JavaScriptCore, WebCore] Safari 
-	needs to be faster than Internet Explorer on Windows for iBench JavaScript test.
+        Merged fix for <rdar://problem/4086570> from TOT to SUTiCambridge.
 
-	See ChangeLog comments below between JavaScriptCore-412 and JavaScriptCore-412.1
-	for specifics.
+    2005-05-04  Maciej Stachowiak  <mjs@apple.com>
 
-2005-04-20  Darin Adler  <darin@apple.com>
+        Reviewed by Darin.
+
+	<rdar://problem/4086570> Crash in JavaScriptCore with RSS Visualizer
+	
+        * kjs/internal.cpp:
+        (InterpreterImp::mark): mark staticNaN, it is usually protected by the Number
+	prototype but there is a small window where it can get collected.
+
+=== JavaScriptCore-412.2 ===
+
+2005-05-24  Chris Petersen  <cpetersen@apple.com>
+
+        Merged addition fix for <rdar://problem/4058167> from TOT to SUTiCambridge
+
+       2005-05-18  Darin Adler  <darin@apple.com>
 
         Reviewed by Maciej.
 
-        - speedups, total 12% on JavaScript iBench
+        - fix a failure seen in the Mozilla JavaScript tests where a live object was garbage-collected
+          when the only reference to it was in an argList on the stack
 
-        I ran the benchmark under Shark and followed its advice a lot, mainly.
+        * kjs/list.h: Moved the operator= function into the .cpp file since it's too big to be
+        a good choice to inline.
+        * kjs/list.cpp: (KJS::List::operator=): Moved this formerly-inline function into a separate
+        file and added missing code to update valueRefCount. It's the latter that fixes the bug.
 
-        * kjs/collector.cpp:
-        (KJS::Collector::allocate): Take out special case for 0; costing speed but unexercised.
-        Use numLiveObjectsAtLastCollect instead of numAllocationsSinceLastCollect so we don't
-        have to bump it each time we call allocate. Put numLiveObjects into a local variable to
-        cut down on global variable accesses. Make "next" cell pointer be a byte offset rather
-        than a pointer so we don't need a special case for NULL. Allow freeList to point to some
-        bogus item when the entire block is full rather than going out of our way to make it
-        point to NULL.
-        (KJS::Collector::markProtectedObjects): Get table size and pointer into locals outside
-        the loop to avoid re-loading them over and over again.
-        (KJS::Collector::collect): Put numLiveObjects into a local variable to cut down on global
-        variable accesses. Make "next" cell pointer be a byte offset as above. Put numLiveObjects
-        into a local variable to cut down on global variable accesses. Set numLiveObjectsAtLastCollect
-        rather than numAllocationsSinceLastCollect.
-        (KJS::Collector::numReferencedObjects): Get table size and pointer into locals outside
-        the loop to avoid re-loading them over and over again.
-        (KJS::Collector::rootObjectClasses): Ditto.
+2005-05-23  Chris Petersen  <cpetersen@apple.com>
 
-        * kjs/internal.h: Make Value be a friend of NumberImp so it can construct number objects
-        directly, avoiding the conversion from Number to Value.
+        Merging fix for <rdar://problem/4098713>  from TOT to SUTiCambridge
 
-        * kjs/internal.cpp: (StringImp::toObject): Don't use Object::dynamicCast, because we know
-        the thing is an object and we don't want to do all the extra work; just cast directly.
+    2005-04-26  Richard Williamson   <rjw@apple.com>
 
-        * kjs/list.cpp: (KJS::List::List): Construct valueRefCount in a way that avoids the need for
-        a branch -- in the hot case this just meant avoiding checking a variable we just set to false.
-
-        * kjs/lookup.cpp: (keysMatch): Marked this inline.
-
-        * kjs/nodes.cpp: Disabled KJS_BREAKPOINT, to avoid calling hitStatement all the time.
-        (BooleanNode::evaluate): Make a Value directly, rather than making a Boolean which is converted
-        into a Value.
-        (NumberNode::evaluate): Ditto.
-        (StringNode::evaluate): Ditto.
-        (ArrayNode::evaluate): Ditto.
-        (FunctionCallNode::evaluate): Use new inline baseIfMutable to avoid unnecessary getBase function.
-        Also just use a pointer for func, rather than an Object.
-        (PostfixNode::evaluate): Change code so that it doesn't make an excess Number, and so that it
-        passes a "known to be integer" boolean in, often avoiding a conversion from floating point to
-        integer and back.
-        (DeleteNode::evaluate): Make a Value directly.
-        (TypeOfNode::evaluate): Use new inline baseIfMutable and make Value directly.
-        (PrefixNode::evaluate): Change code so that it doesn't make an excess Number, and so that it
-        passes a "known to be integer" boolean in, often avoiding a conversion from floating point to
-        integer and back.
-        (UnaryPlusNode::evaluate): Make a Value directly.
-        (NegateNode::evaluate): Change code so that it doesn't make an excess Number, and so that it
-        passes a "known to be integer" boolean in, often avoiding a conversion from floating point to
-        integer and back.
-        (BitwiseNotNode::evaluate): Make a Value directly.
-        (LogicalNotNode::evaluate): Ditto.
-        (ShiftNode::evaluate): Don't convert to a double before making a Value.
-        (RelationalNode::evaluate): Make a Value directly.
-        (EqualNode::evaluate): Ditto.
-        (BitOperNode::evaluate): Ditto.
-        (AssignNode::evaluate): Make a Value directly. Change code so that it passes a "known to be integer"
-        boolean in, often avoiding a conversion from floating point to integer and back.
-        (VarDeclNode::evaluate): Make a Value directly.
-        (ForNode::execute): Remove unused local variable.
-
-        * kjs/operations.h:
-        (KJS::isNaN): Inlined.
-        (KJS::isInf): Ditto.
-        (KJS::isPosInf): Ditto.
-        (KJS::isNegInf): Ditto.
-
-        * kjs/operations.cpp: Change isNaN, isInf, isPosInf, and isNegInf to be inlines.
-        (KJS::equal): Rewrite to avoid creating values and recursing back into the function.
-        (KJS::relation): Rearranged code so that we don't need explicit isNaN checks.
-        (KJS::add): Changed code to make Value directly, and so that it passes a "known to be integer"
-        boolean in, often avoiding a conversion from floating point to integer and back.
-        (KJS::mult): Ditto.
-
-        * kjs/property_map.cpp:
-        (KJS::PropertyMap::~PropertyMap): Get size and entries pointer outside loop to avoid
-        re-getting them inside the loop.
-        (KJS::PropertyMap::clear): Ditto. Clear value pointer in addition to key, so we can just
-        look at the value pointer in the mark function.
-        (KJS::PropertyMap::get): Get sizeMask and entries pointer outside loop to avoid
-        re-getting them inside the loop.
-        (KJS::PropertyMap::put): Ditto.
-        (KJS::PropertyMap::insert): Ditto.
-        (KJS::PropertyMap::remove): Ditto.
-        (KJS::PropertyMap::mark): Get size and entries pointer outside loop to avoid
-        re-getting them inside the loop. Don't bother checking key for 0, since we already have
-        to check value for 0. (Also had to change clear() to set value to 0.)
-        (KJS::PropertyMap::addEnumerablesToReferenceList): Get size and entries pointer outside
-        loop to avoid re-getting them inside the loop.
-        (KJS::PropertyMap::addSparseArrayPropertiesToReferenceList): Ditto.
-        (KJS::PropertyMap::save): Ditto.
-
-        - other changes
-
-        * kjs/protected_values.h: Remove unneeded class name qualifiers.
-
-        * kjs/reference.h:
-        (KJS::Reference::baseIfMutable): New inline function: replaces isMutable().
-        (KJS::Reference::Reference): Inlined.
-        * kjs/reference.cpp:
-        (KJS::Reference::getValue): Rewrite to not use getBase.
-        (KJS::Reference::putValue): Ditto.
-        (KJS::Reference::deleteValue): Dittol
-
-        * kjs/simple_number.h:
-        (KJS::SimpleNumber::integerFits): Added. For use when the parameter is known to be integral.
-
-        * kjs/string_object.cpp: (StringProtoFuncImp::call): Create the number without first converting
-        to double in various cases that involve integers.
-
-        * kjs/ustring.h:
-        (KJS::UString::attach): Inlined.
-        (KJS::UString::release): Inlined.
-        * kjs/ustring.cpp:
-        (KJS::UString::find): Get first character outside the loop instead of re-fetching it each time.
-
-        * kjs/value.cpp:
-        (Value::Value): Added overloads for all the various specific types of values, so you don't have
-        to convert from, say, Number to Value, just to create one.
-        (Number::Number): Added an overload that takes a boolean to indicate the number is already
-        known to be an integer.
-
-        * kjs/value.h: Added more Value constructors, added a version of toNumber that returns
-        a boolean to indicate if the number is known to be an integer (because it was a "simple number").
-        (KJS::ValueImp::marked): Inlined.
-        (KJS::ValueImp::dispatchType): Inlined.
-        (KJS::ValueImp::dispatchToPrimitive): Inlined.
-        (KJS::ValueImp::dispatchToBoolean): Inlined.
-        (KJS::ValueImp::dispatchToNumber): Inlined.
-        (KJS::ValueImp::dispatchToString): Inlined.
-        (KJS::ValueImp::dispatchToUInt32): Inlined.
-
-2005-04-14  Maciej Stachowiak  <mjs@apple.com>
-
-        - make fast_malloc.h a private header, not project
-
-        * JavaScriptCore.pbproj/project.pbxproj:
-
-2005-04-12  Maciej Stachowiak  <mjs@apple.com>
-
-        Reviewed by Richard.
-
-	<rdar://problem/4089734> JavaScript iBench can be sped up ~10% with custom allocator
-
-	- use custom single-threaded malloc for all non-GC JavaScriptCore
-	allocations, for a 9.1% speedup on JavaScript iBench
+	Fixed <rdar://problem/4098713> Scripting API is incompatible with Mozilla
 	
-        * JavaScriptCore.pbproj/project.pbxproj:
-        * kjs/collector.cpp:
-        (KJS::Collector::allocate): Use dlmalloc to allocate the collector blocks.
-        (KJS::Collector::collect): And dlfree to free it.
-        * kjs/fast_malloc.cpp: Added, just the standard dlmalloc here.
-        * kjs/fast_malloc.h: Added. Declarations for the functions. Also added a handy
-	macro to give a class custom operator new/delete
-        * kjs/identifier.cpp:
-        (KJS::Identifier::add): Use dlmalloc/dlfree.
-        * kjs/nodes.h: make nodes KJS_FAST_ALLOCATED.
-        * kjs/property_map.cpp:
-        (KJS::PropertyMap::~PropertyMap): Use dlmalloc/dlfree.
-        (KJS::PropertyMap::rehash): ditto
-        * kjs/scope_chain.h:
-        * kjs/ustring.cpp:
-        (KJS::UString::Rep::createCopying): New named constructor that copies a passed-in
-	buffer, to hide allocation details from webcore.
-        (KJS::UString::UString): use createCopying when appropriate.
-        (KJS::UString::Rep::destroy): Use dlmalloc/dlfree.
-        (KJS::UString::expandedSize): likewise
-        (KJS::UString::expandCapacity): likewise
-        (KJS::UString::expandPreCapacity): likewise
-        (KJS::UString::spliceSubstringsWithSeparators): likewise
-        (KJS::UString::append): likewise
-        (KJS::UString::operator=): likewise
-        (KJS::UString::detach): likewise
-        * kjs/ustring.h: make UString and UString::Rep KJS_FAST_ALLOCATED.
+	We were incompatible with Mozilla's implementation of the scripting APIs in
+	two ways:
 
-2005-04-11  Maciej Stachowiak  <mjs@apple.com>
+	Their NPN_SetException has the following signature:
 
-        Reviewed by John.
+            void NPN_SetException(NPObject *npobj, const NPUTF8 *message);
 
-	<rdar://problem/4086819> Avoid using protect count hash table so much for 5.6% JS iBench speedup
+	ours has:
 
-	- Avoid using protected values hash for the two most common cases
-	- Bump up ListImp high water mark, new testing shows 508 ListImps are
-	created during JS iBench.
+            void NPN_SetException (NPObject * npobj, const NPString *message);
 
-	Net result is a 5.6% speedup on JavaScript iBench
-	
-        * kjs/collector.cpp:
-        (KJS::Collector::collect): mark protected lists as appropriate.
-        * kjs/context.h:
-        * kjs/list.cpp:
-        (KJS::ListImp::markValues): Moved implementation from List::markValues
-        (KJS::List::markProtectedLists): Implemented - scan pool and overflow
-	list.
-        (KJS::allocateListImp): link lists outside the pool into a separate
-	doubly linked list to be able to mark protected lists
-        (KJS::deallocateListImp): do the corresponding delinking
-        (KJS::List::derefValues): do nothing in conservative GC mode
-        (KJS::List::refValues): do nothing in conservative GC mode
-        (KJS::List::markValues): call ListImp version
-        (KJS::List::append):
-        * kjs/list.h:
+	Also, they expect the string returned from NPN_UTF8FromIdentifier() to be freed by caller.
+	We do not.
+
+	I changed both behaviors to match Mozilla.
+
+        Reviewed by Chris.
+
+        * bindings/NP_jsobject.cpp:
+        (_NPN_SetException):
+        * bindings/npruntime.cpp:
+        (_NPN_UTF8FromIdentifier):
+        (_NPN_IntFromIdentifier):
+        (_NPN_SetExceptionWithUTF8):
+        * bindings/npruntime.h:
+        * bindings/npruntime_impl.h:
 
 === Safari-412 ===
 

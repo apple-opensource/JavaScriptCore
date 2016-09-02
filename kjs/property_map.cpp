@@ -21,7 +21,6 @@
 
 #include "property_map.h"
 
-#include "fast_malloc.h"
 #include "object.h"
 #include "protect.h"
 #include "reference_list.h"
@@ -113,14 +112,12 @@ PropertyMap::~PropertyMap()
         return;
     }
     
-    int size = _table->size;
-    Entry *entries = _table->entries;
-    for (int i = 0; i < size; i++) {
-        UString::Rep *key = entries[i].key;
+    for (int i = 0; i < _table->size; i++) {
+        UString::Rep *key = _table->entries[i].key;
         if (key)
             key->deref();
     }
-    kjs_fast_free(_table);
+    free(_table);
 }
 
 void PropertyMap::clear()
@@ -136,14 +133,11 @@ void PropertyMap::clear()
         return;
     }
 
-    int size = _table->size;
-    Entry *entries = _table->entries;
-    for (int i = 0; i < size; i++) {
-        UString::Rep *key = entries[i].key;
+    for (int i = 0; i < _table->size; i++) {
+        UString::Rep *key = _table->entries[i].key;
         if (key) {
             key->deref();
-            entries[i].key = 0;
-            entries[i].value = 0;
+            _table->entries[i].key = 0;
         }
     }
     _table->keyCount = 0;
@@ -168,22 +162,20 @@ ValueImp *PropertyMap::get(const Identifier &name, int &attributes) const
     }
     
     unsigned h = rep->hash();
-    int sizeMask = _table->sizeMask;
-    Entry *entries = _table->entries;
-    int i = h & sizeMask;
+    int i = h & _table->sizeMask;
     int k = 0;
 #if DUMP_STATISTICS
     ++numProbes;
-    numCollisions += entries[i].key && entries[i].key != rep;
+    numCollisions += _table->entries[i].key && _table->entries[i].key != rep;
 #endif
-    while (UString::Rep *key = entries[i].key) {
+    while (UString::Rep *key = _table->entries[i].key) {
         if (rep == key) {
-            attributes = entries[i].attributes;
-            return entries[i].value;
+            attributes = _table->entries[i].attributes;
+            return _table->entries[i].value;
         }
         if (k == 0)
-            k = 1 | (h % sizeMask);
-        i = (i + k) & sizeMask;
+            k = 1 | (h % _table->sizeMask);
+        i = (i + k) & _table->sizeMask;
 #if DUMP_STATISTICS
         ++numRehashes;
 #endif
@@ -207,20 +199,18 @@ ValueImp *PropertyMap::get(const Identifier &name) const
     }
     
     unsigned h = rep->hash();
-    int sizeMask = _table->sizeMask;
-    Entry *entries = _table->entries;
-    int i = h & sizeMask;
+    int i = h & _table->sizeMask;
     int k = 0;
 #if DUMP_STATISTICS
     ++numProbes;
-    numCollisions += entries[i].key && entries[i].key != rep;
+    numCollisions += _table->entries[i].key && _table->entries[i].key != rep;
 #endif
-    while (UString::Rep *key = entries[i].key) {
+    while (UString::Rep *key = _table->entries[i].key) {
         if (rep == key)
-            return entries[i].value;
+            return _table->entries[i].value;
         if (k == 0)
-            k = 1 | (h % sizeMask);
-        i = (i + k) & sizeMask;
+            k = 1 | (h % _table->sizeMask);
+        i = (i + k) & _table->sizeMask;
 #if DUMP_STATISTICS
         ++numRehashes;
 #endif
@@ -286,20 +276,18 @@ void PropertyMap::put(const Identifier &name, ValueImp *value, int attributes)
         expand();
     
     unsigned h = rep->hash();
-    int sizeMask = _table->sizeMask;
-    Entry *entries = _table->entries;
-    int i = h & sizeMask;
+    int i = h & _table->sizeMask;
     int k = 0;
     bool foundDeletedElement = false;
     int deletedElementIndex = 0;    /* initialize to make the compiler happy */
 #if DUMP_STATISTICS
     ++numProbes;
-    numCollisions += entries[i].key && entries[i].key != rep;
+    numCollisions += _table->entries[i].key && _table->entries[i].key != rep;
 #endif
-    while (UString::Rep *key = entries[i].key) {
+    while (UString::Rep *key = _table->entries[i].key) {
         if (rep == key) {
             // Put a new value in an existing hash table entry.
-            entries[i].value = value;
+            _table->entries[i].value = value;
             // Attributes are intentionally not updated.
             return;
         }
@@ -309,8 +297,8 @@ void PropertyMap::put(const Identifier &name, ValueImp *value, int attributes)
             deletedElementIndex = i;
         }
         if (k == 0)
-            k = 1 | (h % sizeMask);
-        i = (i + k) & sizeMask;
+            k = 1 | (h % _table->sizeMask);
+        i = (i + k) & _table->sizeMask;
 #if DUMP_STATISTICS
         ++numRehashes;
 #endif
@@ -319,16 +307,16 @@ void PropertyMap::put(const Identifier &name, ValueImp *value, int attributes)
     // Use either the deleted element or the 0 at the end of the chain.
     if (foundDeletedElement) {
         i = deletedElementIndex;
-        entries[i].key->deref();
+        _table->entries[i].key->deref();
         --_table->sentinelCount;
     }
 
     // Create a new hash table entry.
     rep->ref();
-    entries[i].key = rep;
-    entries[i].value = value;
-    entries[i].attributes = attributes;
-    entries[i].index = ++_table->lastIndexUsed;
+    _table->entries[i].key = rep;
+    _table->entries[i].value = value;
+    _table->entries[i].attributes = attributes;
+    _table->entries[i].index = ++_table->lastIndexUsed;
     ++_table->keyCount;
 
     checkConsistency();
@@ -339,28 +327,26 @@ void PropertyMap::insert(UString::Rep *key, ValueImp *value, int attributes, int
     assert(_table);
 
     unsigned h = key->hash();
-    int sizeMask = _table->sizeMask;
-    Entry *entries = _table->entries;
-    int i = h & sizeMask;
+    int i = h & _table->sizeMask;
     int k = 0;
 #if DUMP_STATISTICS
     ++numProbes;
-    numCollisions += entries[i].key && entries[i].key != key;
+    numCollisions += _table->entries[i].key && _table->entries[i].key != key;
 #endif
-    while (entries[i].key) {
-        assert(entries[i].key != &UString::Rep::null);
+    while (_table->entries[i].key) {
+        assert(_table->entries[i].key != &UString::Rep::null);
         if (k == 0)
-            k = 1 | (h % sizeMask);
-        i = (i + k) & sizeMask;
+            k = 1 | (h % _table->sizeMask);
+        i = (i + k) & _table->sizeMask;
 #if DUMP_STATISTICS
         ++numRehashes;
 #endif
     }
     
-    entries[i].key = key;
-    entries[i].value = value;
-    entries[i].attributes = attributes;
-    entries[i].index = index;
+    _table->entries[i].key = key;
+    _table->entries[i].value = value;
+    _table->entries[i].attributes = attributes;
+    _table->entries[i].index = index;
 }
 
 void PropertyMap::expand()
@@ -385,7 +371,7 @@ void PropertyMap::rehash(int newTableSize)
     int oldTableSize = oldTable ? oldTable->size : 0;
     int oldTableKeyCount = oldTable ? oldTable->keyCount : 0;
     
-    _table = (Table *)kjs_fast_calloc(1, sizeof(Table) + (newTableSize - 1) * sizeof(Entry) );
+    _table = (Table *)calloc(1, sizeof(Table) + (newTableSize - 1) * sizeof(Entry) );
     _table->size = newTableSize;
     _table->sizeMask = newTableSize - 1;
     _table->keyCount = oldTableKeyCount;
@@ -419,7 +405,7 @@ void PropertyMap::rehash(int newTableSize)
     }
     _table->lastIndexUsed = lastIndexUsed;
 
-    kjs_fast_free(oldTable);
+    free(oldTable);
 
     checkConsistency();
 }
@@ -448,21 +434,19 @@ void PropertyMap::remove(const Identifier &name)
 
     // Find the thing to remove.
     unsigned h = rep->hash();
-    int sizeMask = _table->sizeMask;
-    Entry *entries = _table->entries;
-    int i = h & sizeMask;
+    int i = h & _table->sizeMask;
     int k = 0;
 #if DUMP_STATISTICS
     ++numProbes;
     ++numRemoves;
-    numCollisions += entries[i].key && entries[i].key != rep;
+    numCollisions += _table->entries[i].key && _table->entries[i].key != rep;
 #endif
-    while ((key = entries[i].key)) {
+    while ((key = _table->entries[i].key)) {
         if (rep == key)
             break;
         if (k == 0)
-            k = 1 | (h % sizeMask);
-        i = (i + k) & sizeMask;
+            k = 1 | (h % _table->sizeMask);
+        i = (i + k) & _table->sizeMask;
 #if DUMP_STATISTICS
         ++numRehashes;
 #endif
@@ -476,9 +460,9 @@ void PropertyMap::remove(const Identifier &name)
     key->deref();
     key = &UString::Rep::null;
     key->ref();
-    entries[i].key = key;
-    entries[i].value = 0;
-    entries[i].attributes = DontEnum;
+    _table->entries[i].key = key;
+    _table->entries[i].value = 0;
+    _table->entries[i].attributes = DontEnum;
     assert(_table->keyCount >= 1);
     --_table->keyCount;
     ++_table->sentinelCount;
@@ -502,12 +486,15 @@ void PropertyMap::mark() const
         return;
     }
 
-    int size = _table->size;
-    Entry *entries = _table->entries;
-    for (int i = 0; i != size; ++i) {
-        ValueImp *v = entries[i].value;
-        if (v && !v->marked())
-            v->mark();
+    for (int i = 0; i != _table->size; ++i) {
+        UString::Rep *key = _table->entries[i].key;
+        if (key) {
+            ValueImp *v = _table->entries[i].value;
+            // Check v against 0 to handle deleted elements
+            // without comparing key to UString::Rep::null.
+            if (v && !v->marked())
+                v->mark();
+        }
     }
 }
 
@@ -543,10 +530,8 @@ void PropertyMap::addEnumerablesToReferenceList(ReferenceList &list, const Objec
 
     // Get pointers to the enumerable entries in the buffer.
     Entry **p = sortedEnumerables;
-    int size = _table->size;
-    Entry *entries = _table->entries;
-    for (int i = 0; i != size; ++i) {
-        Entry *e = &entries[i];
+    for (int i = 0; i != _table->size; ++i) {
+        Entry *e = &_table->entries[i];
         if (e->key && !(e->attributes & DontEnum))
             *p++ = e;
     }
@@ -580,10 +565,8 @@ void PropertyMap::addSparseArrayPropertiesToReferenceList(ReferenceList &list, c
         return;
     }
 
-    int size = _table->size;
-    Entry *entries = _table->entries;
-    for (int i = 0; i != size; ++i) {
-        UString::Rep *key = entries[i].key;
+    for (int i = 0; i != _table->size; ++i) {
+        UString::Rep *key = _table->entries[i].key;
         if (key && key != &UString::Rep::null)
         {
             UString k(key);
@@ -605,10 +588,8 @@ void PropertyMap::save(SavedProperties &p) const
             ++count;
 #endif
     } else {
-        int size = _table->size;
-        Entry *entries = _table->entries;
-        for (int i = 0; i != size; ++i)
-            if (entries[i].key && !(entries[i].attributes & (ReadOnly | Function)))
+        for (int i = 0; i != _table->size; ++i)
+            if (_table->entries[i].key && !(_table->entries[i].attributes & (ReadOnly | Function)))
                 ++count;
     }
 
@@ -648,10 +629,8 @@ void PropertyMap::save(SavedProperties &p) const
 
         // Get pointers to the entries in the buffer.
         Entry **p = sortedEntries;
-        int size = _table->size;
-        Entry *entries = _table->entries;
-        for (int i = 0; i != size; ++i) {
-            Entry *e = &entries[i];
+        for (int i = 0; i != _table->size; ++i) {
+            Entry *e = &_table->entries[i];
             if (e->key && !(e->attributes & (ReadOnly | Function)))
                 *p++ = e;
         }

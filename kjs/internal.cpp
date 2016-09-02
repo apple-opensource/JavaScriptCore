@@ -225,7 +225,7 @@ Object StringImp::toObject(ExecState *exec) const
 {
   List args;
   args.append(const_cast<StringImp*>(this));
-  return Object(static_cast<ObjectImp *>(exec->lexicalInterpreter()->builtinString().construct(exec, args).imp()));
+  return Object::dynamicCast(exec->lexicalInterpreter()->builtinString().construct(exec,args));
 }
 
 // ------------------------------ NumberImp ------------------------------------
@@ -753,6 +753,8 @@ void InterpreterImp::mark()
     UndefinedImp::staticUndefined->mark();
   if (NullImp::staticNull && !NullImp::staticNull->marked())
     NullImp::staticNull->mark();
+  if (NumberImp::staticNaN && !NumberImp::staticNaN->marked())
+    NumberImp::staticNaN->mark();
   if (BooleanImp::staticTrue && !BooleanImp::staticTrue->marked())
     BooleanImp::staticTrue->mark();
   if (BooleanImp::staticFalse && !BooleanImp::staticFalse->marked())

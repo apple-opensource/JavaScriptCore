@@ -35,8 +35,6 @@
 
 #include "identifier.h"
 
-#include "fast_malloc.h"
-
 #define DUMP_STATISTICS 0
 
 namespace KJS {
@@ -124,7 +122,7 @@ UString::Rep *Identifier::add(const char *c)
         i = (i + 1) & _tableSizeMask;
     }
     
-    UChar *d = static_cast<UChar *>(kjs_fast_malloc(sizeof(UChar) * length));
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * length));
     for (int j = 0; j != length; j++)
         d[j] = c[j];
     
@@ -163,7 +161,7 @@ UString::Rep *Identifier::add(const UChar *s, int length)
         i = (i + 1) & _tableSizeMask;
     }
     
-    UChar *d = static_cast<UChar *>(kjs_fast_malloc(sizeof(UChar) * length));
+    UChar *d = static_cast<UChar *>(malloc(sizeof(UChar) * length));
     for (int j = 0; j != length; j++)
         d[j] = s[j];
     
