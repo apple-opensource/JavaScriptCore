@@ -27,6 +27,7 @@
 #include "ProfileGenerator.h"
 
 #include "CallFrame.h"
+#include "CodeBlock.h"
 #include "JSGlobalObject.h"
 #include "JSStringRef.h"
 #include "JSFunction.h"
@@ -62,7 +63,7 @@ void ProfileGenerator::addParentForConsoleStart(ExecState* exec)
     JSValue function;
 
     exec->interpreter()->retrieveLastCaller(exec, lineNumber, sourceID, sourceURL, function);
-    m_currentNode = ProfileNode::create(Profiler::createCallIdentifier(&exec->globalData(), function ? function.toThisObject(exec) : 0, sourceURL, lineNumber), m_head.get(), m_head.get());
+    m_currentNode = ProfileNode::create(Profiler::createCallIdentifier(exec, function ? function.toThisObject(exec) : 0, sourceURL, lineNumber), m_head.get(), m_head.get());
     m_head->insertNode(m_currentNode.get());
 }
 

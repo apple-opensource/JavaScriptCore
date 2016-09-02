@@ -36,6 +36,8 @@
 #include <wtf/RefCounted.h>
 #include <wtf/Threading.h>
 
+#include <wtf/iphone/WebCoreThread.h>
+
 namespace WTF {
 
     // Used to allowing sharing data across classes and threads (like ThreadedSafeShared).
@@ -51,7 +53,7 @@ namespace WTF {
     // with respect to the original and any other copies.  The underlying m_data is jointly
     // owned by the original instance and all copies.
     template<class T>
-    class CrossThreadRefCounted : Noncopyable {
+    class CrossThreadRefCounted : public Noncopyable {
     public:
         static PassRefPtr<CrossThreadRefCounted<T> > create(T* data)
         {
@@ -69,10 +71,6 @@ namespace WTF {
         {
             return !m_refCounter.hasOneRef() || (m_threadSafeRefCounter && !m_threadSafeRefCounter->hasOneRef());
         }
-
-#ifndef NDEBUG
-        bool mayBePassedToAnotherThread() const { ASSERT(!m_threadId); return m_refCounter.hasOneRef(); }
-#endif
 
     private:
         CrossThreadRefCounted(T* data, ThreadSafeSharedBase* threadedCounter)
@@ -92,6 +90,12 @@ namespace WTF {
 
         void threadSafeDeref();
 
+#ifndef NDEBUG
+        bool isOwnedByCurrentThread() const {
+            return !m_threadId || m_threadId == currentThread() || ((isMainThread() || pthread_main_np()) && WebCoreWebThreadIsLockedOrDisabled());
+        }
+#endif
+
         RefCountedBase m_refCounter;
         ThreadSafeSharedBase* m_threadSafeRefCounter;
         T* m_data;
@@ -103,17 +107,8 @@ namespace WTF {
     template<class T>
     void CrossThreadRefCounted<T>::ref()
     {
-        
-        // MobileSafari allocates content on the UI thread then
-        // frees it on the Web thread. This is ok. This occurs in a
-        // couple of places. In particular, http://maps.google.com
-        // which uses JS to add an iFrame with an about:blank URL and 
-        // then executes some JS. Much of this work happens on the
-        // main (UI) thread.
-        // Ideally we want to have this assert here:
-        // ASSERT(WebThreadIsLockedOrDisabled())
-        // but then we would need to include code from
-        // WebCore. So just don't do any ASSERTs here.
+        ASSERT(isOwnedByCurrentThread());
+
         m_refCounter.ref();
 #ifndef NDEBUG
         // Store the threadId as soon as the ref count gets to 2.
@@ -129,16 +124,8 @@ namespace WTF {
     template<class T>
     void CrossThreadRefCounted<T>::deref()
     {
-        // MobileSafari allocates content on the UI thread then
-        // frees it on the Web thread. This is ok. This occurs in a
-        // couple of places. In particular, http://maps.google.com
-        // which uses JS to add an iFrame with an about:blank URL and 
-        // then executes some JS. Much of this work happens on the
-        // main (UI) thread.
-        // Ideally we want to have this assert here:
-        // ASSERT(WebThreadIsLockedOrDisabled())
-        // but then we would need to include code from
-        // WebCore. So just don't do any ASSERTs here.
+        ASSERT(isOwnedByCurrentThread());
+
         if (m_refCounter.derefBase()) {
             threadSafeDeref();
             delete this;
@@ -165,10 +152,13 @@ namespace WTF {
     template<class T>
     PassRefPtr<CrossThreadRefCounted<T> > CrossThreadRefCounted<T>::crossThreadCopy()
     {
+        ASSERT(isOwnedByCurrentThread());
+
         if (m_threadSafeRefCounter)
             m_threadSafeRefCounter->ref();
         else
             m_threadSafeRefCounter = new ThreadSafeSharedBase(2);
+
         return adoptRef(new CrossThreadRefCounted<T>(m_data, m_threadSafeRefCounter));
     }
 

@@ -30,11 +30,15 @@
 #define JSGlobalData_h
 
 #include "Collector.h"
+#include "DateInstanceCache.h"
 #include "ExecutableAllocator.h"
 #include "JITStubs.h"
 #include "JSValue.h"
+#include "MarkStack.h"
+#include "NumericStrings.h"
 #include "SmallStrings.h"
 #include "TimeoutChecker.h"
+#include "WeakRandom.h"
 #include <wtf/Forward.h>
 #include <wtf/HashMap.h>
 #include <wtf/RefCounted.h>
@@ -44,22 +48,40 @@ struct OpaqueJSClassContextData;
 
 namespace JSC {
 
+    class CodeBlock;
     class CommonIdentifiers;
-    class FunctionBodyNode;
     class IdentifierTable;
-    class Instruction;
     class Interpreter;
     class JSGlobalObject;
     class JSObject;
     class Lexer;
     class Parser;
-    class ScopeNode;
     class Stringifier;
     class Structure;
     class UString;
 
     struct HashTable;
-    struct VPtrSet;
+    struct Instruction;    
+
+    struct DSTOffsetCache {
+        DSTOffsetCache()
+        {
+            reset();
+        }
+        
+        void reset()
+        {
+            offset = 0.0;
+            start = 0.0;
+            end = -1.0;
+            increment = 0.0;
+        }
+
+        double offset;
+        double start;
+        double end;
+        double increment;
+    };
 
     class JSGlobalData : public RefCounted<JSGlobalData> {
     public:
@@ -70,8 +92,9 @@ namespace JSC {
         static bool sharedInstanceExists();
         static JSGlobalData& sharedInstance();
 
-        static PassRefPtr<JSGlobalData> create(bool isShared = false);
+        static PassRefPtr<JSGlobalData> create();
         static PassRefPtr<JSGlobalData> createLeaked();
+        static PassRefPtr<JSGlobalData> createNonDefault();
         ~JSGlobalData();
 
 #if ENABLE(JSC_MULTIPLE_THREADS)
@@ -97,20 +120,28 @@ namespace JSC {
         RefPtr<Structure> stringStructure;
         RefPtr<Structure> notAnObjectErrorStubStructure;
         RefPtr<Structure> notAnObjectStructure;
+        RefPtr<Structure> propertyNameIteratorStructure;
+        RefPtr<Structure> getterSetterStructure;
+        RefPtr<Structure> apiWrapperStructure;
+        RefPtr<Structure> dummyMarkableCellStructure;
+
 #if USE(JSVALUE32)
         RefPtr<Structure> numberStructure;
 #endif
 
-        void* jsArrayVPtr;
-        void* jsByteArrayVPtr;
-        void* jsStringVPtr;
-        void* jsFunctionVPtr;
+        static void storeVPtrs();
+        static JS_EXPORTDATA void* jsArrayVPtr;
+        static JS_EXPORTDATA void* jsByteArrayVPtr;
+        static JS_EXPORTDATA void* jsStringVPtr;
+        static JS_EXPORTDATA void* jsFunctionVPtr;
 
         IdentifierTable* identifierTable;
         CommonIdentifiers* propertyNames;
         const MarkedArgumentBuffer* emptyList; // Lists are supposed to be allocated on the stack to have their elements properly marked, which is not the case here - but this list has nothing to mark.
         SmallStrings smallStrings;
-
+        NumericStrings numericStrings;
+        DateInstanceCache dateInstanceCache;
+        
 #if ENABLE(ASSEMBLER)
         ExecutableAllocator executableAllocator;
 #endif
@@ -140,15 +171,34 @@ namespace JSC {
 
         HashSet<JSObject*> arrayVisitedElements;
 
-        ScopeNode* scopeNodeBeingReparsed;
+        CodeBlock* functionCodeBlockBeingReparsed;
         Stringifier* firstStringifierToMark;
 
+        MarkStack markStack;
+
+        double cachedUTCOffset;
+        DSTOffsetCache dstOffsetCache;
+        
+        UString cachedDateString;
+        double cachedDateStringValue;
+        
+        WeakRandom weakRandom;
+
+#ifndef NDEBUG
+        bool mainThreadOnly;
+#endif
+
+        void resetDateCache();
+
+        void startSampling();
+        void stopSampling();
+        void dumpSampleData(ExecState* exec);
     private:
-        JSGlobalData(bool isShared, const VPtrSet&);
+        JSGlobalData(bool isShared);
         static JSGlobalData*& sharedInstanceInternal();
         void createNativeThunk();
     };
-
+    
 } // namespace JSC
 
 #endif // JSGlobalData_h

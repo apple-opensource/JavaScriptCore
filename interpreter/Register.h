@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2008, 2009 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -55,9 +55,6 @@ namespace JSC {
         Register(const JSValue&);
         Register& operator=(const JSValue&);
         JSValue jsValue() const;
-
-        bool marked() const;
-        void mark();
         
         Register& operator=(JSActivation*);
         Register& operator=(CallFrame*);
@@ -108,6 +105,9 @@ namespace JSC {
 
     ALWAYS_INLINE Register::Register(const JSValue& v)
     {
+#if ENABLE(JSC_ZOMBIES)
+        ASSERT(!v.isZombie());
+#endif
         u.value = JSValue::encode(v);
     }
 
@@ -124,17 +124,7 @@ namespace JSC {
     {
         return JSValue::decode(u.value);
     }
-    
-    ALWAYS_INLINE bool Register::marked() const
-    {
-        return jsValue().marked();
-    }
 
-    ALWAYS_INLINE void Register::mark()
-    {
-        jsValue().mark();
-    }
-    
     // Interpreter functions
 
     ALWAYS_INLINE Register& Register::operator=(JSActivation* activation)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2008, 2009 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,12 +32,12 @@
 #include "Collector.h"
 #include "ExecutableAllocator.h"
 #include "Register.h"
+#include <stdio.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/VMTags.h>
 
 #if HAVE(MMAP)
 #include <errno.h>
-#include <stdio.h>
 #include <sys/mman.h>
 #endif
 
@@ -92,7 +92,7 @@ namespace JSC {
 
     class JSGlobalObject;
 
-    class RegisterFile : Noncopyable {
+    class RegisterFile : public Noncopyable {
         friend class JIT;
     public:
         enum CallFrameHeaderEntry {
@@ -136,8 +136,8 @@ namespace JSC {
 
         Register* lastGlobal() const { return m_start - m_numGlobals; }
         
-        void markGlobals(Heap* heap) { heap->markConservatively(lastGlobal(), m_start); }
-        void markCallFrames(Heap* heap) { heap->markConservatively(m_start, m_end); }
+        void markGlobals(MarkStack& markStack, Heap* heap) { heap->markConservatively(markStack, lastGlobal(), m_start); }
+        void markCallFrames(MarkStack& markStack, Heap* heap) { heap->markConservatively(markStack, m_start, m_end); }
 
     private:
         void releaseExcessCapacity();
@@ -176,7 +176,7 @@ namespace JSC {
     #if HAVE(MMAP)
         m_buffer = static_cast<Register*>(mmap(0, bufferLength, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, VM_TAG_FOR_REGISTERFILE_MEMORY, 0));
         if (m_buffer == MAP_FAILED) {
-#if PLATFORM(WINCE)
+#if OS(WINCE)
             fprintf(stderr, "Could not allocate register file: %d\n", GetLastError());
 #else
             fprintf(stderr, "Could not allocate register file: %d\n", errno);
@@ -186,7 +186,7 @@ namespace JSC {
     #elif HAVE(VIRTUALALLOC)
         m_buffer = static_cast<Register*>(VirtualAlloc(0, roundUpAllocationSize(bufferLength, commitSize), MEM_RESERVE, PAGE_READWRITE));
         if (!m_buffer) {
-#if PLATFORM(WINCE)
+#if OS(WINCE)
             fprintf(stderr, "Could not allocate register file: %d\n", GetLastError());
 #else
             fprintf(stderr, "Could not allocate register file: %d\n", errno);
@@ -196,7 +196,7 @@ namespace JSC {
         size_t committedSize = roundUpAllocationSize(maxGlobals * sizeof(Register), commitSize);
         void* commitCheck = VirtualAlloc(m_buffer, committedSize, MEM_COMMIT, PAGE_READWRITE);
         if (commitCheck != m_buffer) {
-#if PLATFORM(WINCE)
+#if OS(WINCE)
             fprintf(stderr, "Could not allocate register file: %d\n", GetLastError());
 #else
             fprintf(stderr, "Could not allocate register file: %d\n", errno);
@@ -204,8 +204,16 @@ namespace JSC {
             CRASH();
         }
         m_commitEnd = reinterpret_cast<Register*>(reinterpret_cast<char*>(m_buffer) + committedSize);
-    #else
-        #error "Don't know how to reserve virtual memory on this platform."
+    #else 
+        /* 
+         * If neither MMAP nor VIRTUALALLOC are available - use fastMalloc instead.
+         *
+         * Please note that this is the fallback case, which is non-optimal.
+         * If any possible, the platform should provide for a better memory
+         * allocation mechanism that allows for "lazy commit" or dynamic
+         * pre-allocation, similar to mmap or VirtualAlloc, to avoid waste of memory.
+         */
+        m_buffer = static_cast<Register*>(fastMalloc(bufferLength));
     #endif
         m_start = m_buffer + maxGlobals;
         m_end = m_start;
@@ -234,7 +242,7 @@ namespace JSC {
         if (newEnd > m_commitEnd) {
             size_t size = roundUpAllocationSize(reinterpret_cast<char*>(newEnd) - reinterpret_cast<char*>(m_commitEnd), commitSize);
             if (!VirtualAlloc(m_commitEnd, size, MEM_COMMIT, PAGE_READWRITE)) {
-#if PLATFORM(WINCE)
+#if OS(WINCE)
                 fprintf(stderr, "Could not allocate register file: %d\n", GetLastError());
 #else
                 fprintf(stderr, "Could not allocate register file: %d\n", errno);

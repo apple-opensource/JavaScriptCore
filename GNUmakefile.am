@@ -45,6 +45,7 @@ javascriptcore_built_nosources += \
 
 javascriptcore_sources += \
 	JavaScriptCore/API/APICast.h \
+	JavaScriptCore/API/APIShims.h \
 	JavaScriptCore/API/JSBase.cpp \
 	JavaScriptCore/API/JSBasePrivate.h \
 	JavaScriptCore/API/JSCallbackConstructor.cpp \
@@ -57,6 +58,7 @@ javascriptcore_sources += \
 	JavaScriptCore/API/JSClassRef.cpp \
 	JavaScriptCore/API/JSClassRef.h \
 	JavaScriptCore/API/JSContextRef.cpp \
+	JavaScriptCore/API/JSContextRefPrivate.h \
 	JavaScriptCore/API/JSObjectRef.cpp \
 	JavaScriptCore/API/JSRetainPtr.h \
 	JavaScriptCore/API/JSStringRef.cpp \
@@ -96,8 +98,6 @@ javascriptcore_sources += \
 	JavaScriptCore/bytecode/JumpTable.cpp \
 	JavaScriptCore/bytecode/JumpTable.h \
 	JavaScriptCore/bytecode/EvalCodeCache.h \
-	JavaScriptCore/runtime/ExceptionHelpers.cpp \
-	JavaScriptCore/runtime/ExceptionHelpers.h \
 	JavaScriptCore/bytecode/Instruction.h \
 	JavaScriptCore/bytecompiler/Label.h \
 	JavaScriptCore/interpreter/Interpreter.cpp \
@@ -135,14 +135,22 @@ javascriptcore_sources += \
 	JavaScriptCore/icu/unicode/utf_old.h \
 	JavaScriptCore/icu/unicode/utypes.h \
 	JavaScriptCore/icu/unicode/uversion.h \
+	JavaScriptCore/assembler/ARMAssembler.h \
+	JavaScriptCore/assembler/ARMAssembler.cpp \
 	JavaScriptCore/assembler/X86Assembler.h \
 	JavaScriptCore/assembler/AbstractMacroAssembler.h \
 	JavaScriptCore/assembler/AssemblerBuffer.h \
+	JavaScriptCore/assembler/AssemblerBufferWithConstantPool.h \
+	JavaScriptCore/assembler/CodeLocation.h \
+	JavaScriptCore/assembler/LinkBuffer.h \
 	JavaScriptCore/assembler/MacroAssembler.h \
+	JavaScriptCore/assembler/MacroAssemblerARM.h \
+	JavaScriptCore/assembler/MacroAssemblerARM.cpp \
 	JavaScriptCore/assembler/MacroAssemblerCodeRef.h \
 	JavaScriptCore/assembler/MacroAssemblerX86.h \
 	JavaScriptCore/assembler/MacroAssemblerX86_64.h \
 	JavaScriptCore/assembler/MacroAssemblerX86Common.h \
+	JavaScriptCore/assembler/RepatchBuffer.h \
 	JavaScriptCore/os-win32/stdbool.h \
 	JavaScriptCore/os-win32/stdint.h \
 	JavaScriptCore/pcre/pcre.h \
@@ -154,8 +162,6 @@ javascriptcore_sources += \
 	JavaScriptCore/pcre/pcre_xclass.cpp \
 	JavaScriptCore/pcre/ucpinternal.h \
 	JavaScriptCore/profiler/CallIdentifier.h \
-	JavaScriptCore/profiler/HeavyProfile.cpp \
-	JavaScriptCore/profiler/HeavyProfile.h \
 	JavaScriptCore/profiler/Profile.cpp \
 	JavaScriptCore/profiler/Profile.h \
 	JavaScriptCore/profiler/ProfileGenerator.cpp \
@@ -164,14 +170,14 @@ javascriptcore_sources += \
 	JavaScriptCore/profiler/ProfileNode.h \
 	JavaScriptCore/profiler/Profiler.cpp \
 	JavaScriptCore/profiler/Profiler.h \
-	JavaScriptCore/profiler/TreeProfile.cpp \
-	JavaScriptCore/profiler/TreeProfile.h \
 	JavaScriptCore/interpreter/CachedCall.h \
 	JavaScriptCore/interpreter/CallFrame.cpp \
 	JavaScriptCore/interpreter/CallFrame.h \
 	JavaScriptCore/interpreter/CallFrameClosure.h \
-	JavaScriptCore/runtime/TimeoutChecker.cpp \
-	JavaScriptCore/runtime/TimeoutChecker.h \
+	JavaScriptCore/runtime/ExceptionHelpers.cpp \
+	JavaScriptCore/runtime/ExceptionHelpers.h \
+	JavaScriptCore/runtime/Executable.cpp \
+	JavaScriptCore/runtime/Executable.h \
 	JavaScriptCore/runtime/InitializeThreading.cpp \
 	JavaScriptCore/runtime/InitializeThreading.h \
 	JavaScriptCore/runtime/JSActivation.cpp \
@@ -186,16 +192,27 @@ javascriptcore_sources += \
 	JavaScriptCore/runtime/JSONObject.h \
 	JavaScriptCore/runtime/JSPropertyNameIterator.cpp \
 	JavaScriptCore/runtime/JSPropertyNameIterator.h \
+	JavaScriptCore/runtime/JSZombie.h \
 	JavaScriptCore/runtime/LiteralParser.cpp \
 	JavaScriptCore/runtime/LiteralParser.h \
+	JavaScriptCore/runtime/MarkStack.cpp \
+	JavaScriptCore/runtime/MarkStack.h \
+	JavaScriptCore/runtime/NumericStrings.h \
+	JavaScriptCore/runtime/PropertyDescriptor.h \
+	JavaScriptCore/runtime/PropertyDescriptor.cpp \
 	JavaScriptCore/runtime/SmallStrings.cpp \
 	JavaScriptCore/runtime/SmallStrings.h \
+	JavaScriptCore/runtime/StringBuilder.h \
 	JavaScriptCore/runtime/Structure.cpp \
 	JavaScriptCore/runtime/Structure.h \
 	JavaScriptCore/runtime/StructureChain.cpp \
 	JavaScriptCore/runtime/StructureChain.h \
 	JavaScriptCore/runtime/StructureTransitionTable.h \
-	JavaScriptCore/runtime/TypeInfo.h \
+	JavaScriptCore/runtime/TimeoutChecker.cpp \
+	JavaScriptCore/runtime/TimeoutChecker.h \
+	JavaScriptCore/runtime/JSTypeInfo.h \
+	JavaScriptCore/runtime/WeakGCMap.h \
+	JavaScriptCore/runtime/WeakGCPtr.h \
 	JavaScriptCore/wrec/CharacterClass.h \
 	JavaScriptCore/wrec/CharacterClassConstructor.h \
 	JavaScriptCore/wrec/Escapes.h \
@@ -212,7 +229,6 @@ javascriptcore_sources += \
 	JavaScriptCore/wtf/ByteArray.cpp \
 	JavaScriptCore/wtf/ByteArray.h \
 	JavaScriptCore/wtf/CrossThreadRefCounted.h \
-	JavaScriptCore/wtf/OwnFastMallocPtr.h \
 	JavaScriptCore/wtf/CurrentTime.cpp \
 	JavaScriptCore/wtf/CurrentTime.h \
 	JavaScriptCore/wtf/DateMath.cpp \
@@ -220,8 +236,6 @@ javascriptcore_sources += \
 	JavaScriptCore/wtf/Deque.h \
 	JavaScriptCore/wtf/DisallowCType.h \
 	JavaScriptCore/wtf/Forward.h \
-	JavaScriptCore/wtf/GOwnPtr.cpp \
-	JavaScriptCore/wtf/GOwnPtr.h \
 	JavaScriptCore/wtf/GetPtr.h \
 	JavaScriptCore/wtf/HashCountedSet.h \
 	JavaScriptCore/wtf/HashFunctions.h \
@@ -241,11 +255,13 @@ javascriptcore_sources += \
 	JavaScriptCore/wtf/Noncopyable.h \
 	JavaScriptCore/wtf/NotFound.h \
 	JavaScriptCore/wtf/OwnArrayPtr.h \
+	JavaScriptCore/wtf/OwnFastMallocPtr.h \
 	JavaScriptCore/wtf/OwnPtr.h \
 	JavaScriptCore/wtf/OwnPtrCommon.h \
 	JavaScriptCore/wtf/PassOwnPtr.h \
 	JavaScriptCore/wtf/PassRefPtr.h \
 	JavaScriptCore/wtf/Platform.h \
+	JavaScriptCore/wtf/PossiblyNull.h \
 	JavaScriptCore/wtf/PtrAndFlags.h \
 	JavaScriptCore/wtf/RandomNumber.cpp \
 	JavaScriptCore/wtf/RandomNumber.h \
@@ -259,18 +275,25 @@ javascriptcore_sources += \
 	JavaScriptCore/wtf/SegmentedVector.h \
 	JavaScriptCore/wtf/StdLibExtras.h \
 	JavaScriptCore/wtf/StringExtras.h \
+	JavaScriptCore/wtf/StringHashFunctions.h \
 	JavaScriptCore/wtf/TCPackedCache.h \
 	JavaScriptCore/wtf/TCPageMap.h \
 	JavaScriptCore/wtf/TCSpinLock.h \
-	JavaScriptCore/wtf/ThreadSpecific.h \
-	JavaScriptCore/wtf/Threading.h \
+	JavaScriptCore/wtf/ThreadIdentifierDataPthreads.cpp \
+	JavaScriptCore/wtf/ThreadIdentifierDataPthreads.h \
 	JavaScriptCore/wtf/Threading.cpp \
+	JavaScriptCore/wtf/Threading.h \
 	JavaScriptCore/wtf/ThreadingPthreads.cpp \
+	JavaScriptCore/wtf/ThreadSpecific.h \
 	JavaScriptCore/wtf/TypeTraits.cpp \
 	JavaScriptCore/wtf/TypeTraits.h \
 	JavaScriptCore/wtf/UnusedParam.h \
 	JavaScriptCore/wtf/Vector.h \
 	JavaScriptCore/wtf/VectorTraits.h \
+	JavaScriptCore/wtf/gtk/GOwnPtr.cpp \
+	JavaScriptCore/wtf/gtk/GOwnPtr.h \
+	JavaScriptCore/wtf/gtk/GRefPtr.cpp \
+	JavaScriptCore/wtf/gtk/GRefPtr.h \
 	JavaScriptCore/wtf/gtk/MainThreadGtk.cpp \
 	JavaScriptCore/wtf/gtk/ThreadingGtk.cpp \
 	JavaScriptCore/wtf/unicode/Collator.h \
@@ -282,10 +305,12 @@ javascriptcore_sources += \
 if TARGET_WIN32
 javascriptcore_sources += \
 	JavaScriptCore/wtf/ThreadSpecificWin.cpp \
-	JavaScriptCore/jit/ExecutableAllocatorWin.cpp
+	JavaScriptCore/jit/ExecutableAllocatorWin.cpp \
+	JavaScriptCore/runtime/MarkStackWin.cpp
 else
 javascriptcore_sources += \
-	JavaScriptCore/jit/ExecutableAllocatorPosix.cpp
+	JavaScriptCore/jit/ExecutableAllocatorPosix.cpp \
+	JavaScriptCore/runtime/MarkStackPosix.cpp
 endif
 
 # ----
@@ -318,17 +343,12 @@ javascriptcore_sources += \
 	JavaScriptCore/yarr/RegexParser.h \
 	JavaScriptCore/yarr/RegexPattern.h
 
-# Debug build
-if ENABLE_DEBUG
-javascriptcore_built_sources += \
-	DerivedSources/Grammar.cpp \
-	DerivedSources/Grammar.h
-
 javascriptcore_sources += \
 	JavaScriptCore/interpreter/RegisterFile.cpp \
 	JavaScriptCore/interpreter/RegisterFile.h \
 	JavaScriptCore/bytecompiler/BytecodeGenerator.cpp \
 	JavaScriptCore/bytecompiler/BytecodeGenerator.h \
+	JavaScriptCore/bytecompiler/NodesCodegen.cpp \
 	JavaScriptCore/bytecompiler/LabelScope.h \
 	JavaScriptCore/debugger/Debugger.cpp \
 	JavaScriptCore/debugger/Debugger.h \
@@ -377,6 +397,7 @@ javascriptcore_sources += \
 	JavaScriptCore/runtime/DateConversion.h \
 	JavaScriptCore/runtime/DateInstance.cpp \
 	JavaScriptCore/runtime/DateInstance.h \
+	JavaScriptCore/runtime/DateInstanceCache.h \
 	JavaScriptCore/runtime/DatePrototype.cpp \
 	JavaScriptCore/runtime/DatePrototype.h \
 	JavaScriptCore/runtime/Error.cpp \
@@ -402,6 +423,8 @@ javascriptcore_sources += \
 	JavaScriptCore/runtime/Completion.cpp \
 	JavaScriptCore/runtime/JSArray.cpp \
 	JavaScriptCore/runtime/JSArray.h \
+	JavaScriptCore/runtime/JSAPIValueWrapper.cpp \
+	JavaScriptCore/runtime/JSAPIValueWrapper.h \
 	JavaScriptCore/runtime/JSCell.cpp \
 	JavaScriptCore/runtime/JSCell.h \
 	JavaScriptCore/runtime/JSFunction.cpp \
@@ -482,6 +505,9 @@ javascriptcore_sources += \
 	JavaScriptCore/runtime/Tracing.h \
 	JavaScriptCore/runtime/UString.cpp \
 	JavaScriptCore/runtime/UString.h \
+	JavaScriptCore/runtime/UStringImpl.cpp \
+	JavaScriptCore/runtime/UStringImpl.h \
+	JavaScriptCore/runtime/WeakRandom.h \
 	JavaScriptCore/wtf/FastAllocBase.h \
 	JavaScriptCore/wtf/FastMalloc.cpp \
 	JavaScriptCore/wtf/FastMalloc.h \
@@ -491,16 +517,9 @@ javascriptcore_sources += \
 	JavaScriptCore/wtf/dtoa.cpp \
 	JavaScriptCore/wtf/dtoa.h
 
-else
-javascriptcore_built_nosources += \
+javascriptcore_built_sources += \
 	DerivedSources/Grammar.cpp \
 	DerivedSources/Grammar.h
-
-javascriptcore_sources += \
-	JavaScriptCore/AllInOneFile.cpp \
-	JavaScriptCore/parser/ParserArena.cpp \
-	JavaScriptCore/parser/ParserArena.h
-endif # END ENABLE_DEBUG
 
 DerivedSources/Grammar.h: DerivedSources/Grammar.cpp;
 

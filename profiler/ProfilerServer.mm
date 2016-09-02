@@ -29,10 +29,10 @@
 #import "JSProfilerPrivate.h"
 #import "JSRetainPtr.h"
 #import <Foundation/Foundation.h>
+
 #if PLATFORM(IPHONE_SIMULATOR)
 #import <Foundation/NSDistributedNotificationCenter.h>
 #endif
-
 
 @interface ProfilerServer : NSObject {
 @private

@@ -16,7 +16,6 @@ CONFIG(QTDIR_build) {
     include($$QT_SOURCE_TREE/src/qbase.pri)
     INSTALLS =
     DESTDIR = $$OLDDESTDIR
-    PRECOMPILED_HEADER = $$PWD/../WebKit/qt/WebKit_pch.h
     DEFINES *= NDEBUG
 }
 
@@ -32,12 +31,6 @@ INCLUDEPATH += $$GENERATED_SOURCES_DIR
         OBJECTS_DIR = obj/release
     }
 }
-
-include($$OUTPUT_DIR/config.pri)
-
-CONFIG -= warn_on
-*-g++*:QMAKE_CXXFLAGS += -Wreturn-type -fno-strict-aliasing
-#QMAKE_CXXFLAGS += -Wall -Wno-undef -Wno-unused-parameter
 
 CONFIG(release):!CONFIG(QTDIR_build) {
     contains(QT_CONFIG, reduce_exports):CONFIG += hide_symbols
@@ -59,17 +52,11 @@ win32-g++ {
     QMAKE_LIBDIR_POST += $$split(TMPPATH,";")
 }
 
-DEFINES += WTF_USE_JAVASCRIPTCORE_BINDINGS=1
-
 DEFINES += WTF_CHANGES=1
 
 include(JavaScriptCore.pri)
 
 QMAKE_EXTRA_TARGETS += generated_files
-
-lessThan(QT_MINOR_VERSION, 4) {
-    DEFINES += QT_BEGIN_NAMESPACE="" QT_END_NAMESPACE=""
-}
 
 *-g++*:QMAKE_CXXFLAGS_RELEASE -= -O2
 *-g++*:QMAKE_CXXFLAGS_RELEASE += -O3

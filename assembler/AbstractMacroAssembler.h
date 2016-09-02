@@ -173,16 +173,16 @@ public:
     struct Imm32 {
         explicit Imm32(int32_t value)
             : m_value(value)
-#if PLATFORM_ARM_ARCH(7)
+#if CPU(ARM)
             , m_isPointer(false)
 #endif
         {
         }
 
-#if !PLATFORM(X86_64)
+#if !CPU(X86_64)
         explicit Imm32(ImmPtr ptr)
             : m_value(ptr.asIntptr())
-#if PLATFORM_ARM_ARCH(7)
+#if CPU(ARM)
             , m_isPointer(true)
 #endif
         {
@@ -190,7 +190,7 @@ public:
 #endif
 
         int32_t m_value;
-#if PLATFORM_ARM_ARCH(7)
+#if CPU(ARM)
         // We rely on being able to regenerate code to recover exception handling
         // information.  Since ARMv7 supports 16-bit immediates there is a danger
         // that if pointer values change the layout of the generated code will change.
@@ -321,7 +321,6 @@ public:
         }
 
         JmpSrc m_jmp;
-
     private:
         Flags m_flags;
     };

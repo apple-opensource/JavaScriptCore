@@ -80,16 +80,16 @@ static const int initialTickCountThreshold = 255;
 // Preferred number of milliseconds between each timeout check
 static const int preferredScriptCheckTimeInterval = 1000;
 
-static inline void markIfNeeded(JSValue v)
+static inline void markIfNeeded(MarkStack& markStack, JSValue v)
 {
-    if (v && !v.marked())
-        v.mark();
+    if (v)
+        markStack.append(v);
 }
 
-static inline void markIfNeeded(const RefPtr<Structure>& s)
+static inline void markIfNeeded(MarkStack& markStack, const RefPtr<Structure>& s)
 {
     if (s)
-        s->mark();
+        markIfNeeded(markStack, s->storedPrototype());
 }
 
 JSGlobalObject::~JSGlobalObject()
@@ -112,8 +112,8 @@ JSGlobalObject::~JSGlobalObject()
     if (headObject == this)
         headObject = 0;
 
-    HashSet<ProgramCodeBlock*>::const_iterator end = codeBlocks().end();
-    for (HashSet<ProgramCodeBlock*>::const_iterator it = codeBlocks().begin(); it != end; ++it)
+    HashSet<GlobalCodeBlock*>::const_iterator end = codeBlocks().end();
+    for (HashSet<GlobalCodeBlock*>::const_iterator it = codeBlocks().begin(); it != end; ++it)
         (*it)->clearGlobalObject();
         
     RegisterFile& registerFile = globalData()->interpreter->registerFile();
@@ -121,15 +121,17 @@ JSGlobalObject::~JSGlobalObject()
         registerFile.setGlobalObject(0);
         registerFile.setNumGlobals(0);
     }
-    delete d();
+    d()->destructor(d());
 }
 
 void JSGlobalObject::init(JSObject* thisValue)
 {
     ASSERT(JSLock::currentThreadIsHoldingLock());
 
+    structure()->disableSpecificFunctionTracking();
+
     d()->globalData = Heap::heap(this)->globalData();
-    d()->globalScopeChain = ScopeChain(this, d()->globalData.get(), thisValue);
+    d()->globalScopeChain = ScopeChain(this, d()->globalData.get(), this, thisValue);
 
     JSGlobalObject::globalExec()->init(0, 0, d()->globalScopeChain.node(), CallFrame::noCaller(), 0, 0, 0);
 
@@ -175,18 +177,18 @@ void JSGlobalObject::putWithAttributes(ExecState* exec, const Identifier& proper
     }
 }
 
-void JSGlobalObject::defineGetter(ExecState* exec, const Identifier& propertyName, JSObject* getterFunc)
+void JSGlobalObject::defineGetter(ExecState* exec, const Identifier& propertyName, JSObject* getterFunc, unsigned attributes)
 {
     PropertySlot slot;
     if (!symbolTableGet(propertyName, slot))
-        JSVariableObject::defineGetter(exec, propertyName, getterFunc);
+        JSVariableObject::defineGetter(exec, propertyName, getterFunc, attributes);
 }
 
-void JSGlobalObject::defineSetter(ExecState* exec, const Identifier& propertyName, JSObject* setterFunc)
+void JSGlobalObject::defineSetter(ExecState* exec, const Identifier& propertyName, JSObject* setterFunc, unsigned attributes)
 {
     PropertySlot slot;
     if (!symbolTableGet(propertyName, slot))
-        JSVariableObject::defineSetter(exec, propertyName, setterFunc);
+        JSVariableObject::defineSetter(exec, propertyName, setterFunc, attributes);
 }
 
 static inline JSObject* lastInPrototypeChain(JSObject* object)
@@ -256,9 +258,9 @@ void JSGlobalObject::reset(JSValue prototype)
 
     // Constructors
 
-    JSCell* objectConstructor = new (exec) ObjectConstructor(exec, ObjectConstructor::createStructure(d()->functionPrototype), d()->objectPrototype);
+    JSCell* objectConstructor = new (exec) ObjectConstructor(exec, ObjectConstructor::createStructure(d()->functionPrototype), d()->objectPrototype, d()->prototypeFunctionStructure.get());
     JSCell* functionConstructor = new (exec) FunctionConstructor(exec, FunctionConstructor::createStructure(d()->functionPrototype), d()->functionPrototype);
-    JSCell* arrayConstructor = new (exec) ArrayConstructor(exec, ArrayConstructor::createStructure(d()->functionPrototype), d()->arrayPrototype);
+    JSCell* arrayConstructor = new (exec) ArrayConstructor(exec, ArrayConstructor::createStructure(d()->functionPrototype), d()->arrayPrototype, d()->prototypeFunctionStructure.get());
     JSCell* stringConstructor = new (exec) StringConstructor(exec, StringConstructor::createStructure(d()->functionPrototype), d()->prototypeFunctionStructure.get(), d()->stringPrototype);
     JSCell* booleanConstructor = new (exec) BooleanConstructor(exec, BooleanConstructor::createStructure(d()->functionPrototype), d()->booleanPrototype);
     JSCell* numberConstructor = new (exec) NumberConstructor(exec, NumberConstructor::createStructure(d()->functionPrototype), d()->numberPrototype);
@@ -357,43 +359,58 @@ void JSGlobalObject::resetPrototype(JSValue prototype)
         oldLastInPrototypeChain->setPrototype(objectPrototype);
 }
 
-void JSGlobalObject::mark()
+void JSGlobalObject::markChildren(MarkStack& markStack)
 {
-    JSVariableObject::mark();
+    JSVariableObject::markChildren(markStack);
     
-    HashSet<ProgramCodeBlock*>::const_iterator end = codeBlocks().end();
-    for (HashSet<ProgramCodeBlock*>::const_iterator it = codeBlocks().begin(); it != end; ++it)
-        (*it)->mark();
+    HashSet<GlobalCodeBlock*>::const_iterator end = codeBlocks().end();
+    for (HashSet<GlobalCodeBlock*>::const_iterator it = codeBlocks().begin(); it != end; ++it)
+        (*it)->markAggregate(markStack);
 
     RegisterFile& registerFile = globalData()->interpreter->registerFile();
     if (registerFile.globalObject() == this)
-        registerFile.markGlobals(&globalData()->heap);
+        registerFile.markGlobals(markStack, &globalData()->heap);
 
-    markIfNeeded(d()->regExpConstructor);
-    markIfNeeded(d()->errorConstructor);
-    markIfNeeded(d()->evalErrorConstructor);
-    markIfNeeded(d()->rangeErrorConstructor);
-    markIfNeeded(d()->referenceErrorConstructor);
-    markIfNeeded(d()->syntaxErrorConstructor);
-    markIfNeeded(d()->typeErrorConstructor);
-    markIfNeeded(d()->URIErrorConstructor);
+    markIfNeeded(markStack, d()->regExpConstructor);
+    markIfNeeded(markStack, d()->errorConstructor);
+    markIfNeeded(markStack, d()->evalErrorConstructor);
+    markIfNeeded(markStack, d()->rangeErrorConstructor);
+    markIfNeeded(markStack, d()->referenceErrorConstructor);
+    markIfNeeded(markStack, d()->syntaxErrorConstructor);
+    markIfNeeded(markStack, d()->typeErrorConstructor);
+    markIfNeeded(markStack, d()->URIErrorConstructor);
 
-    markIfNeeded(d()->evalFunction);
-    markIfNeeded(d()->callFunction);
-    markIfNeeded(d()->applyFunction);
+    markIfNeeded(markStack, d()->evalFunction);
+    markIfNeeded(markStack, d()->callFunction);
+    markIfNeeded(markStack, d()->applyFunction);
 
-    markIfNeeded(d()->objectPrototype);
-    markIfNeeded(d()->functionPrototype);
-    markIfNeeded(d()->arrayPrototype);
-    markIfNeeded(d()->booleanPrototype);
-    markIfNeeded(d()->stringPrototype);
-    markIfNeeded(d()->numberPrototype);
-    markIfNeeded(d()->datePrototype);
-    markIfNeeded(d()->regExpPrototype);
+    markIfNeeded(markStack, d()->objectPrototype);
+    markIfNeeded(markStack, d()->functionPrototype);
+    markIfNeeded(markStack, d()->arrayPrototype);
+    markIfNeeded(markStack, d()->booleanPrototype);
+    markIfNeeded(markStack, d()->stringPrototype);
+    markIfNeeded(markStack, d()->numberPrototype);
+    markIfNeeded(markStack, d()->datePrototype);
+    markIfNeeded(markStack, d()->regExpPrototype);
 
-    markIfNeeded(d()->methodCallDummy);
+    markIfNeeded(markStack, d()->methodCallDummy);
 
-    markIfNeeded(d()->errorStructure);
+    markIfNeeded(markStack, d()->errorStructure);
+    markIfNeeded(markStack, d()->argumentsStructure);
+    markIfNeeded(markStack, d()->arrayStructure);
+    markIfNeeded(markStack, d()->booleanObjectStructure);
+    markIfNeeded(markStack, d()->callbackConstructorStructure);
+    markIfNeeded(markStack, d()->callbackFunctionStructure);
+    markIfNeeded(markStack, d()->callbackObjectStructure);
+    markIfNeeded(markStack, d()->dateStructure);
+    markIfNeeded(markStack, d()->emptyObjectStructure);
+    markIfNeeded(markStack, d()->errorStructure);
+    markIfNeeded(markStack, d()->functionStructure);
+    markIfNeeded(markStack, d()->numberObjectStructure);
+    markIfNeeded(markStack, d()->prototypeFunctionStructure);
+    markIfNeeded(markStack, d()->regExpMatchesArrayStructure);
+    markIfNeeded(markStack, d()->regExpStructure);
+    markIfNeeded(markStack, d()->stringObjectStructure);
 
     // No need to mark the other structures, because their prototypes are all
     // guaranteed to be referenced elsewhere.
@@ -403,11 +420,7 @@ void JSGlobalObject::mark()
         return;
 
     size_t size = d()->registerArraySize;
-    for (size_t i = 0; i < size; ++i) {
-        Register& r = registerArray[i];
-        if (!r.marked())
-            r.mark();
-    }
+    markStack.appendValues(reinterpret_cast<JSValue*>(registerArray), size);
 }
 
 ExecState* JSGlobalObject::globalExec()
@@ -452,11 +465,12 @@ void JSGlobalObject::copyGlobalsTo(RegisterFile& registerFile)
 
 void* JSGlobalObject::operator new(size_t size, JSGlobalData* globalData)
 {
-#ifdef JAVASCRIPTCORE_BUILDING_ALL_IN_ONE_FILE
-    return globalData->heap.inlineAllocate(size);
-#else
     return globalData->heap.allocate(size);
-#endif
+}
+
+void JSGlobalObject::destroyJSGlobalObjectData(void* jsGlobalObjectData)
+{
+    delete static_cast<JSGlobalObjectData*>(jsGlobalObjectData);
 }
 
 } // namespace JSC

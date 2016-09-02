@@ -26,6 +26,7 @@
 #include <wtf/Platform.h>
 
 #include "JSCell.h"
+#include "CallFrame.h"
 
 namespace JSC {
 
@@ -36,18 +37,18 @@ namespace JSC {
 
         virtual bool isAPIValueWrapper() const { return true; }
 
-        virtual JSValue toPrimitive(ExecState*, PreferredPrimitiveType) const;
-        virtual bool getPrimitiveNumber(ExecState*, double& number, JSValue&);
-        virtual bool toBoolean(ExecState*) const;
-        virtual double toNumber(ExecState*) const;
-        virtual UString toString(ExecState*) const;
-        virtual JSObject* toObject(ExecState*) const;
+        static PassRefPtr<Structure> createStructure(JSValue prototype)
+        {
+            return Structure::create(prototype, TypeInfo(CompoundType, OverridesMarkChildren | OverridesGetPropertyNames), AnonymousSlotCount);
+        }
 
+        
     private:
-        JSAPIValueWrapper(JSValue value)
-            : JSCell(0)
+        JSAPIValueWrapper(ExecState* exec, JSValue value)
+            : JSCell(exec->globalData().apiWrapperStructure.get())
             , m_value(value)
         {
+            ASSERT(!value.isCell());
         }
 
         JSValue m_value;
@@ -55,7 +56,7 @@ namespace JSC {
 
     inline JSValue jsAPIValueWrapper(ExecState* exec, JSValue value)
     {
-        return new (exec) JSAPIValueWrapper(value);
+        return new (exec) JSAPIValueWrapper(exec, value);
     }
 
 } // namespace JSC

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005, 2006, 2007, 2008 Apple Inc. All rights reserved.
+ *  Copyright (C) 2005, 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -22,24 +22,57 @@
 #define WTF_FastMalloc_h
 
 #include "Platform.h"
+#include "PossiblyNull.h"
 #include <stdlib.h>
 #include <new>
 
 namespace WTF {
 
     // These functions call CRASH() if an allocation fails.
-    void* fastMalloc(size_t n);
-    void* fastZeroedMalloc(size_t n);
-    void* fastCalloc(size_t n_elements, size_t element_size);
-    void* fastRealloc(void* p, size_t n);
+    void* fastMalloc(size_t);
+    void* fastZeroedMalloc(size_t);
+    void* fastCalloc(size_t numElements, size_t elementSize);
+    void* fastRealloc(void*, size_t);
+    char* fastStrDup(const char*);
 
-    // These functions return NULL if an allocation fails.
-    void* tryFastMalloc(size_t n);
-    void* tryFastZeroedMalloc(size_t n);
-    void* tryFastCalloc(size_t n_elements, size_t element_size);
-    void* tryFastRealloc(void* p, size_t n);
+    struct TryMallocReturnValue {
+        TryMallocReturnValue(void* data)
+            : m_data(data)
+        {
+        }
+        TryMallocReturnValue(const TryMallocReturnValue& source)
+            : m_data(source.m_data)
+        {
+            source.m_data = 0;
+        }
+        ~TryMallocReturnValue() { ASSERT(!m_data); }
+        template <typename T> bool getValue(T& data) WARN_UNUSED_RETURN;
+        template <typename T> operator PossiblyNull<T>()
+        { 
+            T value; 
+            getValue(value); 
+            return PossiblyNull<T>(value);
+        } 
+    private:
+        mutable void* m_data;
+    };
+    
+    template <typename T> bool TryMallocReturnValue::getValue(T& data)
+    {
+        union u { void* data; T target; } res;
+        res.data = m_data;
+        data = res.target;
+        bool returnValue = !!m_data;
+        m_data = 0;
+        return returnValue;
+    }
 
-    void fastFree(void* p);
+    TryMallocReturnValue tryFastMalloc(size_t n);
+    TryMallocReturnValue tryFastZeroedMalloc(size_t n);
+    TryMallocReturnValue tryFastCalloc(size_t n_elements, size_t element_size);
+    TryMallocReturnValue tryFastRealloc(void* p, size_t n);
+
+    void fastFree(void*);
 
 #ifndef NDEBUG    
     void fastMallocForbid();
@@ -156,38 +189,53 @@ using WTF::tryFastZeroedMalloc;
 using WTF::tryFastCalloc;
 using WTF::tryFastRealloc;
 using WTF::fastFree;
+using WTF::fastStrDup;
 
 #ifndef NDEBUG    
 using WTF::fastMallocForbid;
 using WTF::fastMallocAllow;
 #endif
 
-#if COMPILER(GCC) && PLATFORM(DARWIN)
+#if COMPILER(GCC) && OS(DARWIN)
 #define WTF_PRIVATE_INLINE __private_extern__ inline __attribute__((always_inline))
 #elif COMPILER(GCC)
 #define WTF_PRIVATE_INLINE inline __attribute__((always_inline))
-#elif COMPILER(MSVC)
+#elif COMPILER(MSVC) || COMPILER(RVCT)
 #define WTF_PRIVATE_INLINE __forceinline
 #else
 #define WTF_PRIVATE_INLINE inline
 #endif
 
-#ifndef _CRTDBG_MAP_ALLOC
+#if !defined(_CRTDBG_MAP_ALLOC) && !(defined(USE_SYSTEM_MALLOC) && USE_SYSTEM_MALLOC)
 
-#if !defined(USE_SYSTEM_MALLOC) || !(USE_SYSTEM_MALLOC)
-WTF_PRIVATE_INLINE void* operator new(size_t s) { return fastMalloc(s); }
-WTF_PRIVATE_INLINE void operator delete(void* p) { fastFree(p); }
-WTF_PRIVATE_INLINE void* operator new[](size_t s) { return fastMalloc(s); }
-WTF_PRIVATE_INLINE void operator delete[](void* p) { fastFree(p); }
+// The nothrow functions here are actually not all that helpful, because fastMalloc will
+// call CRASH() rather than returning 0, and returning 0 is what nothrow is all about.
+// But since WebKit code never uses exceptions or nothrow at all, this is probably OK.
+// Long term we will adopt FastAllocBase.h everywhere, and and replace this with
+// debug-only code to make sure we don't use the system malloc via the default operator
+// new by accident.
 
-#if PLATFORM(WINCE)
-WTF_PRIVATE_INLINE void* operator new(size_t s, const std::nothrow_t&) throw() { return fastMalloc(s); }
+// We musn't customize the global operator new and delete for the Qt port.
+#if !PLATFORM(QT)
+
+#if COMPILER(MSVC)
+#pragma warning(push)
+#pragma warning(disable: 4290) // Disable the C++ exception specification ignored warning.
+#endif
+WTF_PRIVATE_INLINE void* operator new(size_t size) throw (std::bad_alloc) { return fastMalloc(size); }
+WTF_PRIVATE_INLINE void* operator new(size_t size, const std::nothrow_t&) throw() { return fastMalloc(size); }
+WTF_PRIVATE_INLINE void operator delete(void* p) throw() { fastFree(p); }
 WTF_PRIVATE_INLINE void operator delete(void* p, const std::nothrow_t&) throw() { fastFree(p); }
-WTF_PRIVATE_INLINE void* operator new[](size_t s, const std::nothrow_t&) throw() { return fastMalloc(s); }
+WTF_PRIVATE_INLINE void* operator new[](size_t size) throw (std::bad_alloc) { return fastMalloc(size); }
+WTF_PRIVATE_INLINE void* operator new[](size_t size, const std::nothrow_t&) throw() { return fastMalloc(size); }
+WTF_PRIVATE_INLINE void operator delete[](void* p) throw() { fastFree(p); }
 WTF_PRIVATE_INLINE void operator delete[](void* p, const std::nothrow_t&) throw() { fastFree(p); }
-#endif
+#if COMPILER(MSVC)
+#pragma warning(pop)
 #endif
 
-#endif // _CRTDBG_MAP_ALLOC
+#endif
+
+#endif
 
 #endif /* WTF_FastMalloc_h */

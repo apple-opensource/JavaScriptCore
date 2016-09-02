@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2007, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2007 Kevin Ollivier
+ * Copyright (C) 2009 Maxime Simon
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,45 +26,23 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
-#import "config.h"
-#import "MainThread.h"
 
-#import <Foundation/NSThread.h>
-#import <wtf/Assertions.h>
+#include "config.h"
+#include "MainThread.h"
 
-@interface WTFMainThreadCaller : NSObject {
-}
-- (void)call;
-@end
-
-@implementation WTFMainThreadCaller
-
-- (void)call
-{
-    WTF::dispatchFunctionsFromMainThread();
-}
-
-@end // implementation WTFMainThreadCaller
+#include "NotImplemented.h"
 
 namespace WTF {
 
-static NSThread* staticMainNSThread = nil;
-static WTFMainThreadCaller* staticMainThreadCaller = nil;
-
 void initializeMainThreadPlatform()
 {
-    ASSERT(!staticMainThreadCaller);
-    staticMainThreadCaller = [[WTFMainThreadCaller alloc] init];
-    ASSERT(!staticMainNSThread);
-    staticMainNSThread = [[NSThread currentThread] retain];
+    notImplemented();
 }
 
 void scheduleDispatchFunctionsOnMainThread()
 {
-    ASSERT(staticMainNSThread);
-    ASSERT(staticMainThreadCaller);
-    [staticMainThreadCaller performSelector:@selector(call) onThread:staticMainNSThread withObject:nil waitUntilDone:NO];
+    notImplemented();
 }
 
 } // namespace WTF
+

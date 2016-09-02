@@ -59,7 +59,9 @@
 #ifndef Threading_h
 #define Threading_h
 
-#if PLATFORM(WINCE)
+#include "Platform.h"
+
+#if OS(WINCE)
 #include <windows.h>
 #endif
 
@@ -67,10 +69,12 @@
 #include <wtf/Locker.h>
 #include <wtf/Noncopyable.h>
 
-#if PLATFORM(WIN_OS) && !PLATFORM(WINCE)
+#if OS(WINDOWS) && !OS(WINCE)
 #include <windows.h>
-#elif PLATFORM(DARWIN)
+#elif OS(DARWIN)
 #include <libkern/OSAtomic.h>
+#elif OS(ANDROID)
+#include <cutils/atomic.h>
 #elif COMPILER(GCC)
 #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 2))
 #include <ext/atomicity.h>
@@ -82,7 +86,7 @@
 #if USE(PTHREADS)
 #include <pthread.h>
 #elif PLATFORM(GTK)
-#include <wtf/GOwnPtr.h>
+#include <wtf/gtk/GOwnPtr.h>
 typedef struct _GMutex GMutex;
 typedef struct _GCond GCond;
 #endif
@@ -117,7 +121,7 @@ ThreadIdentifier createThreadInternal(ThreadFunction, void*, const char* threadN
 
 // Called in the thread during initialization.
 // Helpful for platforms where the thread name must be set from within the thread.
-void setThreadNameInternal(const char* threadName);
+void initializeCurrentThreadInternal(const char* threadName);
 
 ThreadIdentifier currentThread();
 bool isMainThread();
@@ -126,7 +130,11 @@ void detachThread(ThreadIdentifier);
 
 #if USE(PTHREADS)
 typedef pthread_mutex_t PlatformMutex;
+#if HAVE(PTHREAD_RWLOCK)
 typedef pthread_rwlock_t PlatformReadWriteLock;
+#else
+typedef void* PlatformReadWriteLock;
+#endif
 typedef pthread_cond_t PlatformCondition;
 #elif PLATFORM(GTK)
 typedef GOwnPtr<GMutex> PlatformMutex;
@@ -136,7 +144,7 @@ typedef GOwnPtr<GCond> PlatformCondition;
 typedef QT_PREPEND_NAMESPACE(QMutex)* PlatformMutex;
 typedef void* PlatformReadWriteLock; // FIXME: Implement.
 typedef QT_PREPEND_NAMESPACE(QWaitCondition)* PlatformCondition;
-#elif PLATFORM(WIN_OS)
+#elif OS(WINDOWS)
 struct PlatformMutex {
     CRITICAL_SECTION m_internalMutex;
     size_t m_recursionCount;
@@ -159,7 +167,7 @@ typedef void* PlatformReadWriteLock;
 typedef void* PlatformCondition;
 #endif
     
-class Mutex : Noncopyable {
+class Mutex : public Noncopyable {
 public:
     Mutex();
     ~Mutex();
@@ -176,7 +184,7 @@ private:
 
 typedef Locker<Mutex> MutexLocker;
 
-class ReadWriteLock : Noncopyable {
+class ReadWriteLock : public Noncopyable {
 public:
     ReadWriteLock();
     ~ReadWriteLock();
@@ -193,7 +201,7 @@ private:
     PlatformReadWriteLock m_readWriteLock;
 };
 
-class ThreadCondition : Noncopyable {
+class ThreadCondition : public Noncopyable {
 public:
     ThreadCondition();
     ~ThreadCondition();
@@ -209,32 +217,37 @@ private:
     PlatformCondition m_condition;
 };
 
-#if PLATFORM(WIN_OS)
+#if OS(WINDOWS)
 #define WTF_USE_LOCKFREE_THREADSAFESHARED 1
 
-#if COMPILER(MINGW) || COMPILER(MSVC7) || PLATFORM(WINCE)
-inline void atomicIncrement(int* addend) { InterlockedIncrement(reinterpret_cast<long*>(addend)); }
+#if COMPILER(MINGW) || COMPILER(MSVC7) || OS(WINCE)
+inline int atomicIncrement(int* addend) { return InterlockedIncrement(reinterpret_cast<long*>(addend)); }
 inline int atomicDecrement(int* addend) { return InterlockedDecrement(reinterpret_cast<long*>(addend)); }
 #else
-inline void atomicIncrement(int volatile* addend) { InterlockedIncrement(reinterpret_cast<long volatile*>(addend)); }
+inline int atomicIncrement(int volatile* addend) { return InterlockedIncrement(reinterpret_cast<long volatile*>(addend)); }
 inline int atomicDecrement(int volatile* addend) { return InterlockedDecrement(reinterpret_cast<long volatile*>(addend)); }
 #endif
 
-#elif PLATFORM(DARWIN)
+#elif OS(DARWIN)
 #define WTF_USE_LOCKFREE_THREADSAFESHARED 1
 
-inline void atomicIncrement(int volatile* addend) { OSAtomicIncrement32Barrier(const_cast<int*>(addend)); }
+inline int atomicIncrement(int volatile* addend) { return OSAtomicIncrement32Barrier(const_cast<int*>(addend)); }
 inline int atomicDecrement(int volatile* addend) { return OSAtomicDecrement32Barrier(const_cast<int*>(addend)); }
 
-#elif COMPILER(GCC)
+#elif OS(ANDROID)
+
+inline int atomicIncrement(int volatile* addend) { return android_atomic_inc(addend); }
+inline int atomicDecrement(int volatile* addend) { return android_atomic_dec(addend); }
+
+#elif COMPILER(GCC) && !CPU(SPARC64) // sizeof(_Atomic_word) != sizeof(int) on sparc64 gcc
 #define WTF_USE_LOCKFREE_THREADSAFESHARED 1
 
-inline void atomicIncrement(int volatile* addend) { __gnu_cxx::__atomic_add(addend, 1); }
+inline int atomicIncrement(int volatile* addend) { return __gnu_cxx::__exchange_and_add(addend, 1) + 1; }
 inline int atomicDecrement(int volatile* addend) { return __gnu_cxx::__exchange_and_add(addend, -1) - 1; }
 
 #endif
 
-class ThreadSafeSharedBase : Noncopyable {
+class ThreadSafeSharedBase : public Noncopyable {
 public:
     ThreadSafeSharedBase(int initialRefCount = 1)
         : m_refCount(initialRefCount)
@@ -322,6 +335,11 @@ using WTF::MutexLocker;
 using WTF::ThreadCondition;
 using WTF::ThreadIdentifier;
 using WTF::ThreadSafeShared;
+
+#if USE(LOCKFREE_THREADSAFESHARED)
+using WTF::atomicDecrement;
+using WTF::atomicIncrement;
+#endif
 
 using WTF::createThread;
 using WTF::currentThread;

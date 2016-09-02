@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2003, 2006, 2007 Apple Inc.  All rights reserved.
+ * Copyright (C) 2007-2009 Torch Mobile, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,7 +33,7 @@
 
 #include <CoreFoundation/CFString.h>
 
-#if COMPILER(MSVC) && !PLATFORM(WINCE)
+#if COMPILER(MSVC) && !OS(WINCE)
 #ifndef WINVER
 #define WINVER 0x0500
 #endif
@@ -41,6 +42,10 @@
 #endif
 #include <windows.h>
 #include <crtdbg.h>
+#endif
+
+#if OS(WINCE)
+#include <winbase.h>
 #endif
 
 extern "C" {
@@ -63,7 +68,11 @@ static void vprintf_stderr_common(const char* format, va_list args)
         CFRelease(str);
         CFRelease(cfFormat);
     } else
+#if OS(SYMBIAN)
+    vfprintf(stdout, format, args);
+#else
     vfprintf(stderr, format, args);
+#endif
 }
 
 WTF_ATTRIBUTE_PRINTF(1, 2)
@@ -77,7 +86,7 @@ static void printf_stderr_common(const char* format, ...)
 
 static void printCallSite(const char* file, int line, const char* function)
 {
-#if PLATFORM(WIN) && defined _DEBUG
+#if OS(WIN) && !OS(WINCE) && defined _DEBUG
     _CrtDbgReport(_CRT_WARN, file, line, NULL, "%s\n", function);
 #else
     printf_stderr_common("(%s:%d %s)\n", file, line, function);

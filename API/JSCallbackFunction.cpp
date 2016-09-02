@@ -27,7 +27,9 @@
 #include <wtf/Platform.h>
 #include "JSCallbackFunction.h"
 
+#include "APIShims.h"
 #include "APICast.h"
+#include "CodeBlock.h"
 #include "JSFunction.h"
 #include "FunctionPrototype.h"
 #include <runtime/JSGlobalObject.h>
@@ -60,7 +62,7 @@ JSValue JSCallbackFunction::call(ExecState* exec, JSObject* functionObject, JSVa
     JSValueRef exception = 0;
     JSValueRef result;
     {
-        JSLock::DropAllLocks dropAllLocks(exec);
+        APICallbackShim callbackShim(exec);
         result = static_cast<JSCallbackFunction*>(functionObject)->m_callback(execRef, functionRef, thisObjRef, argumentCount, arguments.data(), &exception);
     }
     if (exception)

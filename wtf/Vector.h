@@ -24,6 +24,7 @@
 #include "FastAllocBase.h"
 #include "Noncopyable.h"
 #include "NotFound.h"
+#include "ValueCheck.h"
 #include "VectorTraits.h"
 #include <limits>
 #include <utility>
@@ -63,8 +64,15 @@ namespace WTF {
     template <size_t size> struct AlignedBuffer<size, 32> { WTF_ALIGNED(AlignedBufferChar, buffer[size], 32); };
     template <size_t size> struct AlignedBuffer<size, 64> { WTF_ALIGNED(AlignedBufferChar, buffer[size], 64); };
 
+    template <size_t size, size_t alignment>
+    void swap(AlignedBuffer<size, alignment>& a, AlignedBuffer<size, alignment>& b)
+    {
+        for (size_t i = 0; i < size; ++i)
+            std::swap(a.buffer[i], b.buffer[i]);
+    }
+
     template <bool needsDestruction, typename T>
-    class VectorDestructor;
+    struct VectorDestructor;
 
     template<typename T>
     struct VectorDestructor<false, T>
@@ -83,7 +91,7 @@ namespace WTF {
     };
 
     template <bool needsInitialization, bool canInitializeWithMemset, typename T>
-    class VectorInitializer;
+    struct VectorInitializer;
 
     template<bool ignore, typename T>
     struct VectorInitializer<false, ignore, T>
@@ -111,7 +119,7 @@ namespace WTF {
     };
 
     template <bool canMoveWithMemcpy, typename T>
-    class VectorMover;
+    struct VectorMover;
 
     template<typename T>
     struct VectorMover<false, T>
@@ -155,7 +163,7 @@ namespace WTF {
     };
 
     template <bool canCopyWithMemcpy, typename T>
-    class VectorCopier;
+    struct VectorCopier;
 
     template<typename T>
     struct VectorCopier<false, T>
@@ -180,7 +188,7 @@ namespace WTF {
     };
 
     template <bool canFillWithMemset, typename T>
-    class VectorFiller;
+    struct VectorFiller;
 
     template<typename T>
     struct VectorFiller<false, T>
@@ -205,7 +213,7 @@ namespace WTF {
     };
     
     template<bool canCompareWithMemcmp, typename T>
-    class VectorComparer;
+    struct VectorComparer;
     
     template<typename T>
     struct VectorComparer<false, T>
@@ -268,7 +276,7 @@ namespace WTF {
     };
 
     template<typename T>
-    class VectorBufferBase : Noncopyable {
+    class VectorBufferBase : public Noncopyable {
     public:
         void allocateBuffer(size_t newCapacity)
         {
@@ -404,6 +412,27 @@ namespace WTF {
             Base::deallocateBuffer(bufferToDeallocate);
         }
         
+        void swap(VectorBuffer<T, inlineCapacity>& other)
+        {
+            if (buffer() == inlineBuffer() && other.buffer() == other.inlineBuffer()) {
+                WTF::swap(m_inlineBuffer, other.m_inlineBuffer);
+                std::swap(m_capacity, other.m_capacity);
+            } else if (buffer() == inlineBuffer()) {
+                m_buffer = other.m_buffer;
+                other.m_buffer = other.inlineBuffer();
+                WTF::swap(m_inlineBuffer, other.m_inlineBuffer);
+                std::swap(m_capacity, other.m_capacity);
+            } else if (other.buffer() == other.inlineBuffer()) {
+                other.m_buffer = m_buffer;
+                m_buffer = inlineBuffer();
+                WTF::swap(m_inlineBuffer, other.m_inlineBuffer);
+                std::swap(m_capacity, other.m_capacity);
+            } else {
+                std::swap(m_buffer, other.m_buffer);
+                std::swap(m_capacity, other.m_capacity);
+            }
+        }
+
         void restoreInlineBufferIfNeeded()
         {
             if (m_buffer)
@@ -562,6 +591,8 @@ namespace WTF {
             std::swap(m_size, other.m_size);
             m_buffer.swap(other.m_buffer);
         }
+
+        void checkConsistency();
 
     private:
         void expandCapacity(size_t newMinCapacity);
@@ -939,7 +970,7 @@ namespace WTF {
     inline void Vector<T, inlineCapacity>::remove(size_t position, size_t length)
     {
         ASSERT(position < size());
-        ASSERT(position + length < size());
+        ASSERT(position + length <= size());
         T* beginSpot = begin() + position;
         T* endSpot = beginSpot + length;
         TypeOperations::destruct(beginSpot, endSpot); 
@@ -961,6 +992,15 @@ namespace WTF {
         }
         m_size = 0;
         return buffer;
+    }
+
+    template<typename T, size_t inlineCapacity>
+    inline void Vector<T, inlineCapacity>::checkConsistency()
+    {
+#if !ASSERT_DISABLED
+        for (size_t i = 0; i < size(); ++i)
+            ValueCheck<T>::checkConsistency(at(i));
+#endif
     }
 
     template<typename T, size_t inlineCapacity>
@@ -993,6 +1033,15 @@ namespace WTF {
         return !(a == b);
     }
 
+#if !ASSERT_DISABLED
+    template<typename T> struct ValueCheck<Vector<T> > {
+        typedef Vector<T> TraitType;
+        static void checkConsistency(const Vector<T>& v)
+        {
+            v.checkConsistency();
+        }
+    };
+#endif
 
 } // namespace WTF
 
