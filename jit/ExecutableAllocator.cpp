@@ -55,7 +55,7 @@ namespace JSC {
 class DemandExecutableAllocator : public MetaAllocator {
 public:
     DemandExecutableAllocator()
-        : MetaAllocator(32) // round up all allocations to 32 bytes
+        : MetaAllocator(jitAllocationGranule)
     {
         MutexLocker lock(allocatorsMutex());
         allocators().add(this);
@@ -114,8 +114,7 @@ protected:
 #endif
         
         PageReservation reservation = PageReservation::reserve(numPages * pageSize(), OSAllocator::JSJITCodePages, EXECUTABLE_POOL_WRITABLE, true);
-        if (!reservation)
-            CRASH();
+        RELEASE_ASSERT(reservation);
         
         reservations.append(reservation);
         
@@ -168,7 +167,7 @@ void ExecutableAllocator::initializeAllocator()
 }
 #endif
 
-ExecutableAllocator::ExecutableAllocator(JSGlobalData&)
+ExecutableAllocator::ExecutableAllocator(VM&)
 #if ENABLE(ASSEMBLER_WX_EXCLUSIVE)
     : m_allocator(adoptPtr(new  DemandExecutableAllocator()))
 #endif
@@ -213,11 +212,10 @@ double ExecutableAllocator::memoryPressureMultiplier(size_t addedMemoryUsage)
 
 }
 
-PassRefPtr<ExecutableMemoryHandle> ExecutableAllocator::allocate(JSGlobalData&, size_t sizeInBytes, void* ownerUID, JITCompilationEffort effort)
+PassRefPtr<ExecutableMemoryHandle> ExecutableAllocator::allocate(VM&, size_t sizeInBytes, void* ownerUID, JITCompilationEffort effort)
 {
     RefPtr<ExecutableMemoryHandle> result = allocator()->allocate(sizeInBytes, ownerUID);
-    if (!result && effort == JITCompilationMustSucceed)
-        CRASH();
+    RELEASE_ASSERT(result || effort != JITCompilationMustSucceed);
     return result.release();
 }
 

@@ -30,10 +30,10 @@
 #include <limits>
 #include <wtf/Assertions.h>
 #include <wtf/MetaAllocatorHandle.h>
+#include <wtf/MetaAllocator.h>
 #include <wtf/PageAllocation.h>
 #include <wtf/PassRefPtr.h>
 #include <wtf/RefCounted.h>
-#include <wtf/UnusedParam.h>
 #include <wtf/Vector.h>
 
 #if OS(IOS)
@@ -73,13 +73,14 @@ extern "C" __declspec(dllimport) void CacheRangeFlush(LPVOID pAddr, DWORD dwLeng
 
 namespace JSC {
 
-class JSGlobalData;
-void releaseExecutableMemory(JSGlobalData&);
+class VM;
+void releaseExecutableMemory(VM&);
+
+static const unsigned jitAllocationGranule = 32;
 
 inline size_t roundUpAllocationSize(size_t request, size_t granularity)
 {
-    if ((std::numeric_limits<size_t>::max() - granularity) <= request)
-        CRASH(); // Allocation is too large
+    RELEASE_ASSERT((std::numeric_limits<size_t>::max() - granularity) > request);
     
     // Round up to next page boundary
     size_t size = request + (granularity - 1);
@@ -100,11 +101,23 @@ typedef WTF::MetaAllocatorHandle ExecutableMemoryHandle;
 class DemandExecutableAllocator;
 #endif
 
+#if ENABLE(EXECUTABLE_ALLOCATOR_FIXED)
+#if CPU(ARM) || CPU(ARM64)
+static const size_t fixedExecutableMemoryPoolSize = 16 * 1024 * 1024;
+#elif CPU(X86_64)
+static const size_t fixedExecutableMemoryPoolSize = 1024 * 1024 * 1024;
+#else
+static const size_t fixedExecutableMemoryPoolSize = 32 * 1024 * 1024;
+#endif
+
+extern uintptr_t startOfFixedExecutableMemoryPool;
+#endif
+
 class ExecutableAllocator {
     enum ProtectionSetting { Writable, Executable };
 
 public:
-    ExecutableAllocator(JSGlobalData&);
+    ExecutableAllocator(VM&);
     ~ExecutableAllocator();
     
     static void initializeAllocator();
@@ -121,7 +134,7 @@ public:
     static void dumpProfile() { }
 #endif
 
-    PassRefPtr<ExecutableMemoryHandle> allocate(JSGlobalData&, size_t sizeInBytes, void* ownerUID, JITCompilationEffort);
+    PassRefPtr<ExecutableMemoryHandle> allocate(VM&, size_t sizeInBytes, void* ownerUID, JITCompilationEffort);
 
 #if ENABLE(ASSEMBLER_WX_EXCLUSIVE)
     static void makeWritable(void* start, size_t size)
@@ -156,12 +169,14 @@ private:
 
 #else
 
+#if PLATFORM(IOS)
 
 class ExecutableAllocator {
 public: 
     static size_t committedByteCount();
 };
 
+#endif // !PLATFORM(IOS)
 
 #endif // ENABLE(JIT) && ENABLE(ASSEMBLER)
 

@@ -31,10 +31,32 @@
 #include <wtf/InlineASM.h>
 #include <wtf/Platform.h>
 
+
+#if ENABLE(LLINT_C_LOOP)
+#define OFFLINE_ASM_C_LOOP 1
+#define OFFLINE_ASM_X86 0
+#define OFFLINE_ASM_ARM 0
+#define OFFLINE_ASM_ARMv7 0
+#define OFFLINE_ASM_ARMv7_TRADITIONAL 0
+#define OFFLINE_ASM_X86_64 0
+#define OFFLINE_ASM_ARMv7s 0
+#define OFFLINE_ASM_MIPS 0
+#define OFFLINE_ASM_SH4 0
+
+#else // !ENABLE(LLINT_C_LOOP)
+
+#define OFFLINE_ASM_C_LOOP 0
+
 #if CPU(X86)
 #define OFFLINE_ASM_X86 1
 #else
 #define OFFLINE_ASM_X86 0
+#endif
+
+#ifdef __ARM_ARCH_7S__
+#define OFFLINE_ASM_ARMv7s 1
+#else
+#define OFFLINE_ASM_ARMv7s 0
 #endif
 
 #if CPU(ARM_THUMB2)
@@ -43,10 +65,43 @@
 #define OFFLINE_ASM_ARMv7 0
 #endif
 
+#if CPU(ARM_TRADITIONAL)
+#if WTF_ARM_ARCH_AT_LEAST(7)
+#define OFFLINE_ASM_ARMv7_TRADITIONAL 1
+#define OFFLINE_ASM_ARM 0
+#else
+#define OFFLINE_ASM_ARM 1
+#define OFFLINE_ASM_ARMv7_TRADITIONAL 0
+#endif
+#else
+#define OFFLINE_ASM_ARMv7_TRADITIONAL 0
+#define OFFLINE_ASM_ARM 0
+#endif
+
 #if CPU(X86_64)
 #define OFFLINE_ASM_X86_64 1
 #else
 #define OFFLINE_ASM_X86_64 0
+#endif
+
+#if CPU(MIPS)
+#define OFFLINE_ASM_MIPS 1
+#else
+#define OFFLINE_ASM_MIPS 0
+#endif
+
+#if CPU(SH4)
+#define OFFLINE_ASM_SH4 1
+#else
+#define OFFLINE_ASM_SH4 0
+#endif
+
+#endif // !ENABLE(LLINT_C_LOOP)
+
+#if CPU(ARM64)
+#define OFFLINE_ASM_ARM64 1
+#else
+#define OFFLINE_ASM_ARM64 0
 #endif
 
 #if USE(JSVALUE64)
@@ -91,24 +146,43 @@
 #define OFFLINE_ASM_VALUE_PROFILER 0
 #endif
 
+#if CPU(MIPS)
+#ifdef WTF_MIPS_PIC
+#define S(x) #x
+#define SX(x) S(x)
+#define OFFLINE_ASM_CPLOAD(reg) \
+    ".set noreorder\n" \
+    ".cpload " SX(reg) "\n" \
+    ".set reorder\n"
+#else
+#define OFFLINE_ASM_CPLOAD(reg)
+#endif
+#endif
+
 #ifdef __ARM_ARCH_7S__
 #define OFFLINE_ASM_ARMv7s 1
 #else
 #define OFFLINE_ASM_ARMv7s 0
 #endif
 
+// These are for building an interpreter from generated assembly code:
+#define OFFLINE_ASM_BEGIN   asm (
+#define OFFLINE_ASM_END     );
+
 #if CPU(ARM_THUMB2)
 #define OFFLINE_ASM_GLOBAL_LABEL(label)          \
     ".globl " SYMBOL_STRING(label) "\n"          \
-    HIDE_SYMBOL(name) "\n"                       \
+    HIDE_SYMBOL(label) "\n"                      \
     ".thumb\n"                                   \
     ".thumb_func " THUMB_FUNC_PARAM(label) "\n"  \
     SYMBOL_STRING(label) ":\n"
 #else
 #define OFFLINE_ASM_GLOBAL_LABEL(label)         \
     ".globl " SYMBOL_STRING(label) "\n"         \
-    HIDE_SYMBOL(name) "\n"                      \
+    HIDE_SYMBOL(label) "\n"                     \
     SYMBOL_STRING(label) ":\n"
 #endif
+
+#define OFFLINE_ASM_LOCAL_LABEL(label)   LOCAL_LABEL_STRING(label) ":\n"
 
 #endif // LLIntOfflineAsmConfig_h

@@ -26,6 +26,7 @@
 #include "Interpreter.h"
 #include "JSFunction.h"
 #include "JSGlobalObject.h"
+#include "Operations.h"
 #include "Parser.h"
 #include "Protect.h"
 
@@ -35,7 +36,11 @@ using namespace JSC;
 
 class Recompiler : public MarkedBlock::VoidFunctor {
 public:
+#if PLATFORM(IOS)
     Recompiler(JSC::Debugger*);
+#else
+    Recompiler(Debugger*);
+#endif
     ~Recompiler();
     void operator()(JSCell*);
 
@@ -43,12 +48,20 @@ private:
     typedef HashSet<FunctionExecutable*> FunctionExecutableSet;
     typedef HashMap<SourceProvider*, ExecState*> SourceProviderMap;
     
+#if PLATFORM(IOS)
     JSC::Debugger* m_debugger;
+#else
+    Debugger* m_debugger;
+#endif
     FunctionExecutableSet m_functionExecutables;
     SourceProviderMap m_sourceProviders;
 };
 
+#if PLATFORM(IOS)
 inline Recompiler::Recompiler(JSC::Debugger* debugger)
+#else
+inline Recompiler::Recompiler(Debugger* debugger)
+#endif
     : m_debugger(debugger)
 {
 }
@@ -59,7 +72,7 @@ inline Recompiler::~Recompiler()
     // JavaScript in the inspector.
     SourceProviderMap::const_iterator end = m_sourceProviders.end();
     for (SourceProviderMap::const_iterator iter = m_sourceProviders.begin(); iter != end; ++iter)
-        m_debugger->sourceParsed(iter->second, iter->first, -1, UString());
+        m_debugger->sourceParsed(iter->value, iter->key, -1, String());
 }
 
 inline void Recompiler::operator()(JSCell* cell)
@@ -78,9 +91,10 @@ inline void Recompiler::operator()(JSCell* cell)
     if (!m_functionExecutables.add(executable).isNewEntry)
         return;
 
-    ExecState* exec = function->scope()->globalObject->JSGlobalObject::globalExec();
-    executable->discardCode();
-    if (m_debugger == function->scope()->globalObject->debugger())
+    ExecState* exec = function->scope()->globalObject()->JSGlobalObject::globalExec();
+    executable->clearCodeIfNotCompiling();
+    executable->clearUnlinkedCodeForRecompilationIfNotCompiling();
+    if (m_debugger == function->scope()->globalObject()->debugger())
         m_sourceProviders.add(executable->source().provider(), exec);
 }
 
@@ -109,34 +123,34 @@ void Debugger::detach(JSGlobalObject* globalObject)
     globalObject->setDebugger(0);
 }
 
-void Debugger::recompileAllJSFunctions(JSGlobalData* globalData)
+void Debugger::recompileAllJSFunctions(VM* vm)
 {
     // If JavaScript is running, it's not safe to recompile, since we'll end
     // up throwing away code that is live on the stack.
-    ASSERT(!globalData->dynamicGlobalObject);
-    if (globalData->dynamicGlobalObject)
+    ASSERT(!vm->dynamicGlobalObject);
+    if (vm->dynamicGlobalObject)
         return;
 
     Recompiler recompiler(this);
-    globalData->heap.objectSpace().forEachCell(recompiler);
+    vm->heap.objectSpace().forEachLiveCell(recompiler);
 }
 
-JSValue evaluateInGlobalCallFrame(const UString& script, JSValue& exception, JSGlobalObject* globalObject)
+JSValue evaluateInGlobalCallFrame(const String& script, JSValue& exception, JSGlobalObject* globalObject)
 {
     CallFrame* globalCallFrame = globalObject->globalExec();
-    JSGlobalData& globalData = globalObject->globalData();
+    VM& vm = globalObject->vm();
 
-    EvalExecutable* eval = EvalExecutable::create(globalCallFrame, makeSource(script), false);
+    EvalExecutable* eval = EvalExecutable::create(globalCallFrame, vm.codeCache(), makeSource(script), false);
     if (!eval) {
-        exception = globalData.exception;
-        globalData.exception = JSValue();
+        exception = vm.exception;
+        vm.exception = JSValue();
         return exception;
     }
 
-    JSValue result = globalData.interpreter->execute(eval, globalCallFrame, globalObject, globalCallFrame->scopeChain());
-    if (globalData.exception) {
-        exception = globalData.exception;
-        globalData.exception = JSValue();
+    JSValue result = vm.interpreter->execute(eval, globalCallFrame, globalObject, globalCallFrame->scope());
+    if (vm.exception) {
+        exception = vm.exception;
+        vm.exception = JSValue();
     }
     ASSERT(result);
     return result;

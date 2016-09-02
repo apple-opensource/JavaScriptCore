@@ -26,53 +26,83 @@
 #include "config.h"
 #include "BlockAllocator.h"
 
+#include "CopiedBlock.h"
+#include "CopyWorkList.h"
 #include "MarkedBlock.h"
+#include "WeakBlock.h"
 #include <wtf/CurrentTime.h>
 
 namespace JSC {
 
 BlockAllocator::BlockAllocator()
-    : m_numberOfFreeBlocks(0)
+    : m_superRegion()
+    , m_copiedRegionSet(CopiedBlock::blockSize)
+    , m_markedRegionSet(MarkedBlock::blockSize)
+    , m_fourKBBlockRegionSet(WeakBlock::blockSize)
+    , m_workListRegionSet(CopyWorkListSegment::blockSize)
+    , m_numberOfEmptyRegions(0)
     , m_isCurrentlyAllocating(false)
     , m_blockFreeingThreadShouldQuit(false)
+#if PLATFORM(IOS)
     , m_blockFreeingThread(GCActivityCallback::s_shouldCreateGCTimer ?
         createThread(blockFreeingThreadStartFunc, this, "JavaScriptCore::BlockFree") : 0)
+#else
+    , m_blockFreeingThread(createThread(blockFreeingThreadStartFunc, this, "JavaScriptCore::BlockFree"))
+#endif
 {
-    ASSERT(m_blockFreeingThread || !GCActivityCallback::s_shouldCreateGCTimer);
+#if PLATFORM(IOS)
+    RELEASE_ASSERT(m_blockFreeingThread || !GCActivityCallback::s_shouldCreateGCTimer);
+#else
+    RELEASE_ASSERT(m_blockFreeingThread);
+#endif
+    m_regionLock.Init();
 }
 
 BlockAllocator::~BlockAllocator()
 {
-    releaseFreeBlocks();
+    releaseFreeRegions();
     {
-        MutexLocker locker(m_freeBlockLock);
+        MutexLocker locker(m_emptyRegionConditionLock);
         m_blockFreeingThreadShouldQuit = true;
-        m_freeBlockCondition.broadcast();
+        m_emptyRegionCondition.broadcast();
     }
+#if PLATFORM(IOS)
     if (GCActivityCallback::s_shouldCreateGCTimer)
         waitForThreadCompletion(m_blockFreeingThread);
+#else
+    waitForThreadCompletion(m_blockFreeingThread);
+#endif
+    ASSERT(allRegionSetsAreEmpty());
+    ASSERT(m_emptyRegions.isEmpty());
 }
 
-void BlockAllocator::releaseFreeBlocks()
+bool BlockAllocator::allRegionSetsAreEmpty() const
+{
+    return m_copiedRegionSet.isEmpty()
+        && m_markedRegionSet.isEmpty()
+        && m_fourKBBlockRegionSet.isEmpty()
+        && m_workListRegionSet.isEmpty();
+}
+
+void BlockAllocator::releaseFreeRegions()
 {
     while (true) {
-        MarkedBlock* block;
+        Region* region;
         {
-            MutexLocker locker(m_freeBlockLock);
-            if (!m_numberOfFreeBlocks)
-                block = 0;
+            SpinLockHolder locker(&m_regionLock);
+            if (!m_numberOfEmptyRegions)
+                region = 0;
             else {
-                // FIXME: How do we know this is a MarkedBlock? It could be a CopiedBlock.
-                block = static_cast<MarkedBlock*>(m_freeBlocks.removeHead());
-                ASSERT(block);
-                m_numberOfFreeBlocks--;
+                region = m_emptyRegions.removeHead();
+                RELEASE_ASSERT(region);
+                m_numberOfEmptyRegions--;
             }
         }
         
-        if (!block)
+        if (!region)
             break;
-        
-        MarkedBlock::destroy(block);
+
+        region->destroy();
     }
 }
 
@@ -80,7 +110,8 @@ void BlockAllocator::waitForRelativeTimeWhileHoldingLock(double relative)
 {
     if (m_blockFreeingThreadShouldQuit)
         return;
-    m_freeBlockCondition.timedWait(m_freeBlockLock, currentTime() + relative);
+
+    m_emptyRegionCondition.timedWait(m_emptyRegionConditionLock, currentTime() + relative);
 }
 
 void BlockAllocator::waitForRelativeTime(double relative)
@@ -89,7 +120,7 @@ void BlockAllocator::waitForRelativeTime(double relative)
     // frequently. It would only be a bug if this function failed to return
     // when it was asked to do so.
     
-    MutexLocker locker(m_freeBlockLock);
+    MutexLocker locker(m_emptyRegionConditionLock);
     waitForRelativeTimeWhileHoldingLock(relative);
 }
 
@@ -100,6 +131,7 @@ void BlockAllocator::blockFreeingThreadStartFunc(void* blockAllocator)
 
 void BlockAllocator::blockFreeingThreadMain()
 {
+    size_t currentNumberOfEmptyRegions;
     while (!m_blockFreeingThreadShouldQuit) {
         // Generally wait for one second before scavenging free blocks. This
         // may return early, particularly when we're being asked to quit.
@@ -112,33 +144,37 @@ void BlockAllocator::blockFreeingThreadMain()
             continue;
         }
 
-        // Now process the list of free blocks. Keep freeing until half of the
-        // blocks that are currently on the list are gone. Assume that a size_t
-        // field can be accessed atomically.
-        size_t currentNumberOfFreeBlocks = m_numberOfFreeBlocks;
-        if (!currentNumberOfFreeBlocks)
-            continue;
+        // Sleep until there is actually work to do rather than waking up every second to check.
+        {
+            MutexLocker locker(m_emptyRegionConditionLock);
+            SpinLockHolder regionLocker(&m_regionLock);
+            while (!m_numberOfEmptyRegions && !m_blockFreeingThreadShouldQuit) {
+                m_regionLock.Unlock();
+                m_emptyRegionCondition.wait(m_emptyRegionConditionLock);
+                m_regionLock.Lock();
+            }
+            currentNumberOfEmptyRegions = m_numberOfEmptyRegions;
+        }
         
-        size_t desiredNumberOfFreeBlocks = currentNumberOfFreeBlocks / 2;
+        size_t desiredNumberOfEmptyRegions = currentNumberOfEmptyRegions / 2;
         
         while (!m_blockFreeingThreadShouldQuit) {
-            MarkedBlock* block;
+            Region* region;
             {
-                MutexLocker locker(m_freeBlockLock);
-                if (m_numberOfFreeBlocks <= desiredNumberOfFreeBlocks)
-                    block = 0;
+                SpinLockHolder locker(&m_regionLock);
+                if (m_numberOfEmptyRegions <= desiredNumberOfEmptyRegions)
+                    region = 0;
                 else {
-                    // FIXME: How do we know this is a MarkedBlock? It could be a CopiedBlock.
-                    block = static_cast<MarkedBlock*>(m_freeBlocks.removeHead());
-                    ASSERT(block);
-                    m_numberOfFreeBlocks--;
+                    region = m_emptyRegions.removeHead();
+                    RELEASE_ASSERT(region);
+                    m_numberOfEmptyRegions--;
                 }
             }
             
-            if (!block)
+            if (!region)
                 break;
             
-            MarkedBlock::destroy(block);
+            region->destroy();
         }
     }
 }

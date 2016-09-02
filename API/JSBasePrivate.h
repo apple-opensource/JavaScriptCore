@@ -45,8 +45,10 @@ region.
 */
 JS_EXPORT void JSReportExtraMemoryCost(JSContextRef ctx, size_t size) AVAILABLE_IN_WEBKIT_VERSION_4_0;
 
+#if defined(WTF_PLATFORM_IOS) && WTF_PLATFORM_IOS
 /* Please don't call this. Please. */
 JS_EXPORT void JSDisableGCTimer(void);
+#endif // defined(WTF_PLATFORM_IOS) && WTF_PLATFORM_IOS
 
 #ifdef __cplusplus
 }

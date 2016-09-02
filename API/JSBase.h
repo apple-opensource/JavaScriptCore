@@ -30,6 +30,22 @@
 #include <stdbool.h>
 #endif
 
+#ifdef __OBJC__
+#import <Foundation/Foundation.h>
+#endif
+
+/* Define WTF_PLATFORM_IOS without Platform.h for JSBasePrivate.h */
+
+#ifndef WTF_PLATFORM_IOS
+#include <TargetConditionals.h>
+#if (defined(TARGET_OS_EMBEDDED) && TARGET_OS_EMBEDDED) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+#define WTF_PLATFORM_IOS 1
+#endif
+#if defined(TARGET_IPHONE_SIMULATOR) && TARGET_IPHONE_SIMULATOR
+#define WTF_PLATFORM_IOS 1
+#endif
+#endif // WTF_PLATFORM_IOS
+
 /* JavaScript engine interface */
 
 /*! @typedef JSContextGroupRef A group that associates JavaScript contexts with one another. Contexts in the same group may share and exchange JavaScript objects. */
@@ -71,7 +87,7 @@ typedef struct OpaqueJSValue* JSObjectRef;
 #elif defined(__GNUC__) && !defined(__CC_ARM) && !defined(__ARMCC__)
 #define JS_EXPORT __attribute__((visibility("default")))
 #elif defined(WIN32) || defined(_WIN32) || defined(_WIN32_WCE) || defined(__CC_ARM) || defined(__ARMCC__)
-#if defined(BUILDING_JavaScriptCore) || defined(BUILDING_WTF)
+#if defined(BUILDING_JavaScriptCore) || defined(STATICALLY_LINKED_WITH_JavaScriptCore)
 #define JS_EXPORT __declspec(dllexport)
 #else
 #define JS_EXPORT __declspec(dllimport)
@@ -133,6 +149,11 @@ JS_EXPORT void JSGarbageCollect(JSContextRef ctx);
 
 #ifdef __cplusplus
 }
+#endif
+
+/* Enable the Objective-C API for platforms with a modern runtime. */
+#if !defined(JSC_OBJC_API_ENABLED)
+#define JSC_OBJC_API_ENABLED (defined(__clang__) && defined(__APPLE__) && (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1090 && !defined(__i386__)) || ((defined(TARGET_OS_EMBEDDED) && TARGET_OS_EMBEDDED) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || (defined(TARGET_IPHONE_SIMULATOR) && TARGET_IPHONE_SIMULATOR)))
 #endif
 
 #endif /* JSBase_h */
