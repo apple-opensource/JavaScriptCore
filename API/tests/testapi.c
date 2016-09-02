@@ -32,6 +32,10 @@
 #include <wtf/Assertions.h>
 #include <wtf/UnusedParam.h>
 
+#if OS(WINDOWS)
+#include <windows.h>
+#endif
+
 #if COMPILER(MSVC)
 
 #include <wtf/MathExtras.h>
@@ -307,8 +311,19 @@ static JSValueRef MyObject_convertToType(JSContextRef context, JSObjectRef objec
     return JSValueMakeNull(context);
 }
 
+static bool MyObject_set_nullGetForwardSet(JSContextRef ctx, JSObjectRef object, JSStringRef propertyName, JSValueRef value, JSValueRef* exception)
+{
+    UNUSED_PARAM(ctx);
+    UNUSED_PARAM(object);
+    UNUSED_PARAM(propertyName);
+    UNUSED_PARAM(value);
+    UNUSED_PARAM(exception);
+    return false; // Forward to parent class.
+}
+
 static JSStaticValue evilStaticValues[] = {
     { "nullGetSet", 0, 0, kJSPropertyAttributeNone },
+    { "nullGetForwardSet", 0, MyObject_set_nullGetForwardSet, kJSPropertyAttributeNone },
     { 0, 0, 0, 0 }
 };
 
@@ -347,6 +362,111 @@ static JSClassRef MyObject_class(JSContextRef context)
     static JSClassRef jsClass;
     if (!jsClass)
         jsClass = JSClassCreate(&MyObject_definition);
+    
+    return jsClass;
+}
+
+static JSValueRef PropertyCatchalls_getProperty(JSContextRef context, JSObjectRef object, JSStringRef propertyName, JSValueRef* exception)
+{
+    UNUSED_PARAM(context);
+    UNUSED_PARAM(object);
+    UNUSED_PARAM(propertyName);
+    UNUSED_PARAM(exception);
+
+    if (JSStringIsEqualToUTF8CString(propertyName, "x")) {
+        static size_t count;
+        if (count++ < 5)
+            return NULL;
+
+        // Swallow all .x gets after 5, returning null.
+        return JSValueMakeNull(context);
+    }
+
+    if (JSStringIsEqualToUTF8CString(propertyName, "y")) {
+        static size_t count;
+        if (count++ < 5)
+            return NULL;
+
+        // Swallow all .y gets after 5, returning null.
+        return JSValueMakeNull(context);
+    }
+    
+    if (JSStringIsEqualToUTF8CString(propertyName, "z")) {
+        static size_t count;
+        if (count++ < 5)
+            return NULL;
+
+        // Swallow all .y gets after 5, returning null.
+        return JSValueMakeNull(context);
+    }
+
+    return NULL;
+}
+
+static bool PropertyCatchalls_setProperty(JSContextRef context, JSObjectRef object, JSStringRef propertyName, JSValueRef value, JSValueRef* exception)
+{
+    UNUSED_PARAM(context);
+    UNUSED_PARAM(object);
+    UNUSED_PARAM(propertyName);
+    UNUSED_PARAM(value);
+    UNUSED_PARAM(exception);
+
+    if (JSStringIsEqualToUTF8CString(propertyName, "x")) {
+        static size_t count;
+        if (count++ < 5)
+            return false;
+
+        // Swallow all .x sets after 4.
+        return true;
+    }
+
+    return false;
+}
+
+static void PropertyCatchalls_getPropertyNames(JSContextRef context, JSObjectRef object, JSPropertyNameAccumulatorRef propertyNames)
+{
+    UNUSED_PARAM(context);
+    UNUSED_PARAM(object);
+
+    static size_t count;
+    static const char* numbers[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+    
+    // Provide a property of a different name every time.
+    JSStringRef propertyName = JSStringCreateWithUTF8CString(numbers[count++ % 10]);
+    JSPropertyNameAccumulatorAddName(propertyNames, propertyName);
+    JSStringRelease(propertyName);
+}
+
+JSClassDefinition PropertyCatchalls_definition = {
+    0,
+    kJSClassAttributeNone,
+    
+    "PropertyCatchalls",
+    NULL,
+    
+    NULL,
+    NULL,
+    
+    NULL,
+    NULL,
+    NULL,
+    PropertyCatchalls_getProperty,
+    PropertyCatchalls_setProperty,
+    NULL,
+    PropertyCatchalls_getPropertyNames,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+};
+
+static JSClassRef PropertyCatchalls_class(JSContextRef context)
+{
+    UNUSED_PARAM(context);
+
+    static JSClassRef jsClass;
+    if (!jsClass)
+        jsClass = JSClassCreate(&PropertyCatchalls_definition);
     
     return jsClass;
 }
@@ -764,8 +884,68 @@ static void makeGlobalNumberValue(JSContextRef context) {
     v = NULL;
 }
 
+static bool assertTrue(bool value, const char* message)
+{
+    if (!value) {
+        if (message)
+            fprintf(stderr, "assertTrue failed: '%s'\n", message);
+        else
+            fprintf(stderr, "assertTrue failed.\n");
+        failed = 1;
+    }
+    return value;
+}
+
+static bool checkForCycleInPrototypeChain()
+{
+    bool result = true;
+    JSGlobalContextRef context = JSGlobalContextCreate(0);
+    JSObjectRef object1 = JSObjectMake(context, /* jsClass */ 0, /* data */ 0);
+    JSObjectRef object2 = JSObjectMake(context, /* jsClass */ 0, /* data */ 0);
+    JSObjectRef object3 = JSObjectMake(context, /* jsClass */ 0, /* data */ 0);
+
+    JSObjectSetPrototype(context, object1, JSValueMakeNull(context));
+    ASSERT(JSValueIsNull(context, JSObjectGetPrototype(context, object1)));
+
+    // object1 -> object1
+    JSObjectSetPrototype(context, object1, object1);
+    result &= assertTrue(JSValueIsNull(context, JSObjectGetPrototype(context, object1)), "It is possible to assign self as a prototype");
+
+    // object1 -> object2 -> object1
+    JSObjectSetPrototype(context, object2, object1);
+    ASSERT(JSValueIsStrictEqual(context, JSObjectGetPrototype(context, object2), object1));
+    JSObjectSetPrototype(context, object1, object2);
+    result &= assertTrue(JSValueIsNull(context, JSObjectGetPrototype(context, object1)), "It is possible to close a prototype chain cycle");
+
+    // object1 -> object2 -> object3 -> object1
+    JSObjectSetPrototype(context, object2, object3);
+    ASSERT(JSValueIsStrictEqual(context, JSObjectGetPrototype(context, object2), object3));
+    JSObjectSetPrototype(context, object1, object2);
+    ASSERT(JSValueIsStrictEqual(context, JSObjectGetPrototype(context, object1), object2));
+    JSObjectSetPrototype(context, object3, object1);
+    result &= assertTrue(!JSValueIsStrictEqual(context, JSObjectGetPrototype(context, object3), object1), "It is possible to close a prototype chain cycle");
+
+    JSValueRef exception;
+    JSStringRef code = JSStringCreateWithUTF8CString("o = { }; p = { }; o.__proto__ = p; p.__proto__ = o");
+    JSStringRef file = JSStringCreateWithUTF8CString("");
+    result &= assertTrue(!JSEvaluateScript(context, code, /* thisObject*/ 0, file, 1, &exception)
+                         , "An exception should be thrown");
+
+    JSStringRelease(code);
+    JSStringRelease(file);
+    JSGlobalContextRelease(context);
+    return result;
+}
+
 int main(int argc, char* argv[])
 {
+#if OS(WINDOWS)
+    // Cygwin calls ::SetErrorMode(SEM_FAILCRITICALERRORS), which we will inherit. This is bad for
+    // testing/debugging, as it causes the post-mortem debugger not to be invoked. We reset the
+    // error mode here to work around Cygwin's behavior. See <http://webkit.org/b/55222>.
+    ::SetErrorMode(0);
+#endif
+
     const char *scriptPath = "testapi.js";
     if (argc > 1) {
         scriptPath = argv[1];
@@ -858,6 +1038,11 @@ int main(int argc, char* argv[])
     ASSERT(JSValueGetType(context, jsCFEmptyString) == kJSTypeString);
     ASSERT(JSValueGetType(context, jsCFEmptyStringWithCharacters) == kJSTypeString);
 
+    JSObjectRef propertyCatchalls = JSObjectMake(context, PropertyCatchalls_class(context), NULL);
+    JSStringRef propertyCatchallsString = JSStringCreateWithUTF8CString("PropertyCatchalls");
+    JSObjectSetProperty(context, globalObject, propertyCatchallsString, propertyCatchalls, kJSPropertyAttributeNone, NULL);
+    JSStringRelease(propertyCatchallsString);
+
     JSObjectRef myObject = JSObjectMake(context, MyObject_class(context), NULL);
     JSStringRef myObjectIString = JSStringCreateWithUTF8CString("MyObject");
     JSObjectSetProperty(context, globalObject, myObjectIString, myObject, kJSPropertyAttributeNone, NULL);
@@ -874,21 +1059,21 @@ int main(int argc, char* argv[])
     JSStringRelease(EmptyObjectIString);
     
     JSStringRef lengthStr = JSStringCreateWithUTF8CString("length");
-    aHeapRef = JSObjectMakeArray(context, 0, 0, 0);
+    JSObjectRef aStackRef = JSObjectMakeArray(context, 0, 0, 0);
+    aHeapRef = aStackRef;
     JSObjectSetProperty(context, aHeapRef, lengthStr, JSValueMakeNumber(context, 10), 0, 0);
     JSStringRef privatePropertyName = JSStringCreateWithUTF8CString("privateProperty");
     if (!JSObjectSetPrivateProperty(context, myObject, privatePropertyName, aHeapRef)) {
         printf("FAIL: Could not set private property.\n");
-        failed = 1;        
-    } else {
+        failed = 1;
+    } else
         printf("PASS: Set private property.\n");
-    }
+    aStackRef = 0;
     if (JSObjectSetPrivateProperty(context, aHeapRef, privatePropertyName, aHeapRef)) {
         printf("FAIL: JSObjectSetPrivateProperty should fail on non-API objects.\n");
-        failed = 1;        
-    } else {
+        failed = 1;
+    } else
         printf("PASS: Did not allow JSObjectSetPrivateProperty on a non-API object.\n");
-    }
     if (JSObjectGetPrivateProperty(context, myObject, privatePropertyName) != aHeapRef) {
         printf("FAIL: Could not retrieve private property.\n");
         failed = 1;
@@ -899,25 +1084,37 @@ int main(int argc, char* argv[])
         failed = 1;
     } else
         printf("PASS: JSObjectGetPrivateProperty return NULL.\n");
-    
+
     if (JSObjectGetProperty(context, myObject, privatePropertyName, 0) == aHeapRef) {
         printf("FAIL: Accessed private property through ordinary property lookup.\n");
         failed = 1;
     } else
         printf("PASS: Cannot access private property through ordinary property lookup.\n");
-    
+
     JSGarbageCollect(context);
-    
+
     for (int i = 0; i < 10000; i++)
         JSObjectMake(context, 0, 0);
 
+    aHeapRef = JSValueToObject(context, JSObjectGetPrivateProperty(context, myObject, privatePropertyName), 0);
     if (JSValueToNumber(context, JSObjectGetProperty(context, aHeapRef, lengthStr, 0), 0) != 10) {
         printf("FAIL: Private property has been collected.\n");
         failed = 1;
     } else
         printf("PASS: Private property does not appear to have been collected.\n");
     JSStringRelease(lengthStr);
-    
+
+    if (!JSObjectSetPrivateProperty(context, myObject, privatePropertyName, 0)) {
+        printf("FAIL: Could not set private property to NULL.\n");
+        failed = 1;
+    } else
+        printf("PASS: Set private property to NULL.\n");
+    if (JSObjectGetPrivateProperty(context, myObject, privatePropertyName)) {
+        printf("FAIL: Could not retrieve private property.\n");
+        failed = 1;
+    } else
+        printf("PASS: Retrieved private property.\n");
+
     JSStringRef validJSON = JSStringCreateWithUTF8CString("{\"aProperty\":true}");
     JSValueRef jsonObject = JSValueMakeFromJSONString(context, validJSON);
     JSStringRelease(validJSON);
@@ -1345,6 +1542,13 @@ int main(int argc, char* argv[])
     JSClassRelease(prototypeLoopClass);
 
     printf("PASS: Infinite prototype chain does not occur.\n");
+
+    if (checkForCycleInPrototypeChain())
+        printf("PASS: A cycle in a prototype chain can't be created.\n");
+    else {
+        printf("FAIL: A cycle in a prototype chain can be created.\n");
+        failed = true;
+    }
 
     if (failed) {
         printf("FAIL: Some tests failed.\n");

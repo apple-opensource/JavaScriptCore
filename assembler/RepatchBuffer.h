@@ -87,14 +87,14 @@ public:
         MacroAssembler::repatchInt32(dataLabel32, value);
     }
 
+    void repatch(CodeLocationDataLabelCompact dataLabelCompact, int32_t value)
+    {
+        MacroAssembler::repatchCompact(dataLabelCompact, value);
+    }
+
     void repatch(CodeLocationDataLabelPtr dataLabelPtr, void* value)
     {
         MacroAssembler::repatchPointer(dataLabelPtr, value);
-    }
-
-    void repatchLoadPtrToLEA(CodeLocationInstruction instruction)
-    {
-        MacroAssembler::repatchLoadPtrToLEA(instruction);
     }
 
     void relinkCallerToTrampoline(ReturnAddressPtr returnAddress, CodeLocationLabel label)

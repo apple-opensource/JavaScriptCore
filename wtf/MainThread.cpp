@@ -34,6 +34,8 @@
 #include "StdLibExtras.h"
 #include "Threading.h"
 
+#include <wtf/iphone/WebCoreThread.h>
+
 #if PLATFORM(CHROMIUM)
 #error Chromium uses a different main thread implementation
 #endif
@@ -149,13 +151,14 @@ void dispatchFunctionsFromMainThread()
             MutexLocker locker(mainThreadFunctionQueueMutex());
             if (!functionQueue().size())
                 break;
-            invocation = functionQueue().first();
-            functionQueue().removeFirst();
+            invocation = functionQueue().takeFirst();
         }
 
         invocation.function(invocation.context);
-        if (invocation.syncFlag)
+        if (invocation.syncFlag) {
+            MutexLocker locker(mainThreadFunctionQueueMutex());
             invocation.syncFlag->signal();
+        }
 
         // If we are running accumulated functions for too long so UI may become unresponsive, we need to
         // yield so the user input can be processed. Otherwise user may not be able to even close the window.
@@ -219,7 +222,7 @@ void cancelCallOnMainThread(MainThreadFunction* function, void* context)
 
 void setMainThreadCallbacksPaused(bool paused)
 {
-    ASSERT(isMainThread());
+    ASSERT((isMainThread() || pthread_main_np()) && WebCoreWebThreadIsLockedOrDisabled());
 
     if (callbacksPaused == paused)
         return;
@@ -230,7 +233,7 @@ void setMainThreadCallbacksPaused(bool paused)
         scheduleDispatchFunctionsOnMainThread();
 }
 
-#if !PLATFORM(MAC) && !PLATFORM(QT)
+#if !PLATFORM(MAC) && !PLATFORM(QT) && !PLATFORM(BREWMP)
 bool isMainThread()
 {
     return currentThread() == mainThreadIdentifier;

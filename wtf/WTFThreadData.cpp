@@ -38,7 +38,11 @@ WTFThreadData* WTFThreadData::staticData;
 WTFThreadData::WTFThreadData()
     : m_atomicStringTable(0)
     , m_atomicStringTableDestructor(0)
+#if USE(JSC)
+    , m_stackBounds(StackBounds::currentThreadStackBounds())
+#endif
 {
+#if USE(JSC)
     static JSC::IdentifierTable* sharedIdentifierTable = new JSC::IdentifierTable();
     if (pthread_main_np() || isWebThread())
         m_defaultIdentifierTable = sharedIdentifierTable;
@@ -46,13 +50,16 @@ WTFThreadData::WTFThreadData()
         m_defaultIdentifierTable = new JSC::IdentifierTable();
 
     m_currentIdentifierTable = m_defaultIdentifierTable;
+#endif
 }
 
 WTFThreadData::~WTFThreadData()
 {
     if (m_atomicStringTableDestructor)
         m_atomicStringTableDestructor(m_atomicStringTable);
+#if USE(JSC)
     delete m_defaultIdentifierTable;
+#endif
 }
 
-} // namespace WebCore
+}

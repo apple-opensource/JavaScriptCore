@@ -26,8 +26,7 @@
 #ifndef CodeLocation_h
 #define CodeLocation_h
 
-
-#include <MacroAssemblerCodeRef.h>
+#include "MacroAssemblerCodeRef.h"
 
 #if ENABLE(ASSEMBLER)
 
@@ -38,6 +37,7 @@ class CodeLocationLabel;
 class CodeLocationJump;
 class CodeLocationCall;
 class CodeLocationNearCall;
+class CodeLocationDataLabelCompact;
 class CodeLocationDataLabel32;
 class CodeLocationDataLabelPtr;
 
@@ -61,6 +61,7 @@ public:
     CodeLocationNearCall nearCallAtOffset(int offset);
     CodeLocationDataLabelPtr dataLabelPtrAtOffset(int offset);
     CodeLocationDataLabel32 dataLabel32AtOffset(int offset);
+    CodeLocationDataLabelCompact dataLabelCompactAtOffset(int offset);
 
 protected:
     CodeLocationCommon()
@@ -127,6 +128,15 @@ public:
         : CodeLocationCommon(MacroAssemblerCodePtr(location)) {}
 };
 
+class CodeLocationDataLabelCompact : public CodeLocationCommon {
+public:
+    CodeLocationDataLabelCompact() { }
+    explicit CodeLocationDataLabelCompact(MacroAssemblerCodePtr location)
+        : CodeLocationCommon(location) { }
+    explicit CodeLocationDataLabelCompact(void* location)
+        : CodeLocationCommon(MacroAssemblerCodePtr(location)) { }
+};
+
 class CodeLocationDataLabelPtr : public CodeLocationCommon {
 public:
     CodeLocationDataLabelPtr() {}
@@ -176,6 +186,12 @@ inline CodeLocationDataLabel32 CodeLocationCommon::dataLabel32AtOffset(int offse
 {
     ASSERT_VALID_CODE_OFFSET(offset);
     return CodeLocationDataLabel32(reinterpret_cast<char*>(dataLocation()) + offset);
+}
+
+inline CodeLocationDataLabelCompact CodeLocationCommon::dataLabelCompactAtOffset(int offset)
+{
+    ASSERT_VALID_CODE_OFFSET(offset);
+    return CodeLocationDataLabelCompact(reinterpret_cast<char*>(dataLocation()) + offset);
 }
 
 } // namespace JSC

@@ -30,7 +30,6 @@
 #define Interpreter_h
 
 #include "ArgList.h"
-#include "FastAllocBase.h"
 #include "JSCell.h"
 #include "JSValue.h"
 #include "JSObject.h"
@@ -44,7 +43,6 @@ namespace JSC {
     class CodeBlock;
     class EvalExecutable;
     class FunctionExecutable;
-    class InternalFunction;
     class JSFunction;
     class JSGlobalObject;
     class ProgramExecutable;
@@ -66,13 +64,14 @@ namespace JSC {
 
     // We use a smaller reentrancy limit on iPhone because of the high amount of
     // stack space required on the web thread.
-    enum { MaxLargeThreadReentryDepth = 100, MaxSmallThreadReentryDepth = 32 };
+    enum { MaxLargeThreadReentryDepth = 93, MaxSmallThreadReentryDepth = 32 };
 
-    class Interpreter : public FastAllocBase {
+    class Interpreter {
+        WTF_MAKE_FAST_ALLOCATED;
         friend class JIT;
         friend class CachedCall;
     public:
-        Interpreter();
+        Interpreter(JSGlobalData&);
 
         RegisterFile& registerFile() { return m_registerFile; }
         
@@ -96,21 +95,22 @@ namespace JSC {
         }
 
         bool isOpcode(Opcode);
-        
-        JSValue execute(ProgramExecutable*, CallFrame*, ScopeChainNode*, JSObject* thisObj, JSValue* exception);
-        JSValue execute(FunctionExecutable*, CallFrame*, JSFunction*, JSObject* thisObj, const ArgList& args, ScopeChainNode*, JSValue* exception);
-        JSValue execute(EvalExecutable* evalNode, CallFrame* exec, JSObject* thisObj, ScopeChainNode* scopeChain, JSValue* exception);
+
+        JSValue execute(ProgramExecutable*, CallFrame*, ScopeChainNode*, JSObject* thisObj);
+        JSValue executeCall(CallFrame*, JSObject* function, CallType, const CallData&, JSValue thisValue, const ArgList&);
+        JSObject* executeConstruct(CallFrame*, JSObject* function, ConstructType, const ConstructData&, const ArgList&);
+        JSValue execute(EvalExecutable* evalNode, CallFrame* exec, JSObject* thisObj, ScopeChainNode* scopeChain);
 
         JSValue retrieveArguments(CallFrame*, JSFunction*) const;
-        JSValue retrieveCaller(CallFrame*, InternalFunction*) const;
+        JSValue retrieveCaller(CallFrame*, JSFunction*) const;
         void retrieveLastCaller(CallFrame*, int& lineNumber, intptr_t& sourceID, UString& sourceURL, JSValue& function) const;
         
         void getArgumentsData(CallFrame*, JSFunction*&, ptrdiff_t& firstParameterIndex, Register*& argv, int& argc);
         
         SamplingTool* sampler() { return m_sampler.get(); }
 
-        NEVER_INLINE JSValue callEval(CallFrame*, RegisterFile*, Register* argv, int argc, int registerOffset, JSValue& exceptionValue);
-        NEVER_INLINE HandlerInfo* throwException(CallFrame*&, JSValue&, unsigned bytecodeOffset, bool);
+        NEVER_INLINE JSValue callEval(CallFrame*, RegisterFile*, Register* argv, int argc, int registerOffset);
+        NEVER_INLINE HandlerInfo* throwException(CallFrame*&, JSValue&, unsigned bytecodeOffset);
         NEVER_INLINE void debug(CallFrame*, DebugHookID, int firstLine, int lastLine);
 
         void dumpSampleData(ExecState* exec);
@@ -119,11 +119,11 @@ namespace JSC {
     private:
         enum ExecutionFlag { Normal, InitializeAndReturn };
 
-        CallFrameClosure prepareForRepeatCall(FunctionExecutable*, CallFrame*, JSFunction*, int argCount, ScopeChainNode*, JSValue* exception);
+        CallFrameClosure prepareForRepeatCall(FunctionExecutable*, CallFrame*, JSFunction*, int argCount, ScopeChainNode*);
         void endRepeatCall(CallFrameClosure&);
-        JSValue execute(CallFrameClosure&, JSValue* exception);
+        JSValue execute(CallFrameClosure&);
 
-        JSValue execute(EvalExecutable*, CallFrame*, JSObject* thisObject, int globalRegisterOffset, ScopeChainNode*, JSValue* exception);
+        JSValue execute(EvalExecutable*, CallFrame*, JSObject* thisObject, int globalRegisterOffset, ScopeChainNode*);
 
 #if ENABLE(INTERPRETER)
         NEVER_INLINE bool resolve(CallFrame*, Instruction*, JSValue& exceptionValue);
@@ -144,9 +144,9 @@ namespace JSC {
 
         static ALWAYS_INLINE CallFrame* slideRegisterWindowForCall(CodeBlock*, RegisterFile*, CallFrame*, size_t registerOffset, int argc);
 
-        static CallFrame* findFunctionCallFrame(CallFrame*, InternalFunction*);
+        static CallFrame* findFunctionCallFrame(CallFrame*, JSFunction*);
 
-        JSValue privateExecute(ExecutionFlag, RegisterFile*, CallFrame*, JSValue* exception);
+        JSValue privateExecute(ExecutionFlag, RegisterFile*, CallFrame*);
 
         void dumpCallFrame(CallFrame*);
         void dumpRegisters(CallFrame*);
