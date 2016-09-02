@@ -1,7 +1,8 @@
 /*
  * Copyright (C) 1999-2000 Harri Porten (porten@kde.org)
  * Copyright (C) 2006, 2007 Apple Inc. All rights reserved.
- * 
+ * Copyright (C) 2009 Google Inc. All rights reserved.
+ *
  * The Original Code is Mozilla Communicator client code, released
  * March 31, 1998.
  *
@@ -42,15 +43,18 @@
 #include "config.h"
 #include "DateMath.h"
 
-#include "JSNumberCell.h"
-#include <math.h>
+#include "Assertions.h"
+#include "ASCIICType.h"
+#include "CurrentTime.h"
+#include "MathExtras.h"
+#include "StringExtras.h"
+
+#include <algorithm>
+#include <limits.h>
+#include <limits>
 #include <stdint.h>
 #include <time.h>
-#include <wtf/ASCIICType.h>
-#include <wtf/Assertions.h>
-#include <wtf/CurrentTime.h>
-#include <wtf/MathExtras.h>
-#include <wtf/StringExtras.h>
+
 
 #if HAVE(ERRNO_H)
 #include <errno.h>
@@ -68,9 +72,9 @@
 #include <sys/timeb.h>
 #endif
 
-using namespace WTF;
+#define NaN std::numeric_limits<double>::quiet_NaN()
 
-namespace JSC {
+namespace WTF {
 
 /* Constants */
 
@@ -296,7 +300,7 @@ double getCurrentUTCTimeWithMicroseconds()
 
 void getLocalTime(const time_t* localTime, struct tm* localTM)
 {
-#if COMPILER(MSVC7) || COMPILER(MINGW) || PLATFORM(WIN_CE)
+#if COMPILER(MSVC7) || COMPILER(MINGW) || PLATFORM(WINCE)
     *localTM = *localtime(localTime);
 #elif COMPILER(MSVC)
     localtime_s(localTM, localTime);
@@ -357,13 +361,29 @@ int equivalentYearForDST(int year)
 
 static int32_t calculateUTCOffset()
 {
+    time_t localTime = time(0);
     tm localt;
-    memset(&localt, 0, sizeof(localt));
- 
-    // get the difference between this time zone and UTC on Jan 01, 2000 12:00:00 AM
+    getLocalTime(&localTime, &localt);
+
+    // Get the difference between this time zone and UTC on the 1st of January of this year.
+    localt.tm_sec = 0;
+    localt.tm_min = 0;
+    localt.tm_hour = 0;
     localt.tm_mday = 1;
-    localt.tm_year = 100;
-    time_t utcOffset = 946684800 - mktime(&localt);
+    localt.tm_mon = 0;
+    // Not setting localt.tm_year!
+    localt.tm_wday = 0;
+    localt.tm_yday = 0;
+    localt.tm_isdst = 0;
+#if PLATFORM(WIN_OS) || PLATFORM(SOLARIS) || COMPILER(RVCT)
+    // Using a canned date of 01/01/2009 on platforms with weaker date-handling foo.
+    localt.tm_year = 109;
+    time_t utcOffset = 1230768000 - mktime(&localt);
+#else
+    localt.tm_zone = 0;
+    localt.tm_gmtoff = 0;
+    time_t utcOffset = timegm(&localt) - mktime(&localt);
+#endif
 
     return static_cast<int32_t>(utcOffset * 1000);
 }
@@ -496,7 +516,7 @@ void msToGregorianDateTime(double ms, bool outputIsUTC, GregorianDateTime& tm)
     tm.timeZone = NULL;
 }
 
-void initDateMath()
+void initializeDates()
 {
 #ifndef NDEBUG
     static bool alreadyInitialized;
@@ -592,7 +612,7 @@ static bool parseLong(const char* string, char** stopPosition, int base, long* r
     return true;
 }
 
-double parseDate(const UString &date)
+double parseDateFromNullTerminatedCharacters(const char* dateString)
 {
     // This parses a date in the form:
     //     Tuesday, 09-Nov-99 23:12:40 GMT
@@ -607,9 +627,6 @@ double parseDate(const UString &date)
     //     [Wednesday] January 09 23:12:40 GMT 1999
     //
     // We ignore the weekday.
-
-    CString dateCString = date.UTF8String();
-    const char *dateString = dateCString.c_str();
      
     // Skip leading space
     skipSpacesAndComments(dateString);
@@ -715,7 +732,7 @@ double parseDate(const UString &date)
         if (!parseLong(dateString, &newPosStr, 10, &year))
             return NaN;
     }
-    
+
     // Don't fail if the time is missing.
     long hour = 0;
     long minute = 0;
@@ -772,7 +789,7 @@ double parseDate(const UString &date)
                 if (!parseLong(dateString, &newPosStr, 10, &second))
                     return NaN;
                 dateString = newPosStr;
-            
+
                 if (second < 0 || second > 59)
                     return NaN;
             }
@@ -848,9 +865,9 @@ double parseDate(const UString &date)
             return NaN;
         dateString = newPosStr;
     }
-     
+
     skipSpacesAndComments(dateString);
-     
+
     // Trailing garbage
     if (*dateString)
         return NaN;
@@ -890,46 +907,5 @@ double timeClip(double t)
     return trunc(t);
 }
 
-UString formatDate(const GregorianDateTime &t)
-{
-    char buffer[100];
-    snprintf(buffer, sizeof(buffer), "%s %s %02d %04d",
-        weekdayName[(t.weekDay + 6) % 7],
-        monthName[t.month], t.monthDay, t.year + 1900);
-    return buffer;
-}
 
-UString formatDateUTCVariant(const GregorianDateTime &t)
-{
-    char buffer[100];
-    snprintf(buffer, sizeof(buffer), "%s, %02d %s %04d",
-        weekdayName[(t.weekDay + 6) % 7],
-        t.monthDay, monthName[t.month], t.year + 1900);
-    return buffer;
-}
-
-UString formatTime(const GregorianDateTime &t, bool utc)
-{
-    char buffer[100];
-    if (utc) {
-        snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d GMT", t.hour, t.minute, t.second);
-    } else {
-        int offset = abs(gmtoffset(t));
-        char timeZoneName[70];
-        struct tm gtm = t;
-        strftime(timeZoneName, sizeof(timeZoneName), "%Z", &gtm);
-
-        if (timeZoneName[0]) {
-            snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d GMT%c%02d%02d (%s)",
-                t.hour, t.minute, t.second,
-                gmtoffset(t) < 0 ? '-' : '+', offset / (60*60), (offset / 60) % 60, timeZoneName);
-        } else {
-            snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d GMT%c%02d%02d",
-                t.hour, t.minute, t.second,
-                gmtoffset(t) < 0 ? '-' : '+', offset / (60*60), (offset / 60) % 60);
-        }
-    }
-    return UString(buffer);
-}
-
-} // namespace JSC
+} // namespace WTF
