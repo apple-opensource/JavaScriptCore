@@ -232,6 +232,7 @@ __ZN3WTF10fastCallocEmm
 __ZN3WTF10fastMallocEm
 __ZN3WTF11fastReallocEPvm
 __ZN3WTF16fastZeroedMallocEm
+__ZN3WTF27releaseFastMallocFreeMemoryEv
 __ZN3WTF8fastFreeEPv
 __ZNK3KJS11PropertyMap3getERKNS_10IdentifierE
 __ZNK3KJS11PropertyMap4saveERNS_15SavedPropertiesE
@@ -291,4 +292,3 @@ _kjs_strtod
 _JSLockDropAllLocks
 _JSLockRecoverAllLocks
 _JSSetJavaScriptCollectionThread
-_releaseFastMallocFreeMemory
