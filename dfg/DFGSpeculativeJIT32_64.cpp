@@ -1106,6 +1106,10 @@ GPRReg SpeculativeJIT::fillSpeculateCell(Edge edge)
 
     switch (info.registerFormat()) {
     case DataFormatNone: {
+        if (info.spillFormat() == DataFormatInteger || info.spillFormat() == DataFormatDouble) {
+            terminateSpeculativeExecution(Uncountable, JSValueRegs(), 0);
+            return allocate();
+        }
 
         if (edge->hasConstant()) {
             JSValue jsValue = valueOfJSConstant(edge.node());
@@ -4401,7 +4405,7 @@ void SpeculativeJIT::compile(Node* node)
 
         JITCompiler::Jump isNotCell = m_jit.branch32(JITCompiler::NotEqual, tagGPR, JITCompiler::TrustedImm32(JSValue::CellTag));
         if (node->child1().useKind() != UntypedUse)
-            speculationCheck(BadType, JSValueRegs(tagGPR, payloadGPR), node->child1(), isNotCell);
+            DFG_TYPE_CHECK(JSValueRegs(tagGPR, payloadGPR), node->child1(), SpecCell, isNotCell);
 
         if (!node->child1()->shouldSpeculateObject() || node->child1().useKind() == StringUse) {
             m_jit.loadPtr(JITCompiler::Address(payloadGPR, JSCell::structureOffset()), tempGPR);
@@ -4955,6 +4959,10 @@ void SpeculativeJIT::compile(Node* node)
     case PhantomLocal:
         // This is a no-op.
         noResult(node);
+        break;
+
+    case Unreachable:
+        RELEASE_ASSERT_NOT_REACHED();
         break;
 
     case Nop:

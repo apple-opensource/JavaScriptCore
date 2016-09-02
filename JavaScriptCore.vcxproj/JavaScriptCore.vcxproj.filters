@@ -767,6 +767,9 @@
     <ClInclude Include="..\API\JavaScript.h">
       <Filter>API</Filter>
     </ClInclude>
+    <ClInclude Include="..\API\APICallbackFunction.h">
+      <Filter>API</Filter>
+    </ClInclude>
     <ClInclude Include="..\API\JavaScriptCore.h">
       <Filter>API</Filter>
     </ClInclude>

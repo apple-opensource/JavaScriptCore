@@ -849,6 +849,8 @@ public:
     {
         moveToCachedReg(TrustedImmPtr(address), m_cachedMemoryTempRegister);
         m_assembler.ldrb(dest, memoryTempRegister, ARM64Registers::zr);
+        if (dest == memoryTempRegister)
+            m_cachedMemoryTempRegister.invalidate();
     }
 
     void load8Signed(BaseIndex address, RegisterID dest)
@@ -1516,8 +1518,8 @@ public:
 
     Jump branch32(RelationalCondition cond, AbsoluteAddress left, RegisterID right)
     {
-        load32(left.m_ptr, getCachedMemoryTempRegisterIDAndInvalidate());
-        return branch32(cond, memoryTempRegister, right);
+        load32(left.m_ptr, getCachedDataTempRegisterIDAndInvalidate());
+        return branch32(cond, dataTempRegister, right);
     }
 
     Jump branch32(RelationalCondition cond, AbsoluteAddress left, TrustedImm32 right)
@@ -1554,8 +1556,8 @@ public:
 
     Jump branch64(RelationalCondition cond, AbsoluteAddress left, RegisterID right)
     {
-        load64(left.m_ptr, getCachedMemoryTempRegisterIDAndInvalidate());
-        return branch64(cond, memoryTempRegister, right);
+        load64(left.m_ptr, getCachedDataTempRegisterIDAndInvalidate());
+        return branch64(cond, dataTempRegister, right);
     }
 
     Jump branch64(RelationalCondition cond, Address left, RegisterID right)
@@ -2396,6 +2398,9 @@ private:
             intptr_t addressAsInt = reinterpret_cast<intptr_t>(address);
             intptr_t addressDelta = addressAsInt - currentRegisterContents;
 
+            if (dest == memoryTempRegister)
+                m_cachedMemoryTempRegister.invalidate();
+
             if (isInIntRange(addressDelta)) {
                 if (ARM64Assembler::canEncodeSImmOffset(addressDelta)) {
                     m_assembler.ldur<datasize>(dest,  memoryTempRegister, addressDelta);
@@ -2417,7 +2422,10 @@ private:
         }
 
         move(TrustedImmPtr(address), memoryTempRegister);
-        m_cachedMemoryTempRegister.setValue(reinterpret_cast<intptr_t>(address));
+        if (dest == memoryTempRegister)
+            m_cachedMemoryTempRegister.invalidate();
+        else
+            m_cachedMemoryTempRegister.setValue(reinterpret_cast<intptr_t>(address));
         m_assembler.ldr<datasize>(dest, memoryTempRegister, ARM64Registers::zr);
     }
 
