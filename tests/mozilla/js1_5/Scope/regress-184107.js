@@ -57,7 +57,6 @@ var actualvalues = [];
 var expect= '';
 var expectedvalues = [];
 
-y = 1;
 var obj = {y:10};
 with (obj)
 {
@@ -78,8 +77,7 @@ addThis();
 
 status = inSection(2);
 actual = f();
-// Mozilla result, which contradicts IE and the ECMA spec: expect = obj.y;
-expect = y;
+expect = obj.y;
 addThis();
 
 status = inSection(3);

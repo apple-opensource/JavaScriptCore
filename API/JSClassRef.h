@@ -1,3 +1,4 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
  * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
@@ -26,16 +27,14 @@
 #ifndef JSClassRef_h
 #define JSClassRef_h
 
-#include <JavaScriptCore/JSObjectRef.h>
+#include "JSObjectRef.h"
 
-#include "Weak.h"
-#include "Protect.h"
+#include <kjs/object.h>
+#include <kjs/protect.h>
+#include <kjs/ustring.h>
 #include <wtf/HashMap.h>
-#include <wtf/text/WTFString.h>
 
 struct StaticValueEntry {
-    WTF_MAKE_FAST_ALLOCATED;
-public:
     StaticValueEntry(JSObjectGetPropertyCallback _getProperty, JSObjectSetPropertyCallback _setProperty, JSPropertyAttributes _attributes)
         : getProperty(_getProperty), setProperty(_setProperty), attributes(_attributes)
     {
@@ -47,8 +46,6 @@ public:
 };
 
 struct StaticFunctionEntry {
-    WTF_MAKE_FAST_ALLOCATED;
-public:
     StaticFunctionEntry(JSObjectCallAsFunctionCallback _callAsFunction, JSPropertyAttributes _attributes)
         : callAsFunction(_callAsFunction), attributes(_attributes)
     {
@@ -58,43 +55,24 @@ public:
     JSPropertyAttributes attributes;
 };
 
-typedef HashMap<RefPtr<StringImpl>, OwnPtr<StaticValueEntry> > OpaqueJSClassStaticValuesTable;
-typedef HashMap<RefPtr<StringImpl>, OwnPtr<StaticFunctionEntry> > OpaqueJSClassStaticFunctionsTable;
-
-struct OpaqueJSClass;
-
-// An OpaqueJSClass (JSClass) is created without a context, so it can be used with any context, even across context groups.
-// This structure holds data members that vary across context groups.
-struct OpaqueJSClassContextData {
-    WTF_MAKE_NONCOPYABLE(OpaqueJSClassContextData); WTF_MAKE_FAST_ALLOCATED;
-public:
-    OpaqueJSClassContextData(JSC::VM&, OpaqueJSClass*);
-
-    // It is necessary to keep OpaqueJSClass alive because of the following rare scenario:
-    // 1. A class is created and used, so its context data is stored in VM hash map.
-    // 2. The class is released, and when all JS objects that use it are collected, OpaqueJSClass
-    // is deleted (that's the part prevented by this RefPtr).
-    // 3. Another class is created at the same address.
-    // 4. When it is used, the old context data is found in VM and used.
-    RefPtr<OpaqueJSClass> m_class;
-
-    OwnPtr<OpaqueJSClassStaticValuesTable> staticValues;
-    OwnPtr<OpaqueJSClassStaticFunctionsTable> staticFunctions;
-    JSC::Weak<JSC::JSObject> cachedPrototype;
-};
-
-struct OpaqueJSClass : public ThreadSafeRefCounted<OpaqueJSClass> {
-    static PassRefPtr<OpaqueJSClass> create(const JSClassDefinition*);
-    static PassRefPtr<OpaqueJSClass> createNoAutomaticPrototype(const JSClassDefinition*);
-    JS_EXPORT_PRIVATE ~OpaqueJSClass();
+struct OpaqueJSClass {
+    static OpaqueJSClass* create(const JSClassDefinition*);
+    static OpaqueJSClass* createNoAutomaticPrototype(const JSClassDefinition*);
+    ~OpaqueJSClass();
     
-    String className();
-    OpaqueJSClassStaticValuesTable* staticValues(JSC::ExecState*);
-    OpaqueJSClassStaticFunctionsTable* staticFunctions(JSC::ExecState*);
-    JSC::JSObject* prototype(JSC::ExecState*);
+    KJS::JSObject* prototype(JSContextRef ctx);
+    
+    typedef HashMap<RefPtr<KJS::UString::Rep>, StaticValueEntry*> StaticValuesTable;
+    typedef HashMap<RefPtr<KJS::UString::Rep>, StaticFunctionEntry*> StaticFunctionsTable;
 
+    unsigned refCount;
+
+    KJS::UString className;
     OpaqueJSClass* parentClass;
     OpaqueJSClass* prototypeClass;
+
+    StaticValuesTable* staticValues;
+    StaticFunctionsTable* staticFunctions;
     
     JSObjectInitializeCallback initialize;
     JSObjectFinalizeCallback finalize;
@@ -109,18 +87,12 @@ struct OpaqueJSClass : public ThreadSafeRefCounted<OpaqueJSClass> {
     JSObjectConvertToTypeCallback convertToType;
 
 private:
-    friend struct OpaqueJSClassContextData;
-
     OpaqueJSClass();
     OpaqueJSClass(const OpaqueJSClass&);
     OpaqueJSClass(const JSClassDefinition*, OpaqueJSClass* protoClass);
-
-    OpaqueJSClassContextData& contextData(JSC::ExecState*);
-
-    // Strings in these data members should not be put into any IdentifierTable.
-    String m_className;
-    OwnPtr<OpaqueJSClassStaticValuesTable> m_staticValues;
-    OwnPtr<OpaqueJSClassStaticFunctionsTable> m_staticFunctions;
+    
+    friend void clearReferenceToPrototype(JSObjectRef prototype);
+    KJS::JSObject* cachedPrototype;
 };
 
 #endif // JSClassRef_h

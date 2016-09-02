@@ -1,3 +1,4 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
  * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
@@ -26,30 +27,9 @@
 #ifndef JSBase_h
 #define JSBase_h
 
-#ifndef __cplusplus
 #include <stdbool.h>
-#endif
-
-#ifdef __OBJC__
-#import <Foundation/Foundation.h>
-#endif
-
-/* Define WTF_PLATFORM_IOS without Platform.h for JSBasePrivate.h */
-
-#ifndef WTF_PLATFORM_IOS
-#include <TargetConditionals.h>
-#if (defined(TARGET_OS_EMBEDDED) && TARGET_OS_EMBEDDED) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
-#define WTF_PLATFORM_IOS 1
-#endif
-#if defined(TARGET_IPHONE_SIMULATOR) && TARGET_IPHONE_SIMULATOR
-#define WTF_PLATFORM_IOS 1
-#endif
-#endif // WTF_PLATFORM_IOS
 
 /* JavaScript engine interface */
-
-/*! @typedef JSContextGroupRef A group that associates JavaScript contexts with one another. Contexts in the same group may share and exchange JavaScript objects. */
-typedef const struct OpaqueJSContextGroup* JSContextGroupRef;
 
 /*! @typedef JSContextRef A JavaScript execution context. Holds the global object and other execution state. */
 typedef const struct OpaqueJSContext* JSContextRef;
@@ -57,7 +37,7 @@ typedef const struct OpaqueJSContext* JSContextRef;
 /*! @typedef JSGlobalContextRef A global JavaScript execution context. A JSGlobalContext is a JSContext. */
 typedef struct OpaqueJSContext* JSGlobalContextRef;
 
-/*! @typedef JSStringRef A UTF16 character buffer. The fundamental string representation in JavaScript. */
+/*! @typedef JSString A UTF16 character buffer. The fundamental string representation in JavaScript. */
 typedef struct OpaqueJSString* JSStringRef;
 
 /*! @typedef JSClassRef A JavaScript class. Used with JSObjectMake to construct objects with custom behavior. */
@@ -78,29 +58,6 @@ typedef const struct OpaqueJSValue* JSValueRef;
 /*! @typedef JSObjectRef A JavaScript object. A JSObject is a JSValue. */
 typedef struct OpaqueJSValue* JSObjectRef;
 
-/* JavaScript symbol exports */
-/* These rules should stay the same as in WebKit2/Shared/API/c/WKBase.h */
-
-#undef JS_EXPORT
-#if defined(JS_NO_EXPORT)
-#define JS_EXPORT
-#elif defined(__GNUC__) && !defined(__CC_ARM) && !defined(__ARMCC__)
-#define JS_EXPORT __attribute__((visibility("default")))
-#elif defined(WIN32) || defined(_WIN32) || defined(_WIN32_WCE) || defined(__CC_ARM) || defined(__ARMCC__)
-#if defined(BUILDING_JavaScriptCore) || defined(STATICALLY_LINKED_WITH_JavaScriptCore)
-#define JS_EXPORT __declspec(dllexport)
-#else
-#define JS_EXPORT __declspec(dllimport)
-#endif
-#else /* !defined(JS_NO_EXPORT) */
-#define JS_EXPORT
-#endif /* defined(JS_NO_EXPORT) */
-
-/* JS tests uses WTF but has no config.h, so we need to set the export defines here. */
-#ifndef WTF_EXPORT_PRIVATE
-#define WTF_EXPORT_PRIVATE JS_EXPORT
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -108,7 +65,7 @@ extern "C" {
 /* Script Evaluation */
 
 /*!
-@function JSEvaluateScript
+@function
 @abstract Evaluates a string of JavaScript.
 @param ctx The execution context to use.
 @param script A JSString containing the script to evaluate.
@@ -118,7 +75,7 @@ extern "C" {
 @param exception A pointer to a JSValueRef in which to store an exception, if any. Pass NULL if you do not care to store an exception.
 @result The JSValue that results from evaluating script, or NULL if an exception is thrown.
 */
-JS_EXPORT JSValueRef JSEvaluateScript(JSContextRef ctx, JSStringRef script, JSObjectRef thisObject, JSStringRef sourceURL, int startingLineNumber, JSValueRef* exception);
+JSValueRef JSEvaluateScript(JSContextRef ctx, JSStringRef script, JSObjectRef thisObject, JSStringRef sourceURL, int startingLineNumber, JSValueRef* exception);
 
 /*!
 @function JSCheckScriptSyntax
@@ -130,30 +87,26 @@ JS_EXPORT JSValueRef JSEvaluateScript(JSContextRef ctx, JSStringRef script, JSOb
 @param exception A pointer to a JSValueRef in which to store a syntax error exception, if any. Pass NULL if you do not care to store a syntax error exception.
 @result true if the script is syntactically correct, otherwise false.
 */
-JS_EXPORT bool JSCheckScriptSyntax(JSContextRef ctx, JSStringRef script, JSStringRef sourceURL, int startingLineNumber, JSValueRef* exception);
+bool JSCheckScriptSyntax(JSContextRef ctx, JSStringRef script, JSStringRef sourceURL, int startingLineNumber, JSValueRef* exception);
 
 /*!
-@function JSGarbageCollect
+@function
 @abstract Performs a JavaScript garbage collection. 
-@param ctx The execution context to use.
+@param ctx This parameter is currently unused. Pass NULL.
 @discussion JavaScript values that are on the machine stack, in a register, 
  protected by JSValueProtect, set as the global object of an execution context, 
- or reachable from any such value will not be collected.
-
+ or reachable from any such value will not be collected. 
+ 
  During JavaScript execution, you are not required to call this function; the 
- JavaScript engine will garbage collect as needed. JavaScript values created
- within a context group are automatically destroyed when the last reference
- to the context group is released.
+ JavaScript engine will garbage collect as needed. One place you may want to call 
+ this function, however, is after releasing the last reference to a JSGlobalContextRef. 
+ At that point, a garbage collection can free the objects still referenced by the 
+ JSGlobalContextRef's global object, along with the global object itself.
 */
-JS_EXPORT void JSGarbageCollect(JSContextRef ctx);
+void JSGarbageCollect(JSContextRef ctx);
 
 #ifdef __cplusplus
 }
 #endif
 
-/* Enable the Objective-C API for platforms with a modern runtime. */
-#if !defined(JSC_OBJC_API_ENABLED)
-#define JSC_OBJC_API_ENABLED (defined(__clang__) && defined(__APPLE__) && (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1090 && !defined(__i386__)) || ((defined(TARGET_OS_EMBEDDED) && TARGET_OS_EMBEDDED) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || (defined(TARGET_IPHONE_SIMULATOR) && TARGET_IPHONE_SIMULATOR)))
-#endif
-
-#endif /* JSBase_h */
+#endif // JSBase_h

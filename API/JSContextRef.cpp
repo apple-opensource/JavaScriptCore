@@ -1,5 +1,6 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
- * Copyright (C) 2006, 2007 Apple Inc. All rights reserved.
+ * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,239 +24,52 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "JSContextRef.h"
-#include "JSContextRefPrivate.h"
-
+#include <wtf/Platform.h>
 #include "APICast.h"
-#include "InitializeThreading.h"
-#include <interpreter/CallFrame.h>
-#include <interpreter/Interpreter.h>
+#include "JSContextRef.h"
+
 #include "JSCallbackObject.h"
-#include "JSClassRef.h"
-#include "JSGlobalObject.h"
-#include "JSObject.h"
-#include "Operations.h"
-#include "SourceProvider.h"
-#include <wtf/text/StringBuilder.h>
-#include <wtf/text/StringHash.h>
+#include "completion.h"
+#include "interpreter.h"
+#include "object.h"
 
-#if OS(DARWIN)
-#include <mach-o/dyld.h>
-
-static const int32_t webkitFirstVersionWithConcurrentGlobalContexts = 0x2100500; // 528.5.0
-#endif
-
-using namespace JSC;
-
-// From the API's perspective, a context group remains alive iff
-//     (a) it has been JSContextGroupRetained
-//     OR
-//     (b) one of its contexts has been JSContextRetained
-
-JSContextGroupRef JSContextGroupCreate()
-{
-    initializeThreading();
-    return toRef(VM::createContextGroup().leakRef());
-}
-
-JSContextGroupRef JSContextGroupRetain(JSContextGroupRef group)
-{
-    toJS(group)->ref();
-    return group;
-}
-
-void JSContextGroupRelease(JSContextGroupRef group)
-{
-    IdentifierTable* savedIdentifierTable;
-    VM& vm = *toJS(group);
-
-    {
-        JSLockHolder lock(vm);
-        savedIdentifierTable = wtfThreadData().setCurrentIdentifierTable(vm.identifierTable);
-        vm.deref();
-    }
-
-    wtfThreadData().setCurrentIdentifierTable(savedIdentifierTable);
-}
-
-static bool internalScriptTimeoutCallback(ExecState* exec, void* callbackPtr, void* callbackData)
-{
-    JSShouldTerminateCallback callback = reinterpret_cast<JSShouldTerminateCallback>(callbackPtr);
-    JSContextRef contextRef = toRef(exec);
-    ASSERT(callback);
-    return callback(contextRef, callbackData);
-}
-
-void JSContextGroupSetExecutionTimeLimit(JSContextGroupRef group, double limit, JSShouldTerminateCallback callback, void* callbackData)
-{
-    VM& vm = *toJS(group);
-    APIEntryShim entryShim(&vm);
-    Watchdog& watchdog = vm.watchdog;
-    if (callback) {
-        void* callbackPtr = reinterpret_cast<void*>(callback);
-        watchdog.setTimeLimit(vm, limit, internalScriptTimeoutCallback, callbackPtr, callbackData);
-    } else
-        watchdog.setTimeLimit(vm, limit);
-}
-
-void JSContextGroupClearExecutionTimeLimit(JSContextGroupRef group)
-{
-    VM& vm = *toJS(group);
-    APIEntryShim entryShim(&vm);
-    Watchdog& watchdog = vm.watchdog;
-    watchdog.setTimeLimit(vm, std::numeric_limits<double>::infinity());
-}
-
-// From the API's perspective, a global context remains alive iff it has been JSGlobalContextRetained.
+using namespace KJS;
 
 JSGlobalContextRef JSGlobalContextCreate(JSClassRef globalObjectClass)
 {
-    initializeThreading();
+    JSLock lock;
 
-#if OS(DARWIN)
-    // If the application was linked before JSGlobalContextCreate was changed to use a unique VM,
-    // we use a shared one for backwards compatibility.
-    if (NSVersionOfLinkTimeLibrary("JavaScriptCore") <= webkitFirstVersionWithConcurrentGlobalContexts) {
-        return JSGlobalContextCreateInGroup(toRef(&VM::sharedInstance()), globalObjectClass);
-    }
-#endif // OS(DARWIN)
+    JSObject* globalObject;
+    if (globalObjectClass)
+        // Specify jsNull() as the prototype.  Interpreter will fix it up to point at builtinObjectPrototype() in its constructor
+        globalObject = new JSCallbackObject(0, globalObjectClass, jsNull(), 0);
+    else
+        globalObject = new JSObject();
 
-    return JSGlobalContextCreateInGroup(0, globalObjectClass);
-}
-
-JSGlobalContextRef JSGlobalContextCreateInGroup(JSContextGroupRef group, JSClassRef globalObjectClass)
-{
-    initializeThreading();
-
-    RefPtr<VM> vm = group ? PassRefPtr<VM>(toJS(group)) : VM::createContextGroup();
-
-    APIEntryShim entryShim(vm.get(), false);
-    vm->makeUsableFromMultipleThreads();
-
-    if (!globalObjectClass) {
-        JSGlobalObject* globalObject = JSGlobalObject::create(*vm, JSGlobalObject::createStructure(*vm, jsNull()));
-        return JSGlobalContextRetain(toGlobalRef(globalObject->globalExec()));
-    }
-
-    JSGlobalObject* globalObject = JSCallbackObject<JSGlobalObject>::create(*vm, globalObjectClass, JSCallbackObject<JSGlobalObject>::createStructure(*vm, 0, jsNull()));
-    ExecState* exec = globalObject->globalExec();
-    JSValue prototype = globalObjectClass->prototype(exec);
-    if (!prototype)
-        prototype = jsNull();
-    globalObject->resetPrototype(*vm, prototype);
-    return JSGlobalContextRetain(toGlobalRef(exec));
+    Interpreter* interpreter = new Interpreter(globalObject); // adds the built-in object prototype to the global object
+    if (globalObjectClass)
+        static_cast<JSCallbackObject*>(globalObject)->initializeIfNeeded(interpreter->globalExec());
+    JSGlobalContextRef ctx = reinterpret_cast<JSGlobalContextRef>(interpreter->globalExec());
+    return JSGlobalContextRetain(ctx);
 }
 
 JSGlobalContextRef JSGlobalContextRetain(JSGlobalContextRef ctx)
 {
+    JSLock lock;
     ExecState* exec = toJS(ctx);
-    APIEntryShim entryShim(exec);
-
-    VM& vm = exec->vm();
-    gcProtect(exec->dynamicGlobalObject());
-    vm.ref();
+    exec->dynamicInterpreter()->ref();
     return ctx;
 }
 
 void JSGlobalContextRelease(JSGlobalContextRef ctx)
 {
-    IdentifierTable* savedIdentifierTable;
+    JSLock lock;
     ExecState* exec = toJS(ctx);
-    {
-        JSLockHolder lock(exec);
-
-        VM& vm = exec->vm();
-        savedIdentifierTable = wtfThreadData().setCurrentIdentifierTable(vm.identifierTable);
-
-        bool protectCountIsZero = Heap::heap(exec->dynamicGlobalObject())->unprotect(exec->dynamicGlobalObject());
-        if (protectCountIsZero)
-            vm.heap.reportAbandonedObjectGraph();
-        vm.deref();
-    }
-
-    wtfThreadData().setCurrentIdentifierTable(savedIdentifierTable);
+    exec->dynamicInterpreter()->deref();
 }
 
 JSObjectRef JSContextGetGlobalObject(JSContextRef ctx)
 {
-    if (!ctx) {
-        ASSERT_NOT_REACHED();
-        return 0;
-    }
     ExecState* exec = toJS(ctx);
-    APIEntryShim entryShim(exec);
-
-    // It is necessary to call toThisObject to get the wrapper object when used with WebCore.
-    return toRef(exec->lexicalGlobalObject()->methodTable()->toThisObject(exec->lexicalGlobalObject(), exec));
+    return toRef(exec->dynamicInterpreter()->globalObject());
 }
-
-JSContextGroupRef JSContextGetGroup(JSContextRef ctx)
-{
-    if (!ctx) {
-        ASSERT_NOT_REACHED();
-        return 0;
-    }
-    ExecState* exec = toJS(ctx);
-    return toRef(&exec->vm());
-}
-
-JSGlobalContextRef JSContextGetGlobalContext(JSContextRef ctx)
-{
-    if (!ctx) {
-        ASSERT_NOT_REACHED();
-        return 0;
-    }
-    ExecState* exec = toJS(ctx);
-    APIEntryShim entryShim(exec);
-
-    return toGlobalRef(exec->lexicalGlobalObject()->globalExec());
-}
-    
-JSStringRef JSContextCreateBacktrace(JSContextRef ctx, unsigned maxStackSize)
-{
-    if (!ctx) {
-        ASSERT_NOT_REACHED();
-        return 0;
-    }
-    ExecState* exec = toJS(ctx);
-    JSLockHolder lock(exec);
-    StringBuilder builder;
-    Vector<StackFrame> stackTrace;
-    Interpreter::getStackTrace(&exec->vm(), stackTrace, maxStackSize);
-
-    for (size_t i = 0; i < stackTrace.size(); i++) {
-        String urlString;
-        String functionName;
-        StackFrame& frame = stackTrace[i];
-        JSValue function = frame.callee.get();
-        if (frame.callee)
-            functionName = frame.friendlyFunctionName(exec);
-        else {
-            // Caller is unknown, but if frame is empty we should still add the frame, because
-            // something called us, and gave us arguments.
-            if (i)
-                break;
-        }
-        unsigned lineNumber;
-        unsigned column;
-        frame.computeLineAndColumn(lineNumber, column);
-        if (!builder.isEmpty())
-            builder.append('\n');
-        builder.append('#');
-        builder.appendNumber(i);
-        builder.append(' ');
-        builder.append(functionName);
-        builder.appendLiteral("() at ");
-        builder.append(urlString);
-        if (frame.codeType != StackFrameNativeCode) {
-            builder.append(':');
-            builder.appendNumber(lineNumber);
-        }
-        if (!function)
-            break;
-    }
-    return OpaqueJSString::create(builder.toString()).leakRef();
-}
-
-

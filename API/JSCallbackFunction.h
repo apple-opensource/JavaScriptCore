@@ -1,5 +1,6 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
- * Copyright (C) 2006, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,38 +27,30 @@
 #ifndef JSCallbackFunction_h
 #define JSCallbackFunction_h
 
-#include "InternalFunction.h"
 #include "JSObjectRef.h"
+#include "function.h"
+#include "object.h"
 
-namespace JSC {
+namespace KJS {
 
-class JSCallbackFunction : public InternalFunction {
-    friend struct APICallbackFunction;
+class JSCallbackFunction : public InternalFunctionImp
+{
 public:
-    typedef InternalFunction Base;
+    JSCallbackFunction(ExecState* exec, JSObjectCallAsFunctionCallback callback, const Identifier& name);
 
-    static JSCallbackFunction* create(ExecState*, JSGlobalObject*, JSObjectCallAsFunctionCallback, const String& name);
+    virtual bool implementsHasInstance() const;
+    virtual JSValue* callAsFunction(ExecState*, JSObject* thisObj, const List &args);
 
-    static const ClassInfo s_info;
+    virtual const ClassInfo *classInfo() const { return &info; }
+    static const ClassInfo info;
     
-    // InternalFunction mish-mashes constructor and function behavior -- we should 
-    // refactor the code so this override isn't necessary
-    static Structure* createStructure(VM& vm, JSGlobalObject* globalObject, JSValue proto) 
-    { 
-        return Structure::create(vm, globalObject, proto, TypeInfo(ObjectType, StructureFlags), &s_info); 
-    }
-
 private:
-    JSCallbackFunction(JSGlobalObject*, Structure*, JSObjectCallAsFunctionCallback);
-    void finishCreation(VM&, const String& name);
-
-    static CallType getCallData(JSCell*, CallData&);
-
-    JSObjectCallAsFunctionCallback functionCallback() { return m_callback; }
-
+    JSCallbackFunction(); // prevent default construction
+    JSCallbackFunction(const JSCallbackFunction&);
+    
     JSObjectCallAsFunctionCallback m_callback;
 };
 
-} // namespace JSC
+} // namespace KJS
 
 #endif // JSCallbackFunction_h

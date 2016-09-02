@@ -83,28 +83,28 @@
 	                                    true, RegExp['$*']);
 
     // (['$*'] == true) '123\n456'.match(/^4../)
-    testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) '123\\n456'.match(/^4../m)",
-                                        String(['456']), String('123\n456'.match(/^4../m)));
+	testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) '123\\n456'.match(/^4../)",
+	                                    String(['456']), String('123\n456'.match(/^4../)));
 
     // (['$*'] == true) 'a11\na22\na23\na24'.match(/^a../g)
-    testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(/^a../gm)",
-                                        String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(/^a../gm)));
+	testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(/^a../g)",
+	                                    String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(/^a../g)));
 
     // (['$*'] == true) 'a11\na22'.match(/^.+^./)
 	//testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\na22'.match(/^.+^./)",
 	//                                    String(['a11\na']), String('a11\na22'.match(/^.+^./)));
 
     // (['$*'] == true) '123\n456'.match(/.3$/)
-    testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) '123\\n456'.match(/.3$/m)",
-                                        String(['23']), String('123\n456'.match(/.3$/m)));
+	testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) '123\\n456'.match(/.3$/)",
+	                                    String(['23']), String('123\n456'.match(/.3$/)));
 
     // (['$*'] == true) 'a11\na22\na23\na24'.match(/a..$/g)
-    testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(/a..$/gm)",
-                                        String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(/a..$/gm)));
+	testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(/a..$/g)",
+	                                    String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(/a..$/g)));
 
     // (['$*'] == true) 'a11\na22\na23\na24'.match(new RegExp('a..$','g'))
-    testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(new RegExp('a..$','gm'))",
-                                        String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(new RegExp('a..$','gm'))));
+	testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'a11\\na22\\na23\\na24'.match(new RegExp('a..$','g'))",
+	                                    String(['a11','a22','a23','a24']), String('a11\na22\na23\na24'.match(new RegExp('a..$','g'))));
 
     // (['$*'] == true) 'abc\ndef'.match(/c$....$/)
 	//testcases[count++] = new TestCase ( SECTION, "(['$*'] == true) 'abc\ndef'.match(/c$.+$/)",

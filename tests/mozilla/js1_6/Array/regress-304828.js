@@ -60,7 +60,7 @@ reportCompare(expect, actual, summary + ': join');
 
 // reverse
 value  = '123';
-expect = 'TypeError: Attempted to assign to readonly property.';
+expect = '123';
 try
 {
   actual = Array.prototype.reverse.call(value) + '';
@@ -73,7 +73,7 @@ reportCompare(expect, actual, summary + ': reverse');
 
 // sort
 value  = 'cba';
-expect = 'TypeError: Attempted to assign to readonly property.';
+expect = 'cba';
 try
 {
   actual = Array.prototype.sort.call(value) + '';
@@ -100,7 +100,7 @@ reportCompare('abc', value, summary + ': push');
 
 // pop
 value  = 'abc';
-expect = 'TypeError: Unable to delete property.';
+expect = 'c';
 try
 {
   actual = Array.prototype.pop.call(value);
@@ -114,7 +114,7 @@ reportCompare('abc', value, summary + ': pop');
 
 // unshift
 value  = 'def';
-expect = "TypeError: Attempted to assign to readonly property.";
+expect = 6;
 try
 {
   actual = Array.prototype.unshift.call(value, 'a', 'b', 'c');
@@ -128,7 +128,7 @@ reportCompare('def', value, summary + ': unshift');
 
 // shift
 value  = 'abc';
-expect = 'TypeError: Attempted to assign to readonly property.';
+expect = 'a';
 try
 {
   actual = Array.prototype.shift.call(value);
@@ -142,7 +142,7 @@ reportCompare('abc', value, summary + ': shift');
 
 // splice
 value  = 'abc';
-expect = 'TypeError: Attempted to assign to readonly property.';
+expect = 'b';
 try
 {
   actual = Array.prototype.splice.call(value, 1, 1) + '';

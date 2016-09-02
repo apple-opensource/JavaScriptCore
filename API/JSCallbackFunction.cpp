@@ -1,5 +1,6 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
- * Copyright (C) 2006, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,51 +24,43 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
+#include <wtf/Platform.h>
 #include "JSCallbackFunction.h"
 
-#include "APICallbackFunction.h"
 #include "APICast.h"
-#include "APIShims.h"
-#include "CodeBlock.h"
-#include "Error.h"
-#include "ExceptionHelpers.h"
-#include "FunctionPrototype.h"
-#include "JSFunction.h"
-#include "JSGlobalObject.h"
-#include "JSLock.h"
-#include "Operations.h"
+#include "function.h"
+#include "function_object.h"
 #include <wtf/Vector.h>
 
-namespace JSC {
+namespace KJS {
 
-ASSERT_HAS_TRIVIAL_DESTRUCTOR(JSCallbackFunction);
+const ClassInfo JSCallbackFunction::info = { "CallbackFunction", &InternalFunctionImp::info, 0, 0 };
 
-const ClassInfo JSCallbackFunction::s_info = { "CallbackFunction", &InternalFunction::s_info, 0, 0, CREATE_METHOD_TABLE(JSCallbackFunction) };
-
-JSCallbackFunction::JSCallbackFunction(JSGlobalObject* globalObject, Structure* structure, JSObjectCallAsFunctionCallback callback)
-    : InternalFunction(globalObject, structure)
+JSCallbackFunction::JSCallbackFunction(ExecState* exec, JSObjectCallAsFunctionCallback callback, const Identifier& name)
+    : InternalFunctionImp(static_cast<FunctionPrototype*>(exec->lexicalInterpreter()->builtinFunctionPrototype()), name)
     , m_callback(callback)
 {
 }
 
-void JSCallbackFunction::finishCreation(VM& vm, const String& name)
-{
-    Base::finishCreation(vm, name);
-    ASSERT(inherits(&s_info));
+// InternalFunctionImp mish-mashes constructor and function behavior -- we should 
+// refactor the code so this override isn't necessary
+bool JSCallbackFunction::implementsHasInstance() const { 
+    return false; 
 }
 
-JSCallbackFunction* JSCallbackFunction::create(ExecState* exec, JSGlobalObject* globalObject, JSObjectCallAsFunctionCallback callback, const String& name)
+JSValue* JSCallbackFunction::callAsFunction(ExecState* exec, JSObject* thisObj, const List &args)
 {
-    JSCallbackFunction* function = new (NotNull, allocateCell<JSCallbackFunction>(*exec->heap())) JSCallbackFunction(globalObject, globalObject->callbackFunctionStructure(), callback);
-    function->finishCreation(exec->vm(), name);
-    return function;
+    JSContextRef execRef = toRef(exec);
+    JSObjectRef thisRef = toRef(this);
+    JSObjectRef thisObjRef = toRef(thisObj);
+
+    int argumentCount = static_cast<int>(args.size());
+    Vector<JSValueRef, 16> arguments(argumentCount);
+    for (int i = 0; i < argumentCount; i++)
+        arguments[i] = toRef(args[i]);
+
+    JSLock::DropAllLocks dropAllLocks;
+    return toJS(m_callback(execRef, thisRef, thisObjRef, argumentCount, arguments.data(), toRef(exec->exceptionSlot())));
 }
 
-CallType JSCallbackFunction::getCallData(JSCell*, CallData& callData)
-{
-    callData.native.function = APICallbackFunction::call<JSCallbackFunction>;
-    return CallTypeHost;
-}
-
-} // namespace JSC
+} // namespace KJS

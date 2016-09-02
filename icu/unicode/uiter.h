@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 2002-2006,2009 International Business Machines
+*   Copyright (C) 2002-2004, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -26,7 +26,7 @@
 
 #include "unicode/utypes.h"
 
-#if U_SHOW_CPLUSPLUS_API
+#ifdef XP_CPLUSPLUS
     U_NAMESPACE_BEGIN
 
     class CharacterIterator;
@@ -650,7 +650,7 @@ uiter_setUTF16BE(UCharIterator *iter, const char *s, int32_t length);
 U_STABLE void U_EXPORT2
 uiter_setUTF8(UCharIterator *iter, const char *s, int32_t length);
 
-#if U_SHOW_CPLUSPLUS_API
+#ifdef XP_CPLUSPLUS
 
 /**
  * Set up a UCharIterator to wrap around a C++ CharacterIterator.
@@ -673,7 +673,7 @@ uiter_setUTF8(UCharIterator *iter, const char *s, int32_t length);
  * @stable ICU 2.1
  */
 U_STABLE void U_EXPORT2
-uiter_setCharacterIterator(UCharIterator *iter, U_NAMESPACE_QUALIFIER CharacterIterator *charIter);
+uiter_setCharacterIterator(UCharIterator *iter, CharacterIterator *charIter);
 
 /**
  * Set up a UCharIterator to iterate over a C++ Replaceable.
@@ -698,7 +698,7 @@ uiter_setCharacterIterator(UCharIterator *iter, U_NAMESPACE_QUALIFIER CharacterI
  * @stable ICU 2.1
  */
 U_STABLE void U_EXPORT2
-uiter_setReplaceable(UCharIterator *iter, const U_NAMESPACE_QUALIFIER Replaceable *rep);
+uiter_setReplaceable(UCharIterator *iter, const Replaceable *rep);
 
 #endif
 

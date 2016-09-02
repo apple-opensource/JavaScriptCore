@@ -1,5 +1,6 @@
+// -*- mode: c++; c-basic-offset: 4 -*-
 /*
- * Copyright (C) 2006, 2007 Apple Inc.  All rights reserved.
+ * Copyright (C) 2006 Apple Computer, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,29 +24,25 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "JSClassRef.h"
-
+#include <wtf/Platform.h>
 #include "APICast.h"
-#include "Identifier.h"
-#include "InitializeThreading.h"
 #include "JSCallbackObject.h"
-#include "JSGlobalObject.h"
+#include "JSClassRef.h"
 #include "JSObjectRef.h"
-#include "ObjectPrototype.h"
-#include "Operations.h"
-#include <wtf/text/StringHash.h>
-#include <wtf/unicode/UTF8.h>
+#include "identifier.h"
 
-using namespace std;
-using namespace JSC;
-using namespace WTF::Unicode;
+using namespace KJS;
 
 const JSClassDefinition kJSClassDefinitionEmpty = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 OpaqueJSClass::OpaqueJSClass(const JSClassDefinition* definition, OpaqueJSClass* protoClass) 
-    : parentClass(definition->parentClass)
+    : refCount(0)
+    // FIXME: <rdar://problem/4949018>
+    , className(definition->className)
+    , parentClass(definition->parentClass)
     , prototypeClass(0)
+    , staticValues(0)
+    , staticFunctions(0)
     , initialize(definition->initialize)
     , finalize(definition->finalize)
     , hasProperty(definition->hasProperty)
@@ -57,26 +54,24 @@ OpaqueJSClass::OpaqueJSClass(const JSClassDefinition* definition, OpaqueJSClass*
     , callAsConstructor(definition->callAsConstructor)
     , hasInstance(definition->hasInstance)
     , convertToType(definition->convertToType)
-    , m_className(String::fromUTF8(definition->className))
+    , cachedPrototype(0)
 {
-    initializeThreading();
-
     if (const JSStaticValue* staticValue = definition->staticValues) {
-        m_staticValues = adoptPtr(new OpaqueJSClassStaticValuesTable);
+        staticValues = new StaticValuesTable();
         while (staticValue->name) {
-            String valueName = String::fromUTF8(staticValue->name);
-            if (!valueName.isNull())
-                m_staticValues->set(valueName.impl(), adoptPtr(new StaticValueEntry(staticValue->getProperty, staticValue->setProperty, staticValue->attributes)));
+            // FIXME: <rdar://problem/4949018>
+            staticValues->add(Identifier(staticValue->name).ustring().rep(), 
+                              new StaticValueEntry(staticValue->getProperty, staticValue->setProperty, staticValue->attributes));
             ++staticValue;
         }
     }
-
+    
     if (const JSStaticFunction* staticFunction = definition->staticFunctions) {
-        m_staticFunctions = adoptPtr(new OpaqueJSClassStaticFunctionsTable);
+        staticFunctions = new StaticFunctionsTable();
         while (staticFunction->name) {
-            String functionName = String::fromUTF8(staticFunction->name);
-            if (!functionName.isNull())
-                m_staticFunctions->set(functionName.impl(), adoptPtr(new StaticFunctionEntry(staticFunction->callAsFunction, staticFunction->attributes)));
+            // FIXME: <rdar://problem/4949018>
+            staticFunctions->add(Identifier(staticFunction->name).ustring().rep(), 
+                                 new StaticFunctionEntry(staticFunction->callAsFunction, staticFunction->attributes));
             ++staticFunction;
         }
     }
@@ -87,90 +82,48 @@ OpaqueJSClass::OpaqueJSClass(const JSClassDefinition* definition, OpaqueJSClass*
 
 OpaqueJSClass::~OpaqueJSClass()
 {
-    // The empty string is shared across threads & is an identifier, in all other cases we should have done a deep copy in className(), below. 
-    ASSERT(!m_className.length() || !m_className.impl()->isIdentifier());
-
-#ifndef NDEBUG
-    if (m_staticValues) {
-        OpaqueJSClassStaticValuesTable::const_iterator end = m_staticValues->end();
-        for (OpaqueJSClassStaticValuesTable::const_iterator it = m_staticValues->begin(); it != end; ++it)
-            ASSERT(!it->key->isIdentifier());
+    if (staticValues) {
+        deleteAllValues(*staticValues);
+        delete staticValues;
     }
 
-    if (m_staticFunctions) {
-        OpaqueJSClassStaticFunctionsTable::const_iterator end = m_staticFunctions->end();
-        for (OpaqueJSClassStaticFunctionsTable::const_iterator it = m_staticFunctions->begin(); it != end; ++it)
-            ASSERT(!it->key->isIdentifier());
+    if (staticFunctions) {
+        deleteAllValues(*staticFunctions);
+        delete staticFunctions;
     }
-#endif
     
     if (prototypeClass)
         JSClassRelease(prototypeClass);
 }
 
-PassRefPtr<OpaqueJSClass> OpaqueJSClass::createNoAutomaticPrototype(const JSClassDefinition* definition)
+JSClassRef OpaqueJSClass::createNoAutomaticPrototype(const JSClassDefinition* definition)
 {
-    return adoptRef(new OpaqueJSClass(definition, 0));
+    return new OpaqueJSClass(definition, 0);
 }
 
-PassRefPtr<OpaqueJSClass> OpaqueJSClass::create(const JSClassDefinition* clientDefinition)
+void clearReferenceToPrototype(JSObjectRef prototype)
 {
-    JSClassDefinition definition = *clientDefinition; // Avoid modifying client copy.
-
-    JSClassDefinition protoDefinition = kJSClassDefinitionEmpty;
-    protoDefinition.finalize = 0;
-    swap(definition.staticFunctions, protoDefinition.staticFunctions); // Move static functions to the prototype.
-    
-    // We are supposed to use JSClassRetain/Release but since we know that we currently have
-    // the only reference to this class object we cheat and use a RefPtr instead.
-    RefPtr<OpaqueJSClass> protoClass = adoptRef(new OpaqueJSClass(&protoDefinition, 0));
-    return adoptRef(new OpaqueJSClass(&definition, protoClass.get()));
+    OpaqueJSClass* jsClass = static_cast<OpaqueJSClass*>(JSObjectGetPrivate(prototype));
+    ASSERT(jsClass);
+    jsClass->cachedPrototype = 0;
 }
 
-OpaqueJSClassContextData::OpaqueJSClassContextData(JSC::VM&, OpaqueJSClass* jsClass)
-    : m_class(jsClass)
+JSClassRef OpaqueJSClass::create(const JSClassDefinition* definition)
 {
-    if (jsClass->m_staticValues) {
-        staticValues = adoptPtr(new OpaqueJSClassStaticValuesTable);
-        OpaqueJSClassStaticValuesTable::const_iterator end = jsClass->m_staticValues->end();
-        for (OpaqueJSClassStaticValuesTable::const_iterator it = jsClass->m_staticValues->begin(); it != end; ++it) {
-            ASSERT(!it->key->isIdentifier());
-            staticValues->add(it->key->isolatedCopy(), adoptPtr(new StaticValueEntry(it->value->getProperty, it->value->setProperty, it->value->attributes)));
-        }
+    if (const JSStaticFunction* staticFunctions = definition->staticFunctions) {
+        // copy functions into a prototype class
+        JSClassDefinition protoDefinition = kJSClassDefinitionEmpty;
+        protoDefinition.staticFunctions = staticFunctions;
+        protoDefinition.finalize = clearReferenceToPrototype;
+        OpaqueJSClass* protoClass = new OpaqueJSClass(&protoDefinition, 0);
+
+        // remove functions from the original class
+        JSClassDefinition objectDefinition = *definition;
+        objectDefinition.staticFunctions = 0;
+        return new OpaqueJSClass(&objectDefinition, protoClass);
     }
 
-    if (jsClass->m_staticFunctions) {
-        staticFunctions = adoptPtr(new OpaqueJSClassStaticFunctionsTable);
-        OpaqueJSClassStaticFunctionsTable::const_iterator end = jsClass->m_staticFunctions->end();
-        for (OpaqueJSClassStaticFunctionsTable::const_iterator it = jsClass->m_staticFunctions->begin(); it != end; ++it) {
-            ASSERT(!it->key->isIdentifier());
-            staticFunctions->add(it->key->isolatedCopy(), adoptPtr(new StaticFunctionEntry(it->value->callAsFunction, it->value->attributes)));
-        }
-    }
-}
-
-OpaqueJSClassContextData& OpaqueJSClass::contextData(ExecState* exec)
-{
-    OwnPtr<OpaqueJSClassContextData>& contextData = exec->lexicalGlobalObject()->opaqueJSClassData().add(this, nullptr).iterator->value;
-    if (!contextData)
-        contextData = adoptPtr(new OpaqueJSClassContextData(exec->vm(), this));
-    return *contextData;
-}
-
-String OpaqueJSClass::className()
-{
-    // Make a deep copy, so that the caller has no chance to put the original into IdentifierTable.
-    return m_className.isolatedCopy();
-}
-
-OpaqueJSClassStaticValuesTable* OpaqueJSClass::staticValues(JSC::ExecState* exec)
-{
-    return contextData(exec).staticValues.get();
-}
-
-OpaqueJSClassStaticFunctionsTable* OpaqueJSClass::staticFunctions(JSC::ExecState* exec)
-{
-    return contextData(exec).staticFunctions.get();
+    return new OpaqueJSClass(definition, 0);
 }
 
 /*!
@@ -181,7 +134,7 @@ OpaqueJSClassStaticFunctionsTable* OpaqueJSClass::staticFunctions(JSC::ExecState
  @param jsClass A JSClass whose prototype you want to get.
  @result The JSObject prototype that was automatically generated for jsClass, or NULL if no prototype was automatically generated. This is the prototype that will be used when constructing an object using jsClass.
 */
-JSObject* OpaqueJSClass::prototype(ExecState* exec)
+JSObject* OpaqueJSClass::prototype(JSContextRef ctx)
 {
     /* Class (C++) and prototype (JS) inheritance are parallel, so:
      *     (C++)      |        (JS)
@@ -190,22 +143,20 @@ JSObject* OpaqueJSClass::prototype(ExecState* exec)
      *       |        |          |
      *  DerivedClass  |  DerivedClassPrototype
      */
-
+    
     if (!prototypeClass)
         return 0;
-
-    OpaqueJSClassContextData& jsClassData = contextData(exec);
-
-    if (JSObject* prototype = jsClassData.cachedPrototype.get())
-        return prototype;
-
-    // Recursive, but should be good enough for our purposes
-    JSObject* prototype = JSCallbackObject<JSDestructibleObject>::create(exec, exec->lexicalGlobalObject(), exec->lexicalGlobalObject()->callbackObjectStructure(), prototypeClass, &jsClassData); // set jsClassData as the object's private data, so it can clear our reference on destruction
-    if (parentClass) {
-        if (JSObject* parentPrototype = parentClass->prototype(exec))
-            prototype->setPrototype(exec->vm(), parentPrototype);
+    
+    ExecState* exec = toJS(ctx);
+    
+    if (!cachedPrototype) {
+        // Recursive, but should be good enough for our purposes
+        JSObject* parentPrototype = 0;
+        if (parentClass)
+            parentPrototype = parentClass->prototype(ctx); // can be null
+        if (!parentPrototype)
+            parentPrototype = exec->dynamicInterpreter()->builtinObjectPrototype();
+        cachedPrototype = new JSCallbackObject(exec, prototypeClass, parentPrototype, this); // set ourself as the object's private data, so it can clear our reference on destruction
     }
-
-    jsClassData.cachedPrototype = PassWeak<JSObject>(prototype);
-    return prototype;
+    return cachedPrototype;
 }

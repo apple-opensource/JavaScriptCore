@@ -23,14 +23,11 @@
 
 #include <wtf/Platform.h>
 
-/* This file emulates enough of stdint.h on Windows to make JavaScriptCore and WebCore
-   compile using MSVC which does not ship with the stdint.h header. */
+/* This file emulates enough of stdint.h on Windows to make JavaScriptCore and WebCore compile. */
 
-#if !COMPILER(MSVC)
-#error "This stdint.h file should only be compiled with MSVC"
+#if !PLATFORM(WIN_OS)
+#error "This stdint.h file should only be compiled under Windows"
 #endif
-
-#include <limits.h>
 
 typedef unsigned char uint8_t;
 typedef signed char int8_t;
@@ -40,16 +37,6 @@ typedef unsigned int uint32_t;
 typedef int int32_t;
 typedef __int64 int64_t;
 typedef unsigned __int64 uint64_t;
-
-#if !defined(__cplusplus) || defined(__STDC_LIMIT_MACROS)
-#ifndef SIZE_MAX
-#ifdef _WIN64
-#define SIZE_MAX  _UI64_MAX
-#else
-#define SIZE_MAX  _UI32_MAX
-#endif
-#endif
-#endif
 
 #ifndef CASSERT
 #define CASSERT(exp, name) typedef int dummy##name [(exp) ? 1 : -1];
@@ -61,7 +48,7 @@ CASSERT(sizeof(int16_t) == 2, int16_t_is_two_bytes)
 CASSERT(sizeof(uint16_t) == 2, uint16_t_is_two_bytes)
 CASSERT(sizeof(int32_t) == 4, int32_t_is_four_bytes)
 CASSERT(sizeof(uint32_t) == 4, uint32_t_is_four_bytes)
-CASSERT(sizeof(int64_t) == 8, int64_t_is_eight_bytes)
-CASSERT(sizeof(uint64_t) == 8, uint64_t_is_eight_bytes)
+CASSERT(sizeof(int64_t) == 8, int64_t_is_four_bytes)
+CASSERT(sizeof(uint64_t) == 8, uint64_t_is_four_bytes)
 
 #endif

@@ -104,8 +104,6 @@ function getTestCases() {
 
 
     for ( var i = 0X0020, TEST_STRING = "var A = new Array( " ; i < 0x00ff; i++ ) {
-        if ( i === 0x58 || i === 0x78 ) // x or X - skip testing invalid hex escapes.
-            continue;
         TEST_STRING += "\'\\"+ String.fromCharCode( i ) +"\'";
         if ( i < 0x00FF - 1   ) {
             TEST_STRING += ",";
@@ -114,7 +112,7 @@ function getTestCases() {
         }
     }
 
-    var LENGTH = 0x00ff - 0x0020 - 2; // x & X
+    var LENGTH = 0x00ff - 0x0020;
 
     array[item++] = new TestCase(   SECTION,
                                     TEST_STRING +" A[150] = 'hello'; A[150]",

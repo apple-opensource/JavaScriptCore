@@ -1,4 +1,4 @@
-# Copyright (C) 2006, 2007, 2008, 2009, 2011, 2013 Apple Inc. All rights reserved.
+# Copyright (C) 2006 Apple Computer, Inc. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -25,59 +25,39 @@
 # THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 VPATH = \
-    $(JavaScriptCore) \
-    $(JavaScriptCore)/parser \
-    $(JavaScriptCore)/docs \
-    $(JavaScriptCore)/runtime \
-    $(JavaScriptCore)/interpreter \
-    $(JavaScriptCore)/jit \
+    $(JavaScriptCore)/kjs \
 #
 
 .PHONY : all
 all : \
-    ArrayConstructor.lut.h \
-    ArrayPrototype.lut.h \
-    BooleanPrototype.lut.h \
-    DateConstructor.lut.h \
-    DatePrototype.lut.h \
-    ErrorPrototype.lut.h \
-    JSONObject.lut.h \
-    JSGlobalObject.lut.h \
-    KeywordLookup.h \
-    Lexer.lut.h \
-    MathObject.lut.h \
-    NamePrototype.lut.h \
-    NumberConstructor.lut.h \
-    NumberPrototype.lut.h \
-    ObjectConstructor.lut.h \
-    RegExpConstructor.lut.h \
-    RegExpPrototype.lut.h \
-    RegExpJitTables.h \
-    RegExpObject.lut.h \
-    StringConstructor.lut.h \
-    docs/bytecode.html \
-    udis86_itab.h \
+    array_object.lut.h \
+    chartables.c \
+    date_object.lut.h \
+    grammar.cpp \
+    lexer.lut.h \
+    math_object.lut.h \
+    number_object.lut.h \
+    regexp_object.lut.h \
+    string_object.lut.h \
 #
 
 # lookup tables for classes
 
 %.lut.h: create_hash_table %.cpp
 	$^ -i > $@
-Lexer.lut.h: create_hash_table Keywords.table
+lexer.lut.h: create_hash_table keywords.table
 	$^ > $@
 
-docs/bytecode.html: make-bytecode-docs.pl Interpreter.cpp 
-	perl $^ $@
+# JavaScript language grammar
 
-# character tables for Yarr
+grammar.cpp : grammar.y
+	bison -d -p kjsyy $< -o $@
+	touch grammar.cpp.h
+	touch grammar.hpp
+	cat grammar.cpp.h grammar.hpp > grammar.h
+	rm -f grammar.cpp.h grammar.hpp
 
-RegExpJitTables.h: create_regex_tables
-	python $^ > $@
+# character tables for PCRE
 
-KeywordLookup.h: KeywordLookupGenerator.py Keywords.table
-	python $^ > $@
-
-# udis86 instruction tables
-
-udis86_itab.h: $(JavaScriptCore)/disassembler/udis86/itab.py $(JavaScriptCore)/disassembler/udis86/optable.xml
-	(PYTHONPATH=$(JavaScriptCore)/disassembler/udis86 python $(JavaScriptCore)/disassembler/udis86/itab.py $(JavaScriptCore)/disassembler/udis86/optable.xml || exit 1)
+chartables.c : $(BUILT_PRODUCTS_DIR)/dftables
+	$^ $@
