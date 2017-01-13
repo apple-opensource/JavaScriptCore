@@ -94,7 +94,7 @@ public:
                     HashMap<FrozenValue*, Node*>& values = valuesFor(node->op());
                     auto result = values.add(node->constant(), node);
                     if (result.isNewEntry)
-                        node->origin = NodeOrigin();
+                        node->origin = m_graph.block(0)->at(0)->origin;
                     else {
                         node->setReplacement(result.iterator->value);
                         toFree.append(node);
@@ -128,6 +128,7 @@ public:
         }
         
         // And finally free the constants that we removed.
+        m_graph.invalidateNodeLiveness();
         for (Node* node : toFree)
             m_graph.m_allocator.free(node);
         
@@ -139,7 +140,6 @@ public:
     
 bool performConstantHoisting(Graph& graph)
 {
-    SamplingRegion samplingRegion("DFG Constant Hoisting Phase");
     return runPhase<ConstantHoistingPhase>(graph);
 }
 

@@ -28,13 +28,16 @@
 
 namespace JSC {
 
+#define InvalidPrototypeChain (std::numeric_limits<size_t>::max())
+
 NEVER_INLINE JSValue jsAddSlowCase(CallFrame*, JSValue, JSValue);
 JSValue jsTypeStringForValue(CallFrame*, JSValue);
 JSValue jsTypeStringForValue(VM&, JSGlobalObject*, JSValue);
 bool jsIsObjectTypeOrNull(CallFrame*, JSValue);
 bool jsIsFunctionType(JSValue);
+size_t normalizePrototypeChain(CallFrame*, Structure*);
 
-ALWAYS_INLINE JSValue jsString(ExecState* exec, JSString* s1, JSString* s2)
+ALWAYS_INLINE JSString* jsString(ExecState* exec, JSString* s1, JSString* s2)
 {
     VM& vm = exec->vm();
 
@@ -44,13 +47,36 @@ ALWAYS_INLINE JSValue jsString(ExecState* exec, JSString* s1, JSString* s2)
     int32_t length2 = s2->length();
     if (!length2)
         return s1;
-    if (sumOverflows<int32_t>(length1, length2))
-        return throwOutOfMemoryError(exec);
+    if (sumOverflows<int32_t>(length1, length2)) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
 
     return JSRopeString::create(vm, s1, s2);
 }
 
-ALWAYS_INLINE JSValue jsString(ExecState* exec, const String& u1, const String& u2, const String& u3)
+ALWAYS_INLINE JSString* jsString(ExecState* exec, JSString* s1, JSString* s2, JSString* s3)
+{
+    VM& vm = exec->vm();
+
+    int32_t length1 = s1->length();
+    if (!length1)
+        return jsString(exec, s2, s3);
+    int32_t length2 = s2->length();
+    if (!length2)
+        return jsString(exec, s1, s3);
+    int32_t length3 = s3->length();
+    if (!length3)
+        return jsString(exec, s1, s2);
+
+    if (sumOverflows<int32_t>(length1, length2, length3)) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
+    return JSRopeString::create(vm, s1, s2, s3);
+}
+
+ALWAYS_INLINE JSString* jsString(ExecState* exec, const String& u1, const String& u2, const String& u3)
 {
     VM* vm = &exec->vm();
 
@@ -58,8 +84,10 @@ ALWAYS_INLINE JSValue jsString(ExecState* exec, const String& u1, const String& 
     int32_t length2 = u2.length();
     int32_t length3 = u3.length();
     
-    if (length1 < 0 || length2 < 0 || length3 < 0)
-        return throwOutOfMemoryError(exec);
+    if (length1 < 0 || length2 < 0 || length3 < 0) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
     
     if (!length1)
         return jsString(exec, jsString(vm, u2), jsString(vm, u3));
@@ -68,10 +96,12 @@ ALWAYS_INLINE JSValue jsString(ExecState* exec, const String& u1, const String& 
     if (!length3)
         return jsString(exec, jsString(vm, u1), jsString(vm, u2));
 
-    if (sumOverflows<int32_t>(length1, length2, length3))
-        return throwOutOfMemoryError(exec);
+    if (sumOverflows<int32_t>(length1, length2, length3)) {
+        throwOutOfMemoryError(exec);
+        return nullptr;
+    }
 
-    return JSRopeString::create(exec->vm(), jsString(vm, u1), jsString(vm, u2), jsString(vm, u3));
+    return JSRopeString::create(*vm, jsString(vm, u1), jsString(vm, u2), jsString(vm, u3));
 }
 
 ALWAYS_INLINE JSValue jsStringFromRegisterArray(ExecState* exec, Register* strings, unsigned count)
@@ -190,89 +220,6 @@ ALWAYS_INLINE JSValue jsAdd(CallFrame* callFrame, JSValue v1, JSValue v2)
 
     // All other cases are pretty uncommon
     return jsAddSlowCase(callFrame, v1, v2);
-}
-
-#define InvalidPrototypeChain (std::numeric_limits<size_t>::max())
-
-inline size_t normalizePrototypeChainForChainAccess(CallFrame* callFrame, Structure* structure, JSValue slotBase, const Identifier& propertyName, PropertyOffset& slotOffset)
-{
-    VM& vm = callFrame->vm();
-    size_t count = 0;
-        
-    while (1) {
-        if (structure->isProxy())
-            return InvalidPrototypeChain;
-
-        const TypeInfo& typeInfo = structure->typeInfo();
-        if (typeInfo.hasImpureGetOwnPropertySlot() && !typeInfo.newImpurePropertyFiresWatchpoints())
-            return InvalidPrototypeChain;
-            
-        JSValue v = structure->prototypeForLookup(callFrame);
-
-        // If we didn't find slotBase in the base's prototype chain, then the base
-        // must be a proxy for another object.
-
-        if (v.isNull()) {
-            if (!slotBase)
-                break;
-            return InvalidPrototypeChain;
-        }
-
-        JSCell* cell = v.asCell();
-        structure = cell->structure(vm);
-        // Since we're accessing a prototype in a loop, it's a good bet that it
-        // should not be treated as a dictionary.
-        if (structure->isDictionary()) {
-            structure->flattenDictionaryStructure(vm, asObject(cell));
-            if (slotBase == cell)
-                slotOffset = structure->get(vm, propertyName); 
-        }
-        ++count;
-
-        if (slotBase == cell)
-            break;
-    }
-        
-    return count;
-}
-
-inline size_t normalizePrototypeChain(CallFrame* callFrame, Structure* structure)
-{
-    VM& vm = callFrame->vm();
-    size_t count = 0;
-    while (1) {
-        if (structure->isProxy())
-            return InvalidPrototypeChain;
-        JSValue v = structure->prototypeForLookup(callFrame);
-        if (v.isNull())
-            return count;
-
-        JSCell* base = v.asCell();
-        structure = base->structure(vm);
-        // Since we're accessing a prototype in a loop, it's a good bet that it
-        // should not be treated as a dictionary.
-        if (structure->isDictionary())
-            structure->flattenDictionaryStructure(vm, asObject(base));
-
-        ++count;
-    }
-}
-
-inline bool isPrototypeChainNormalized(JSGlobalObject* globalObject, Structure* structure)
-{
-    for (;;) {
-        if (structure->isProxy())
-            return false;
-            
-        JSValue v = structure->prototypeForLookup(globalObject);
-        if (v.isNull())
-            return true;
-            
-        structure = v.asCell()->structure();
-            
-        if (structure->isDictionary())
-            return false;
-    }
 }
 
 } // namespace JSC

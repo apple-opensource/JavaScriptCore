@@ -43,11 +43,13 @@ static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionFunctio
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionGetInternalProperties(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionInternalConstructorName(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionIsHTMLAllCollection(ExecState*);
+static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionProxyTargetValue(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakMapSize(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakMapEntries(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakSetSize(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakSetEntries(ExecState*);
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionIteratorEntries(ExecState*);
+static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionEvaluateWithScopeExtension(ExecState*);
 
 static EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeAttributeEvaluate(ExecState*);
 
@@ -59,22 +61,20 @@ void JSInjectedScriptHostPrototype::finishCreation(VM& vm, JSGlobalObject* globa
     ASSERT(inherits(info()));
     vm.prototypeMap.addPrototype(this);
 
-    JSC_NATIVE_FUNCTION("subtype", jsInjectedScriptHostPrototypeFunctionSubtype, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("functionDetails", jsInjectedScriptHostPrototypeFunctionFunctionDetails, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("getInternalProperties", jsInjectedScriptHostPrototypeFunctionGetInternalProperties, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("internalConstructorName", jsInjectedScriptHostPrototypeFunctionInternalConstructorName, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("isHTMLAllCollection", jsInjectedScriptHostPrototypeFunctionIsHTMLAllCollection, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("weakMapSize", jsInjectedScriptHostPrototypeFunctionWeakMapSize, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("weakMapEntries", jsInjectedScriptHostPrototypeFunctionWeakMapEntries, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("weakSetSize", jsInjectedScriptHostPrototypeFunctionWeakSetSize, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("weakSetEntries", jsInjectedScriptHostPrototypeFunctionWeakSetEntries, DontEnum, 1);
-    JSC_NATIVE_FUNCTION("iteratorEntries", jsInjectedScriptHostPrototypeFunctionIteratorEntries, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("subtype", jsInjectedScriptHostPrototypeFunctionSubtype, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("functionDetails", jsInjectedScriptHostPrototypeFunctionFunctionDetails, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getInternalProperties", jsInjectedScriptHostPrototypeFunctionGetInternalProperties, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("internalConstructorName", jsInjectedScriptHostPrototypeFunctionInternalConstructorName, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("isHTMLAllCollection", jsInjectedScriptHostPrototypeFunctionIsHTMLAllCollection, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("proxyTargetValue", jsInjectedScriptHostPrototypeFunctionProxyTargetValue, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("weakMapSize", jsInjectedScriptHostPrototypeFunctionWeakMapSize, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("weakMapEntries", jsInjectedScriptHostPrototypeFunctionWeakMapEntries, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("weakSetSize", jsInjectedScriptHostPrototypeFunctionWeakSetSize, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("weakSetEntries", jsInjectedScriptHostPrototypeFunctionWeakSetEntries, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("iteratorEntries", jsInjectedScriptHostPrototypeFunctionIteratorEntries, DontEnum, 1);
+    JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("evaluateWithScopeExtension", jsInjectedScriptHostPrototypeFunctionEvaluateWithScopeExtension, DontEnum, 1);
 
-    Identifier evaluateIdentifier = Identifier::fromString(&vm, "evaluate");
-    GetterSetter* accessor = GetterSetter::create(vm, globalObject);
-    JSFunction* function = JSFunction::create(vm, globalObject, 0, evaluateIdentifier.string(), jsInjectedScriptHostPrototypeAttributeEvaluate);
-    accessor->setGetter(vm, globalObject, function);
-    putDirectNonIndexAccessor(vm, evaluateIdentifier, accessor, DontEnum | Accessor);
+    JSC_NATIVE_GETTER("evaluate", jsInjectedScriptHostPrototypeAttributeEvaluate, DontEnum | Accessor);
 }
 
 EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeAttributeEvaluate(ExecState* exec)
@@ -84,7 +84,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeAttributeEvaluate(Exec
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->evaluate(exec));
 }
 
@@ -95,7 +94,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionInternalConstr
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->internalConstructorName(exec));
 }
 
@@ -106,8 +104,17 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionIsHTMLAllColle
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->isHTMLAllCollection(exec));
+}
+
+EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionProxyTargetValue(ExecState* exec)
+{
+    JSValue thisValue = exec->thisValue();
+    JSInjectedScriptHost* castedThis = jsDynamicCast<JSInjectedScriptHost*>(thisValue);
+    if (!castedThis)
+        return throwVMTypeError(exec);
+
+    return JSValue::encode(castedThis->proxyTargetValue(exec));
 }
 
 EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakMapSize(ExecState* exec)
@@ -117,7 +124,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakMapSize(Ex
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->weakMapSize(exec));
 }
 
@@ -128,7 +134,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakMapEntries
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->weakMapEntries(exec));
 }
 
@@ -139,7 +144,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakSetSize(Ex
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->weakSetSize(exec));
 }
 
@@ -150,7 +154,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionWeakSetEntries
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->weakSetEntries(exec));
 }
 
@@ -161,8 +164,17 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionIteratorEntrie
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->iteratorEntries(exec));
+}
+
+EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionEvaluateWithScopeExtension(ExecState* exec)
+{
+    JSValue thisValue = exec->thisValue();
+    JSInjectedScriptHost* castedThis = jsDynamicCast<JSInjectedScriptHost*>(thisValue);
+    if (!castedThis)
+        return throwVMTypeError(exec);
+
+    return JSValue::encode(castedThis->evaluateWithScopeExtension(exec));
 }
 
 EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionSubtype(ExecState* exec)
@@ -172,7 +184,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionSubtype(ExecSt
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->subtype(exec));
 }
 
@@ -183,7 +194,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionFunctionDetail
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->functionDetails(exec));
 }
 
@@ -194,7 +204,6 @@ EncodedJSValue JSC_HOST_CALL jsInjectedScriptHostPrototypeFunctionGetInternalPro
     if (!castedThis)
         return throwVMTypeError(exec);
 
-    ASSERT_GC_OBJECT_INHERITS(castedThis, JSInjectedScriptHost::info());
     return JSValue::encode(castedThis->getInternalProperties(exec));
 }
 
