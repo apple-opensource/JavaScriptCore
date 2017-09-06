@@ -21,78 +21,251 @@
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * =========================================================================
- *
- * Copyright (c) 2015 by the repository authors of
- * WebAssembly/polyfill-prototype-1.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-#ifndef WASMFormat_h
-#define WASMFormat_h
+#pragma once
 
 #if ENABLE(WEBASSEMBLY)
 
+#include "B3Compilation.h"
+#include "B3Type.h"
+#include "CodeLocation.h"
+#include "Identifier.h"
+#include "MacroAssemblerCodeRef.h"
+#include "RegisterAtOffsetList.h"
+#include "WasmMemoryInformation.h"
+#include "WasmOps.h"
+#include "WasmPageCount.h"
+#include <memory>
+#include <wtf/FastMalloc.h>
+#include <wtf/Optional.h>
 #include <wtf/Vector.h>
-#include <wtf/text/WTFString.h>
 
 namespace JSC {
 
 class JSFunction;
 
-enum class WASMType : uint8_t {
-    I32,
-    F32,
-    F64,
-    NumberOfTypes
+namespace Wasm {
+
+inline bool isValueType(Type type)
+{
+    switch (type) {
+    case I32:
+    case I64:
+    case F32:
+    case F64:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+    
+enum class ExternalKind : uint8_t {
+    // FIXME auto-generate this. https://bugs.webkit.org/show_bug.cgi?id=165231
+    Function = 0,
+    Table = 1,
+    Memory = 2,
+    Global = 3,
 };
 
-enum class WASMExpressionType : uint8_t {
-    I32,
-    F32,
-    F64,
-    Void,
-    NumberOfExpressionTypes
+template<typename Int>
+static bool isValidExternalKind(Int val)
+{
+    switch (val) {
+    case static_cast<Int>(ExternalKind::Function):
+    case static_cast<Int>(ExternalKind::Table):
+    case static_cast<Int>(ExternalKind::Memory):
+    case static_cast<Int>(ExternalKind::Global):
+        return true;
+    default:
+        return false;
+    }
+}
+
+static_assert(static_cast<int>(ExternalKind::Function) == 0, "Wasm needs Function to have the value 0");
+static_assert(static_cast<int>(ExternalKind::Table)    == 1, "Wasm needs Table to have the value 1");
+static_assert(static_cast<int>(ExternalKind::Memory)   == 2, "Wasm needs Memory to have the value 2");
+static_assert(static_cast<int>(ExternalKind::Global)   == 3, "Wasm needs Global to have the value 3");
+
+static inline const char* makeString(ExternalKind kind)
+{
+    switch (kind) {
+    case ExternalKind::Function: return "Function";
+    case ExternalKind::Table: return "Table";
+    case ExternalKind::Memory: return "Memory";
+    case ExternalKind::Global: return "Global";
+    }
+    RELEASE_ASSERT_NOT_REACHED();
+    return "?";
+}
+
+struct Signature {
+    Type returnType;
+    Vector<Type> arguments;
 };
 
-struct WASMSignature {
-    WASMExpressionType returnType;
-    Vector<WASMType> arguments;
+struct Import {
+    Identifier module;
+    Identifier field;
+    ExternalKind kind;
+    unsigned kindIndex; // Index in the vector of the corresponding kind.
 };
 
-struct WASMFunctionImport {
-    String functionName;
+struct Export {
+    Identifier field;
+    ExternalKind kind;
+    unsigned kindIndex; // Index in the vector of the corresponding kind.
 };
 
-struct WASMFunctionImportSignature {
-    uint32_t signatureIndex;
-    uint32_t functionImportIndex;
+struct Global {
+    enum Mutability : uint8_t {
+        // FIXME auto-generate this. https://bugs.webkit.org/show_bug.cgi?id=165231
+        Mutable = 1,
+        Immutable = 0
+    };
+
+    enum InitializationType {
+        IsImport,
+        FromGlobalImport,
+        FromExpression
+    };
+
+    Mutability mutability;
+    Type type;
+    InitializationType initializationType { IsImport };
+    uint64_t initialBitsOrImportNumber { 0 };
 };
 
-struct WASMFunctionDeclaration {
-    uint32_t signatureIndex;
+struct FunctionLocationInBinary {
+    size_t start;
+    size_t end;
 };
 
-struct WASMFunctionPointerTable {
-    uint32_t signatureIndex;
+struct Segment {
+    uint32_t offset;
+    uint32_t sizeInBytes;
+    // Bytes are allocated at the end.
+    static Segment* make(uint32_t offset, uint32_t sizeInBytes)
+    {
+        auto allocated = tryFastCalloc(sizeof(Segment) + sizeInBytes, 1);
+        Segment* segment;
+        if (!allocated.getValue(segment))
+            return nullptr;
+        segment->offset = offset;
+        segment->sizeInBytes = sizeInBytes;
+        return segment;
+    }
+    static void destroy(Segment *segment)
+    {
+        fastFree(segment);
+    }
+    uint8_t& byte(uint32_t pos)
+    {
+        ASSERT(pos < sizeInBytes);
+        return *reinterpret_cast<uint8_t*>(reinterpret_cast<char*>(this) + sizeof(offset) + sizeof(sizeInBytes) + pos);
+    }
+    typedef std::unique_ptr<Segment, decltype(&Segment::destroy)> Ptr;
+    static Ptr makePtr(Segment* segment)
+    {
+        return Ptr(segment, &Segment::destroy);
+    }
+};
+
+struct Element {
+    uint32_t offset;
     Vector<uint32_t> functionIndices;
-    Vector<JSFunction*> functions;
 };
 
-} // namespace JSC
+class TableInformation {
+public:
+    TableInformation()
+    {
+        ASSERT(!*this);
+    }
+
+    TableInformation(uint32_t initial, std::optional<uint32_t> maximum, bool isImport)
+        : m_initial(initial)
+        , m_maximum(maximum)
+        , m_isImport(isImport)
+        , m_isValid(true)
+    {
+        ASSERT(*this);
+    }
+
+    explicit operator bool() const { return m_isValid; }
+    bool isImport() const { return m_isImport; }
+    uint32_t initial() const { return m_initial; }
+    std::optional<uint32_t> maximum() const { return m_maximum; }
+
+private:
+    uint32_t m_initial;
+    std::optional<uint32_t> m_maximum;
+    bool m_isImport { false };
+    bool m_isValid { false };
+};
+
+struct ModuleInformation {
+    Vector<Signature> signatures;
+    Vector<Import> imports;
+    Vector<Signature*> importFunctions;
+    Vector<Signature*> internalFunctionSignatures;
+    MemoryInformation memory;
+    Vector<Export> exports;
+    std::optional<uint32_t> startFunctionIndexSpace;
+    Vector<Segment::Ptr> data;
+    Vector<Element> elements;
+    TableInformation tableInformation;
+    Vector<Global> globals;
+    unsigned firstInternalGlobal { 0 };
+
+    ~ModuleInformation();
+};
+
+struct UnlinkedWasmToWasmCall {
+    CodeLocationCall callLocation;
+    size_t functionIndex;
+};
+
+struct Entrypoint {
+    std::unique_ptr<B3::Compilation> compilation;
+    RegisterAtOffsetList calleeSaveRegisters;
+};
+
+struct WasmInternalFunction {
+    CodeLocationDataLabelPtr wasmCalleeMoveLocation;
+    CodeLocationDataLabelPtr jsToWasmCalleeMoveLocation;
+
+    Entrypoint wasmEntrypoint;
+    Entrypoint jsToWasmEntrypoint;
+};
+
+typedef MacroAssemblerCodeRef WasmToJSStub;
+
+// WebAssembly direct calls and call_indirect use indices into "function index space". This space starts with all imports, and then all internal functions.
+// CallableFunction and FunctionIndexSpace are only meant as fast lookup tables for these opcodes, and do not own code.
+struct CallableFunction {
+    CallableFunction() = default;
+
+    CallableFunction(Signature* signature, void* code = nullptr)
+        : signature(signature)
+        , code(code)
+    {
+    }
+
+    // FIXME pack this inside a (uniqued) integer (for correctness the parser should unique Signatures),
+    // and then pack that integer into the code pointer. https://bugs.webkit.org/show_bug.cgi?id=165511
+    Signature* signature { nullptr }; 
+    void* code { nullptr };
+};
+typedef Vector<CallableFunction> FunctionIndexSpace;
+
+
+struct ImmutableFunctionIndexSpace {
+    MallocPtr<CallableFunction> buffer;
+    size_t size;
+};
+
+} } // namespace JSC::Wasm
 
 #endif // ENABLE(WEBASSEMBLY)
-
-#endif // WASMFormat_h
