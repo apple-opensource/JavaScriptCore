@@ -40,6 +40,8 @@
 #include "PutByIdStatus.h"
 #include "StringObject.h"
 
+#include <wtf/CheckedArithmetic.h>
+
 namespace JSC { namespace DFG {
 
 template<typename AbstractStateType>
@@ -559,6 +561,14 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
         if (std::optional<double> number = operand.toNumberFromPrimitive()) {
             uint32_t value = toUInt32(*number);
             setConstant(node, jsNumber(clz32(value)));
+            break;
+        }
+        switch (node->child1().useKind()) {
+        case Int32Use:
+        case KnownInt32Use:
+            break;
+        default:
+            clobberWorld(node->origin.semantic, clobberLimit);
             break;
         }
         forNode(node).setType(SpecInt32Only);
@@ -1724,24 +1734,28 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
         JSValue index = forNode(node->child2()).m_value;
         InlineCallFrame* inlineCallFrame = node->child1()->origin.semantic.inlineCallFrame;
 
-        if (index && index.isInt32()) {
+        if (index && index.isUInt32()) {
             // This pretends to return TOP for accesses that are actually proven out-of-bounds because
             // that's the conservative thing to do. Otherwise we'd need to write more code to mark such
             // paths as unreachable, or to return undefined. We could implement that eventually.
-            
-            unsigned argumentIndex = index.asUInt32() + node->numberOfArgumentsToSkip();
-            if (inlineCallFrame) {
-                if (argumentIndex < inlineCallFrame->arguments.size() - 1) {
-                    forNode(node) = m_state.variables().operand(
-                        virtualRegisterForArgument(argumentIndex + 1) + inlineCallFrame->stackOffset);
-                    m_state.setFoundConstants(true);
-                    break;
-                }
-            } else {
-                if (argumentIndex < m_state.variables().numberOfArguments() - 1) {
-                    forNode(node) = m_state.variables().argument(argumentIndex + 1);
-                    m_state.setFoundConstants(true);
-                    break;
+
+            Checked<unsigned, RecordOverflow> argumentIndexChecked = index.asUInt32();
+            argumentIndexChecked += node->numberOfArgumentsToSkip();
+            unsigned argumentIndex;
+            if (argumentIndexChecked.safeGet(argumentIndex) != CheckedState::DidOverflow) {
+                if (inlineCallFrame) {
+                    if (argumentIndex < inlineCallFrame->arguments.size() - 1) {
+                        forNode(node) = m_state.variables().operand(
+                            virtualRegisterForArgument(argumentIndex + 1) + inlineCallFrame->stackOffset);
+                        m_state.setFoundConstants(true);
+                        break;
+                    }
+                } else {
+                    if (argumentIndex < m_state.variables().numberOfArguments() - 1) {
+                        forNode(node) = m_state.variables().argument(argumentIndex + 1);
+                        m_state.setFoundConstants(true);
+                        break;
+                    }
                 }
             }
         }
@@ -2095,8 +2109,13 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
         break;
 
     case NewFunction:
-        forNode(node).set(
-            m_graph, m_codeBlock->globalObjectFor(node->origin.semantic)->functionStructure());
+        if (node->castOperand<FunctionExecutable*>()->isStrictMode()) {
+            forNode(node).set(
+                m_graph, m_codeBlock->globalObjectFor(node->origin.semantic)->strictFunctionStructure());
+        } else {
+            forNode(node).set(
+                m_graph, m_codeBlock->globalObjectFor(node->origin.semantic)->sloppyFunctionStructure());
+        }
         break;
         
     case GetCallee:
@@ -2325,6 +2344,18 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
         }
         
         filter(value, set, admittedTypes);
+        break;
+    }
+
+    case CheckStructureOrEmpty: {
+        AbstractValue& value = forNode(node->child1());
+
+        bool mayBeEmpty = value.m_type & SpecEmpty;
+        if (!mayBeEmpty)
+            m_state.setFoundConstants(true);
+
+        SpeculatedType admittedTypes = mayBeEmpty ? SpecEmpty : SpecNone;
+        filter(value, node->structureSet(), admittedTypes);
         break;
     }
         
@@ -2844,10 +2875,12 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
     }
     case HasGenericProperty: {
         forNode(node).setType(SpecBoolean);
+        clobberWorld(node->origin.semantic, clobberLimit);
         break;
     }
     case HasStructureProperty: {
         forNode(node).setType(SpecBoolean);
+        clobberWorld(node->origin.semantic, clobberLimit);
         break;
     }
     case HasIndexedProperty: {
@@ -2874,6 +2907,7 @@ bool AbstractInterpreter<AbstractStateType>::executeEffects(unsigned clobberLimi
     }
     case GetPropertyEnumerator: {
         forNode(node).setType(m_graph, SpecCell);
+        clobberWorld(node->origin.semantic, clobberLimit);
         break;
     }
     case GetEnumeratorStructurePname: {
