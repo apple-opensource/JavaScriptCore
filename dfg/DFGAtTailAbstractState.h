@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013, 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,6 +27,7 @@
 
 #if ENABLE(DFG_JIT)
 
+#include "DFGAbstractInterpreterClobberState.h"
 #include "DFGAbstractValue.h"
 #include "DFGBasicBlock.h"
 #include "DFGBlockMap.h"
@@ -59,16 +60,26 @@ public:
     
     StructureClobberState structureClobberState() const { return m_block->cfaStructureClobberStateAtTail; }
     
-    void setDidClobber(bool) { }
+    void setClobberState(AbstractInterpreterClobberState) { }
+    void mergeClobberState(AbstractInterpreterClobberState) { }
     void setStructureClobberState(StructureClobberState state) { RELEASE_ASSERT(state == m_block->cfaStructureClobberStateAtTail); }
     void setIsValid(bool isValid) { m_block->cfaDidFinish = isValid; }
     void setBranchDirection(BranchDirection) { }
     void setFoundConstants(bool) { }
 
+    void trustEdgeProofs() { m_trustEdgeProofs = true; }
+    void dontTrustEdgeProofs() { m_trustEdgeProofs = false; }
+    void setProofStatus(Edge& edge, ProofStatus status)
+    {
+        if (m_trustEdgeProofs)
+            edge.setProofStatus(status);
+    }
+
 private:
     Graph& m_graph;
     BlockMap<HashMap<NodeFlowProjection, AbstractValue>> m_valuesAtTailMap;
     BasicBlock* m_block { nullptr };
+    bool m_trustEdgeProofs { false };
 };
 
 } } // namespace JSC::DFG
