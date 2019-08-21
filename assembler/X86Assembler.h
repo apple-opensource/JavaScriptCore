@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2008-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -326,6 +326,7 @@ private:
         OP2_CMPXCHGb        = 0xB0,
         OP2_CMPXCHG         = 0xB1,
         OP2_MOVZX_GvEb      = 0xB6,
+        OP2_POPCNT          = 0xB8,
         OP2_BSF             = 0xBC,
         OP2_TZCNT           = 0xBC,
         OP2_BSR             = 0xBD,
@@ -682,6 +683,18 @@ public:
     void andl_mr(int offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
     {
         m_formatter.oneByteOp(OP_AND_GvEv, dst, base, index, scale, offset);
+    }
+
+    void andw_mr(int offset, RegisterID base, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_OPERAND_SIZE);
+        andl_mr(offset, base, dst);
+    }
+
+    void andw_mr(int offset, RegisterID base, RegisterID index, int scale, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_OPERAND_SIZE);
+        andl_mr(offset, base, index, scale, dst);
     }
 
     void andl_rm(RegisterID src, int offset, RegisterID base)
@@ -1648,6 +1661,32 @@ public:
     void bsfq_rr(RegisterID src, RegisterID dst)
     {
         m_formatter.twoByteOp64(OP2_BSF, dst, src);
+    }
+#endif
+
+    void popcnt_rr(RegisterID src, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOp(OP2_POPCNT, dst, src);
+    }
+
+    void popcnt_mr(int offset, RegisterID base, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOp(OP2_POPCNT, dst, base, offset);
+    }
+
+#if CPU(X86_64)
+    void popcntq_rr(RegisterID src, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOp64(OP2_POPCNT, dst, src);
+    }
+
+    void popcntq_mr(int offset, RegisterID base, RegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOp64(OP2_POPCNT, dst, base, offset);
     }
 #endif
 
@@ -3122,6 +3161,16 @@ public:
         m_formatter.prefix(PRE_SSE_F2);
         m_formatter.twoByteOpAddr(OP2_MOVSD_WsdVsd, (RegisterID)src, bitwise_cast<uint32_t>(address));
     }
+    void movss_mr(const void* address, XMMRegisterID dst)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOpAddr(OP2_MOVSD_VsdWsd, (RegisterID)dst, bitwise_cast<uint32_t>(address));
+    }
+    void movss_rm(XMMRegisterID src, const void* address)
+    {
+        m_formatter.prefix(PRE_SSE_F3);
+        m_formatter.twoByteOpAddr(OP2_MOVSD_WsdVsd, (RegisterID)src, bitwise_cast<uint32_t>(address));
+    }
 #endif
 
     void mulsd_rr(XMMRegisterID src, XMMRegisterID dst)
@@ -3853,9 +3902,10 @@ public:
         m_formatter.oneByteOp(OP_NOP);
     }
 
-    static void fillNops(void* base, size_t size, bool isCopyingToExecutableMemory)
+    template <typename CopyFunction>
+    static void fillNops(void* base, size_t size, CopyFunction copy)
     {
-        UNUSED_PARAM(isCopyingToExecutableMemory);
+        UNUSED_PARAM(copy);
 #if CPU(X86_64)
         static const uint8_t nops[10][10] = {
             // nop

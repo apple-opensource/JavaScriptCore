@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,10 +29,15 @@
 
 #include "AssemblerBuffer.h"
 #include "AssemblerCommon.h"
+#include "JSCPtrTag.h"
 #include <limits.h>
 #include <wtf/Assertions.h>
 #include <wtf/Vector.h>
 #include <stdint.h>
+
+#if OS(FUCHSIA)
+#include <zircon/syscalls.h>
+#endif
 
 #define CHECK_DATASIZE_OF(datasize) ASSERT(datasize == 32 || datasize == 64)
 #define CHECK_MEMOPSIZE_OF(size) ASSERT(size == 8 || size == 16 || size == 32 || size == 64 || size == 128);
@@ -308,14 +313,22 @@ public:
         return nameForRegister[id];
     }
 
-private:
+protected:
     static constexpr bool isSp(RegisterID reg) { return ARM64Registers::isSp(reg); }
     static constexpr bool isZr(RegisterID reg) { return ARM64Registers::isZr(reg); }
 
 public:
-    ARM64Assembler()
+    ARM64Assembler(
+#if CPU(ARM64E)
+        unsigned randomNumber
+#endif 
+        )
         : m_indexOfLastWatchpoint(INT_MIN)
         , m_indexOfTailOfLastWatchpoint(INT_MIN)
+#if CPU(ARM64E)
+        , m_buffer(randomNumber)
+#endif
+        
     {
     }
     
@@ -515,7 +528,7 @@ public:
         return isValidSignedImm9(offset);
     }
 
-private:
+protected:
     int encodeFPImm(double d)
     {
         ASSERT(canEncodeFPImm(d));
@@ -1549,16 +1562,14 @@ public:
         insn(nopPseudo());
     }
     
-    static void fillNops(void* base, size_t size, bool isCopyingToExecutableMemory)
+    template <typename CopyFunction>
+    static void fillNops(void* base, size_t size, CopyFunction copy)
     {
         RELEASE_ASSERT(!(size % sizeof(int32_t)));
         size_t n = size / sizeof(int32_t);
         for (int32_t* ptr = static_cast<int32_t*>(base); n--;) {
             int insn = nopPseudo();
-            if (isCopyingToExecutableMemory)
-                performJITMemcpy(ptr++, &insn, sizeof(int));
-            else
-                memcpy(ptr++, &insn, sizeof(int));
+            copy(ptr++, &insn, sizeof(int));
         }
     }
     
@@ -2563,7 +2574,6 @@ public:
         return b.m_offset - a.m_offset;
     }
 
-    void* unlinkedCode() { return m_buffer.data(); }
     size_t codeSize() const { return m_buffer.codeSize(); }
 
     static unsigned getCallReturnOffset(AssemblerLabel call)
@@ -2601,13 +2611,6 @@ public:
         m_jumpsToLink.append(LinkRecord(from.m_offset, to.m_offset, type, condition, bitNumber, compareRegister));
     }
 
-    void linkJump(AssemblerLabel from, void* executableCode, AssemblerLabel to)
-    {
-        ASSERT(from.isSet());
-        ASSERT(to.isSet());
-        relinkJumpOrCall<false>(addressOf(from), addressOf(executableCode, from), addressOf(to));
-    }
-    
     static void linkJump(void* code, AssemblerLabel from, void* to)
     {
         ASSERT(from.isSet());
@@ -2856,6 +2859,8 @@ public:
     {
 #if OS(IOS)
         sys_cache_control(kCacheFunctionPrepareForExecution, code, size);
+#elif OS(FUCHSIA)
+        zx_cache_flush(code, size, ZX_CACHE_FLUSH_INSN);
 #elif OS(LINUX)
         size_t page = pageSize();
         uintptr_t current = reinterpret_cast<uintptr_t>(code);
@@ -2958,30 +2963,32 @@ public:
         return m_jumpsToLink;
     }
 
-    static void ALWAYS_INLINE link(LinkRecord& record, uint8_t* from, const uint8_t* fromInstruction8, uint8_t* to)
+    typedef void* (*CopyFunction)(void*, const void*, size_t);
+
+    static void ALWAYS_INLINE link(LinkRecord& record, uint8_t* from, const uint8_t* fromInstruction8, uint8_t* to, CopyFunction copy)
     {
         const int* fromInstruction = reinterpret_cast<const int*>(fromInstruction8);
         switch (record.linkType()) {
         case LinkJumpNoCondition:
-            linkJumpOrCall<false>(reinterpret_cast<int*>(from), fromInstruction, to);
+            linkJumpOrCall<false>(reinterpret_cast<int*>(from), fromInstruction, to, copy);
             break;
         case LinkJumpConditionDirect:
-            linkConditionalBranch<true>(record.condition(), reinterpret_cast<int*>(from), fromInstruction, to);
+            linkConditionalBranch<true>(record.condition(), reinterpret_cast<int*>(from), fromInstruction, to, copy);
             break;
         case LinkJumpCondition:
-            linkConditionalBranch<false>(record.condition(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to);
+            linkConditionalBranch<false>(record.condition(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to, copy);
             break;
         case LinkJumpCompareAndBranchDirect:
-            linkCompareAndBranch<true>(record.condition(), record.is64Bit(), record.compareRegister(), reinterpret_cast<int*>(from), fromInstruction, to);
+            linkCompareAndBranch<true>(record.condition(), record.is64Bit(), record.compareRegister(), reinterpret_cast<int*>(from), fromInstruction, to, copy);
             break;
         case LinkJumpCompareAndBranch:
-            linkCompareAndBranch<false>(record.condition(), record.is64Bit(), record.compareRegister(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to);
+            linkCompareAndBranch<false>(record.condition(), record.is64Bit(), record.compareRegister(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to, copy);
             break;
         case LinkJumpTestBitDirect:
-            linkTestAndBranch<true>(record.condition(), record.bitNumber(), record.compareRegister(), reinterpret_cast<int*>(from), fromInstruction, to);
+            linkTestAndBranch<true>(record.condition(), record.bitNumber(), record.compareRegister(), reinterpret_cast<int*>(from), fromInstruction, to, copy);
             break;
         case LinkJumpTestBit:
-            linkTestAndBranch<false>(record.condition(), record.bitNumber(), record.compareRegister(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to);
+            linkTestAndBranch<false>(record.condition(), record.bitNumber(), record.compareRegister(), reinterpret_cast<int*>(from) - 1, fromInstruction - 1, to, copy);
             break;
         default:
             ASSERT_NOT_REACHED();
@@ -2989,7 +2996,7 @@ public:
         }
     }
 
-private:
+protected:
     template<Datasize size>
     static bool checkMovk(int insn, int _hw, RegisterID _rd)
     {
@@ -3023,7 +3030,7 @@ private:
     }
 
     template<bool isCall>
-    static void linkJumpOrCall(int* from, const int* fromInstruction, void* to)
+    static void linkJumpOrCall(int* from, const int* fromInstruction, void* to, CopyFunction copy = performJITMemcpy)
     {
         bool link;
         int imm26;
@@ -3033,15 +3040,17 @@ private:
         ASSERT_UNUSED(isCall, (link == isCall) || disassembleNop(from));
         ASSERT(!(reinterpret_cast<intptr_t>(from) & 3));
         ASSERT(!(reinterpret_cast<intptr_t>(to) & 3));
+        assertIsNotTagged(to);
+        assertIsNotTagged(fromInstruction);
         intptr_t offset = (reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(fromInstruction)) >> 2;
         ASSERT(static_cast<int>(offset) == offset);
 
         int insn = unconditionalBranchImmediate(isCall, static_cast<int>(offset));
-        performJITMemcpy(from, &insn, sizeof(int));
+        copy(from, &insn, sizeof(int));
     }
 
     template<bool isDirect>
-    static void linkCompareAndBranch(Condition condition, bool is64Bit, RegisterID rt, int* from, const int* fromInstruction, void* to)
+    static void linkCompareAndBranch(Condition condition, bool is64Bit, RegisterID rt, int* from, const int* fromInstruction, void* to, CopyFunction copy = performJITMemcpy)
     {
         ASSERT(!(reinterpret_cast<intptr_t>(from) & 3));
         ASSERT(!(reinterpret_cast<intptr_t>(to) & 3));
@@ -3053,20 +3062,20 @@ private:
 
         if (useDirect || isDirect) {
             int insn = compareAndBranchImmediate(is64Bit ? Datasize_64 : Datasize_32, condition == ConditionNE, static_cast<int>(offset), rt);
-            performJITMemcpy(from, &insn, sizeof(int));
+            copy(from, &insn, sizeof(int));
             if (!isDirect) {
                 insn = nopPseudo();
-                performJITMemcpy(from + 1, &insn, sizeof(int));
+                copy(from + 1, &insn, sizeof(int));
             }
         } else {
             int insn = compareAndBranchImmediate(is64Bit ? Datasize_64 : Datasize_32, invert(condition) == ConditionNE, 2, rt);
-            performJITMemcpy(from, &insn, sizeof(int));
-            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to);
+            copy(from, &insn, sizeof(int));
+            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to, copy);
         }
     }
 
     template<bool isDirect>
-    static void linkConditionalBranch(Condition condition, int* from, const int* fromInstruction, void* to)
+    static void linkConditionalBranch(Condition condition, int* from, const int* fromInstruction, void* to, CopyFunction copy = performJITMemcpy)
     {
         ASSERT(!(reinterpret_cast<intptr_t>(from) & 3));
         ASSERT(!(reinterpret_cast<intptr_t>(to) & 3));
@@ -3078,20 +3087,20 @@ private:
 
         if (useDirect || isDirect) {
             int insn = conditionalBranchImmediate(static_cast<int>(offset), condition);
-            performJITMemcpy(from, &insn, sizeof(int));
+            copy(from, &insn, sizeof(int));
             if (!isDirect) {
                 insn = nopPseudo();
-                performJITMemcpy(from + 1, &insn, sizeof(int));
+                copy(from + 1, &insn, sizeof(int));
             }
         } else {
             int insn = conditionalBranchImmediate(2, invert(condition));
-            performJITMemcpy(from, &insn, sizeof(int));
-            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to);
+            copy(from, &insn, sizeof(int));
+            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to, copy);
         }
     }
 
     template<bool isDirect>
-    static void linkTestAndBranch(Condition condition, unsigned bitNumber, RegisterID rt, int* from, const int* fromInstruction, void* to)
+    static void linkTestAndBranch(Condition condition, unsigned bitNumber, RegisterID rt, int* from, const int* fromInstruction, void* to, CopyFunction copy = performJITMemcpy)
     {
         ASSERT(!(reinterpret_cast<intptr_t>(from) & 3));
         ASSERT(!(reinterpret_cast<intptr_t>(to) & 3));
@@ -3104,15 +3113,15 @@ private:
 
         if (useDirect || isDirect) {
             int insn = testAndBranchImmediate(condition == ConditionNE, static_cast<int>(bitNumber), static_cast<int>(offset), rt);
-            performJITMemcpy(from, &insn, sizeof(int));
+            copy(from, &insn, sizeof(int));
             if (!isDirect) {
                 insn = nopPseudo();
-                performJITMemcpy(from + 1, &insn, sizeof(int));
+                copy(from + 1, &insn, sizeof(int));
             }
         } else {
             int insn = testAndBranchImmediate(invert(condition) == ConditionNE, static_cast<int>(bitNumber), 2, rt);
-            performJITMemcpy(from, &insn, sizeof(int));
-            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to);
+            copy(from, &insn, sizeof(int));
+            linkJumpOrCall<false>(from + 1, fromInstruction + 1, to, copy);
         }
     }
 
@@ -3168,11 +3177,6 @@ private:
     static int* addressOf(void* code, AssemblerLabel label)
     {
         return reinterpret_cast<int*>(static_cast<char*>(code) + label.m_offset);
-    }
-
-    int* addressOf(AssemblerLabel label)
-    {
-        return addressOf(m_buffer.data(), label);
     }
 
     static RegisterID disassembleXOrSp(int reg) { return reg == 31 ? ARM64Registers::sp : static_cast<RegisterID>(reg); }
@@ -3750,10 +3754,13 @@ private:
 #endif
     }
 
-    AssemblerBuffer m_buffer;
     Vector<LinkRecord, 0, UnsafeVectorOverflow> m_jumpsToLink;
     int m_indexOfLastWatchpoint;
     int m_indexOfTailOfLastWatchpoint;
+    AssemblerBuffer m_buffer;
+
+public:
+    static constexpr ptrdiff_t MAX_POINTER_BITS = 48;
 };
 
 } // namespace JSC

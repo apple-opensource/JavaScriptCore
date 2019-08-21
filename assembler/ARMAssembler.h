@@ -105,9 +105,6 @@ namespace JSC {
             d30,
             d31,
 #endif // CPU(ARM_NEON) || CPU(ARM_VFP_V3_D32)
-
-            // Pseudonyms for some of the registers.
-            SD0 = d7, /* Same as thumb assembler. */
         } FPRegisterID;
 
     } // namespace ARMRegisters
@@ -753,9 +750,10 @@ namespace JSC {
             m_buffer.putInt(NOP);
         }
 
-        static void fillNops(void* base, size_t size, bool isCopyingToExecutableMemory)
+        template <typename CopyFunction>
+        static void fillNops(void* base, size_t size, CopyFunction copy)
         {
-            UNUSED_PARAM(isCopyingToExecutableMemory);
+            UNUSED_PARAM(copy);
             RELEASE_ASSERT(!(size % sizeof(int32_t)));
 
             int32_t* ptr = static_cast<int32_t*>(base);
