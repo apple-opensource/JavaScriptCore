@@ -164,7 +164,7 @@ void lowerToAirForTesting(Procedure& proc)
 }
 
 template<typename Func>
-void checkDisassembly(Compilation& compilation, const Func& func, CString failText)
+void checkDisassembly(Compilation& compilation, const Func& func, const CString& failText)
 {
     CString disassembly = compilation.disassembly();
     if (func(disassembly.data()))
@@ -5473,10 +5473,11 @@ void testStoreConstantPtr(intptr_t value)
     Procedure proc;
     BasicBlock* root = proc.addBlock();
     intptr_t slot;
-    if (is64Bit())
-        slot = (static_cast<intptr_t>(0xbaadbeef) << 32) + static_cast<intptr_t>(0xbaadbeef);
-    else
-        slot = 0xbaadbeef;
+#if CPU(ADDRESS64)
+    slot = (static_cast<intptr_t>(0xbaadbeef) << 32) + static_cast<intptr_t>(0xbaadbeef);
+#else
+    slot = 0xbaadbeef;
+#endif
     root->appendNew<MemoryValue>(
         proc, Store, Origin(),
         root->appendNew<ConstPtrValue>(proc, Origin(), value),
@@ -13194,9 +13195,9 @@ void testInterpreter()
     
     auto interpreter = compileProc(proc);
     
-    Vector<intptr_t> data;
-    Vector<intptr_t> code;
-    Vector<intptr_t> stream;
+    Vector<uintptr_t> data;
+    Vector<uintptr_t> code;
+    Vector<uintptr_t> stream;
     
     data.append(1);
     data.append(0);
@@ -14497,7 +14498,7 @@ void testAddShl32()
     root->appendNew<Value>(proc, Return, Origin(), result);
     
     auto code = compileProc(proc);
-    CHECK_EQ(invoke<intptr_t>(*code, 1, 2), 1 + (static_cast<intptr_t>(2) << static_cast<intptr_t>(32)));
+    CHECK_EQ(invoke<int64_t>(*code, 1, 2), 1 + (static_cast<int64_t>(2) << static_cast<int64_t>(32)));
 }
 
 void testAddShl64()
@@ -14607,6 +14608,7 @@ void testLoadBaseIndexShift2()
 
 void testLoadBaseIndexShift32()
 {
+#if CPU(ADDRESS64)
     Procedure proc;
     BasicBlock* root = proc.addBlock();
     root->appendNew<Value>(
@@ -14625,6 +14627,7 @@ void testLoadBaseIndexShift32()
     char* ptr = bitwise_cast<char*>(&value);
     for (unsigned i = 0; i < 10; ++i)
         CHECK_EQ(invoke<int32_t>(*code, ptr - (static_cast<intptr_t>(1) << static_cast<intptr_t>(32)) * i, i), 12341234);
+#endif
 }
 
 void testOptimizeMaterialization()
@@ -16277,6 +16280,98 @@ void testDemotePatchpointTerminal()
     validate(proc);
 }
 
+void testReportUsedRegistersLateUseFollowedByEarlyDefDoesNotMarkUseAsDead()
+{
+    Procedure proc;
+    if (proc.optLevel() < 2)
+        return;
+    BasicBlock* root = proc.addBlock();
+
+    RegisterSet allRegs = RegisterSet::allGPRs();
+    allRegs.exclude(RegisterSet::stackRegisters());
+    allRegs.exclude(RegisterSet::reservedHardwareRegisters());
+
+    {
+        // Make every reg 42 (just needs to be a value other than 10).
+        PatchpointValue* patchpoint = root->appendNew<PatchpointValue>(proc, Void, Origin());
+        Value* const42 = root->appendNew<Const32Value>(proc, Origin(), 42);
+        for (Reg reg : allRegs)
+            patchpoint->append(const42, ValueRep::reg(reg));
+        patchpoint->setGenerator([&] (CCallHelpers&, const StackmapGenerationParams&) { });
+    }
+
+    {
+        PatchpointValue* patchpoint = root->appendNew<PatchpointValue>(proc, Void, Origin());
+        Value* const10 = root->appendNew<Const32Value>(proc, Origin(), 10);
+        for (Reg reg : allRegs)
+            patchpoint->append(const10, ValueRep::lateReg(reg));
+        patchpoint->setGenerator([&] (CCallHelpers& jit, const StackmapGenerationParams&) {
+            for (Reg reg : allRegs) {
+                auto done = jit.branch32(CCallHelpers::Equal, reg.gpr(), CCallHelpers::TrustedImm32(10));
+                jit.breakpoint();
+                done.link(&jit);
+            }
+        });
+    }
+
+    {
+        PatchpointValue* patchpoint = root->appendNew<PatchpointValue>(proc, Int32, Origin());
+        patchpoint->resultConstraint = ValueRep::SomeEarlyRegister;
+        patchpoint->setGenerator([&] (CCallHelpers&, const StackmapGenerationParams& params) {
+            RELEASE_ASSERT(allRegs.contains(params[0].gpr()));
+        });
+    }
+
+    root->appendNewControlValue(proc, Return, Origin());
+
+    compileAndRun<void>(proc);
+}
+
+void testInfiniteLoopDoesntCauseBadHoisting()
+{
+    Procedure proc;
+    if (proc.optLevel() < 2)
+        return;
+    BasicBlock* root = proc.addBlock();
+    BasicBlock* header = proc.addBlock();
+    BasicBlock* loadBlock = proc.addBlock();
+    BasicBlock* postLoadBlock = proc.addBlock();
+
+    Value* arg = root->appendNew<ArgumentRegValue>(proc, Origin(), GPRInfo::argumentGPR0);
+    root->appendNewControlValue(proc, Jump, Origin(), header);
+
+    header->appendNewControlValue(
+        proc, Branch, Origin(),
+        header->appendNew<Value>(proc, Equal, Origin(),
+            arg,
+            header->appendNew<Const64Value>(proc, Origin(), 10)), header, loadBlock);
+
+    PatchpointValue* patchpoint = loadBlock->appendNew<PatchpointValue>(proc, Void, Origin());
+    patchpoint->effects = Effects::none();
+    patchpoint->effects.writesLocalState = true; // Don't DCE this.
+    patchpoint->setGenerator(
+        [&] (CCallHelpers& jit, const StackmapGenerationParams&) {
+            // This works because we don't have callee saves.
+            jit.emitFunctionEpilogue();
+            jit.ret();
+        });
+
+    Value* badLoad = loadBlock->appendNew<MemoryValue>(proc, Load, Int64, Origin(), arg, 0);
+
+    loadBlock->appendNewControlValue(
+        proc, Branch, Origin(),
+        loadBlock->appendNew<Value>(proc, Equal, Origin(),
+            badLoad,
+            loadBlock->appendNew<Const64Value>(proc, Origin(), 45)), header, postLoadBlock);
+
+    postLoadBlock->appendNewControlValue(proc, Return, Origin(), badLoad);
+
+    // The patchpoint early ret() works because we don't have callee saves.
+    auto code = compileProc(proc);
+    RELEASE_ASSERT(!proc.calleeSaveRegisterAtOffsetList().size()); 
+    invoke<void>(*code, static_cast<uint64_t>(55)); // Shouldn't crash dereferncing 55.
+}
+
 // Make sure the compiler does not try to optimize anything out.
 NEVER_INLINE double zero()
 {
@@ -17848,6 +17943,8 @@ void run(const char* filter)
 
     RUN(testLoopWithMultipleHeaderEdges());
 
+    RUN(testInfiniteLoopDoesntCauseBadHoisting());
+
     if (isX86()) {
         RUN(testBranchBitAndImmFusion(Identity, Int64, 1, Air::BranchTest32, Air::Arg::Tmp));
         RUN(testBranchBitAndImmFusion(Identity, Int64, 0xff, Air::BranchTest32, Air::Arg::Tmp));
@@ -17871,6 +17968,8 @@ void run(const char* filter)
         RUN(testTernarySubInstructionSelection(Identity, Int64, Air::Sub64));
         RUN(testTernarySubInstructionSelection(Trunc, Int32, Air::Sub32));
     }
+
+    RUN(testReportUsedRegistersLateUseFollowedByEarlyDefDoesNotMarkUseAsDead());
 
     if (tasks.isEmpty())
         usage();

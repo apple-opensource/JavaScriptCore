@@ -130,14 +130,7 @@ static InlineCacheAction actionForCell(VM& vm, JSCell* cell)
 
 static bool forceICFailure(ExecState*)
 {
-#if CPU(ARM_TRADITIONAL)
-    // FIXME: Remove this workaround once the proper fixes are landed.
-    // [ARM] Disable Inline Caching on ARMv7 traditional until proper fix
-    // https://bugs.webkit.org/show_bug.cgi?id=159759
-    return true;
-#else
     return Options::forceICFailure();
-#endif
 }
 
 ALWAYS_INLINE static void fireWatchpointsAndClearStubIfNeeded(VM& vm, StructureStubInfo& stubInfo, CodeBlock* codeBlock, AccessGenerationResult& result)
@@ -215,8 +208,18 @@ static InlineCacheAction tryCacheGetByID(ExecState* exec, JSValue baseValue, con
                 }
 
                 newCase = AccessCase::create(vm, codeBlock, AccessCase::ArrayLength);
-            } else if (isJSString(baseCell))
+            } else if (isJSString(baseCell)) {
+                if (stubInfo.cacheType == CacheType::Unset) {
+                    bool generatedCodeInline = InlineAccess::generateStringLength(stubInfo);
+                    if (generatedCodeInline) {
+                        ftlThunkAwareRepatchCall(codeBlock, stubInfo.slowPathCallLocation(), appropriateOptimizingGetByIdFunction(kind));
+                        stubInfo.initStringLength();
+                        return RetryCacheLater;
+                    }
+                }
+
                 newCase = AccessCase::create(vm, codeBlock, AccessCase::StringLength);
+            }
             else if (DirectArguments* arguments = jsDynamicCast<DirectArguments*>(vm, baseCell)) {
                 // If there were overrides, then we can handle this as a normal property load! Guarding
                 // this with such a check enables us to add an IC case for that load if needed.
@@ -329,7 +332,7 @@ static InlineCacheAction tryCacheGetByID(ExecState* exec, JSValue baseValue, con
             if (slot.isCacheableGetter())
                 getter = jsDynamicCast<JSFunction*>(vm, slot.getterSetter()->getter());
 
-            std::optional<DOMAttributeAnnotation> domAttribute;
+            Optional<DOMAttributeAnnotation> domAttribute;
             if (slot.isCacheableCustom() && slot.domAttribute())
                 domAttribute = slot.domAttribute();
 
@@ -467,8 +470,7 @@ static InlineCacheAction tryCachePutByID(ExecState* exec, JSValue baseValue, Str
             
                 if (stubInfo.cacheType == CacheType::Unset
                     && InlineAccess::canGenerateSelfPropertyReplace(stubInfo, slot.cachedOffset())
-                    && !structure->needImpurePropertyWatchpoint()
-                    && !structure->inferredTypeFor(ident.impl())) {
+                    && !structure->needImpurePropertyWatchpoint()) {
                     
                     bool generatedCodeInline = InlineAccess::generateSelfPropertyReplace(stubInfo, structure, slot.cachedOffset());
                     if (generatedCodeInline) {
@@ -573,9 +575,10 @@ static InlineCacheAction tryCachePutByID(ExecState* exec, JSValue baseValue, Str
                         if (!conditionSet.isValid())
                             return GiveUpOnCache;
 
-                        PropertyOffset conditionSetOffset = conditionSet.slotBaseCondition().offset();
-                        if (UNLIKELY(offset != conditionSetOffset))
-                            CRASH_WITH_INFO(offset, conditionSetOffset, slot.base()->type(), baseCell->type(), conditionSet.size());
+                        if (!(conditionSet.slotBaseCondition().attributes() & PropertyAttribute::Accessor))
+                            return GiveUpOnCache;
+
+                        offset = conditionSet.slotBaseCondition().offset();
                     }
 
                 }
@@ -841,6 +844,7 @@ void linkFor(
 
     ASSERT(!callLinkInfo.isLinked());
     callLinkInfo.setCallee(vm, owner, callee);
+    MacroAssembler::repatchPointer(callLinkInfo.hotPathBegin(), callee);
     callLinkInfo.setLastSeenCallee(vm, owner, callee);
     if (shouldDumpDisassemblyFor(callerCodeBlock))
         dataLog("Linking call in ", FullCodeOrigin(callerCodeBlock, callLinkInfo.codeOrigin()), " to ", pointerDump(calleeCodeBlock), ", entrypoint at ", codePtr, "\n");
@@ -894,15 +898,20 @@ static void revertCall(VM* vm, CallLinkInfo& callLinkInfo, MacroAssemblerCodeRef
 {
     if (callLinkInfo.isDirect()) {
         callLinkInfo.clearCodeBlock();
-        if (callLinkInfo.callType() == CallLinkInfo::DirectTailCall)
-            MacroAssembler::repatchJump(callLinkInfo.patchableJump(), callLinkInfo.slowPathStart());
-        else
-            MacroAssembler::repatchNearCall(callLinkInfo.hotPathOther(), callLinkInfo.slowPathStart());
+        if (!callLinkInfo.clearedByJettison()) {
+            if (callLinkInfo.callType() == CallLinkInfo::DirectTailCall)
+                MacroAssembler::repatchJump(callLinkInfo.patchableJump(), callLinkInfo.slowPathStart());
+            else
+                MacroAssembler::repatchNearCall(callLinkInfo.hotPathOther(), callLinkInfo.slowPathStart());
+        }
     } else {
-        MacroAssembler::revertJumpReplacementToBranchPtrWithPatch(
-            MacroAssembler::startOfBranchPtrWithPatchOnRegister(callLinkInfo.hotPathBegin()),
-            static_cast<MacroAssembler::RegisterID>(callLinkInfo.calleeGPR()), 0);
-        linkSlowFor(vm, callLinkInfo, codeRef);
+        if (!callLinkInfo.clearedByJettison()) {
+            MacroAssembler::revertJumpReplacementToBranchPtrWithPatch(
+                MacroAssembler::startOfBranchPtrWithPatchOnRegister(callLinkInfo.hotPathBegin()),
+                callLinkInfo.calleeGPR(), 0);
+            linkSlowFor(vm, callLinkInfo, codeRef);
+            MacroAssembler::repatchPointer(callLinkInfo.hotPathBegin(), nullptr);
+        }
         callLinkInfo.clearCallee();
     }
     callLinkInfo.clearSeen();
@@ -920,7 +929,7 @@ void unlinkFor(VM& vm, CallLinkInfo& callLinkInfo)
     revertCall(&vm, callLinkInfo, vm.getCTIStub(linkCallThunkGenerator).retagged<JITStubRoutinePtrTag>());
 }
 
-void linkVirtualFor(ExecState* exec, CallLinkInfo& callLinkInfo)
+static void linkVirtualFor(ExecState* exec, CallLinkInfo& callLinkInfo)
 {
     CallFrame* callerFrame = exec->callerFrame();
     VM& vm = callerFrame->vm();
@@ -932,6 +941,7 @@ void linkVirtualFor(ExecState* exec, CallLinkInfo& callLinkInfo)
     MacroAssemblerCodeRef<JITStubRoutinePtrTag> virtualThunk = virtualThunkFor(&vm, callLinkInfo);
     revertCall(&vm, callLinkInfo, virtualThunk);
     callLinkInfo.setSlowStub(createJITStubRoutine(virtualThunk, vm, nullptr, true));
+    callLinkInfo.setClearedByVirtual();
 }
 
 namespace {
@@ -1020,52 +1030,7 @@ void linkPolymorphicCall(
         linkVirtualFor(exec, callLinkInfo);
         return;
     }
-    
-    GPRReg calleeGPR = static_cast<GPRReg>(callLinkInfo.calleeGPR());
-    
-    CCallHelpers stubJit(callerCodeBlock);
-    
-    CCallHelpers::JumpList slowPath;
-    
-    std::unique_ptr<CallFrameShuffler> frameShuffler;
-    if (callLinkInfo.frameShuffleData()) {
-        ASSERT(callLinkInfo.isTailCall());
-        frameShuffler = std::make_unique<CallFrameShuffler>(stubJit, *callLinkInfo.frameShuffleData());
-#if USE(JSVALUE32_64)
-        // We would have already checked that the callee is a cell, and we can
-        // use the additional register this buys us.
-        frameShuffler->assumeCalleeIsCell();
-#endif
-        frameShuffler->lockGPR(calleeGPR);
-    }
-    GPRReg comparisonValueGPR;
-    
-    if (isClosureCall) {
-        GPRReg scratchGPR;
-        if (frameShuffler)
-            scratchGPR = frameShuffler->acquireGPR();
-        else
-            scratchGPR = AssemblyHelpers::selectScratchGPR(calleeGPR);
-        // Verify that we have a function and stash the executable in scratchGPR.
 
-#if USE(JSVALUE64)
-        slowPath.append(stubJit.branchIfNotCell(calleeGPR));
-#else
-        // We would have already checked that the callee is a cell.
-#endif
-
-        // FIXME: We could add a fast path for InternalFunction with closure call.
-        slowPath.append(stubJit.branchIfNotFunction(calleeGPR));
-    
-        stubJit.loadPtr(
-            CCallHelpers::Address(calleeGPR, JSFunction::offsetOfExecutable()),
-            scratchGPR);
-        stubJit.xorPtr(CCallHelpers::TrustedImmPtr(JSFunctionPoison::key()), scratchGPR);
-        
-        comparisonValueGPR = scratchGPR;
-    } else
-        comparisonValueGPR = calleeGPR;
-    
     Vector<int64_t> caseValues(callCases.size());
     Vector<CallToCodePtr> calls(callCases.size());
     UniqueArray<uint32_t> fastCounts;
@@ -1112,6 +1077,31 @@ void linkPolymorphicCall(
         caseValues[i] = newCaseValue;
     }
     
+    GPRReg calleeGPR = callLinkInfo.calleeGPR();
+
+    CCallHelpers stubJit(callerCodeBlock);
+
+    std::unique_ptr<CallFrameShuffler> frameShuffler;
+    if (callLinkInfo.frameShuffleData()) {
+        ASSERT(callLinkInfo.isTailCall());
+        frameShuffler = std::make_unique<CallFrameShuffler>(stubJit, *callLinkInfo.frameShuffleData());
+#if USE(JSVALUE32_64)
+        // We would have already checked that the callee is a cell, and we can
+        // use the additional register this buys us.
+        frameShuffler->assumeCalleeIsCell();
+#endif
+        frameShuffler->lockGPR(calleeGPR);
+    }
+
+    GPRReg comparisonValueGPR;
+    if (isClosureCall) {
+        if (frameShuffler)
+            comparisonValueGPR = frameShuffler->acquireGPR();
+        else
+            comparisonValueGPR = AssemblyHelpers::selectScratchGPR(calleeGPR);
+    } else
+        comparisonValueGPR = calleeGPR;
+
     GPRReg fastCountsBaseGPR;
     if (frameShuffler)
         fastCountsBaseGPR = frameShuffler->acquireGPR();
@@ -1120,8 +1110,32 @@ void linkPolymorphicCall(
             AssemblyHelpers::selectScratchGPR(calleeGPR, comparisonValueGPR, GPRInfo::regT3);
     }
     stubJit.move(CCallHelpers::TrustedImmPtr(fastCounts.get()), fastCountsBaseGPR);
-    if (!frameShuffler && callLinkInfo.isTailCall())
+
+    if (!frameShuffler && callLinkInfo.isTailCall()) {
+        // We strongly assume that calleeGPR is not a callee save register in the slow path.
+        ASSERT(!callerCodeBlock->calleeSaveRegisters()->find(calleeGPR));
         stubJit.emitRestoreCalleeSaves();
+    }
+
+    CCallHelpers::JumpList slowPath;
+    if (isClosureCall) {
+        // Verify that we have a function and stash the executable in scratchGPR.
+#if USE(JSVALUE64)
+        if (callLinkInfo.isTailCall())
+            slowPath.append(stubJit.branchIfNotCell(calleeGPR, DoNotHaveTagRegisters));
+        else
+            slowPath.append(stubJit.branchIfNotCell(calleeGPR));
+#else
+        // We would have already checked that the callee is a cell.
+#endif
+        // FIXME: We could add a fast path for InternalFunction with closure call.
+        slowPath.append(stubJit.branchIfNotFunction(calleeGPR));
+
+        stubJit.loadPtr(
+            CCallHelpers::Address(calleeGPR, JSFunction::offsetOfExecutable()),
+            comparisonValueGPR);
+    }
+
     BinarySwitch binarySwitch(comparisonValueGPR, caseValues, BinarySwitch::IntPtr);
     CCallHelpers::JumpList done;
     while (binarySwitch.advance(stubJit)) {

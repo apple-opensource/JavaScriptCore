@@ -26,8 +26,17 @@
 #pragma once
 
 #include "Options.h"
+#include <wtf/NumberOfCores.h>
 
 namespace JSC {
+
+#if USE(JSVALUE64)
+using CPURegister = int64_t;
+using UCPURegister = uint64_t;
+#else
+using CPURegister = int32_t;
+using UCPURegister = uint32_t;
+#endif
 
 constexpr bool isARMv7IDIVSupported()
 {
@@ -79,6 +88,16 @@ constexpr bool is32Bit()
     return !is64Bit();
 }
 
+constexpr bool isAddress64Bit()
+{
+    return sizeof(void*) == 8;
+}
+
+constexpr bool isAddress32Bit()
+{
+    return !isAddress64Bit();
+}
+
 constexpr bool isMIPS()
 {
 #if CPU(MIPS)
@@ -112,6 +131,16 @@ inline bool hasSensibleDoubleToInt()
 {
     return optimizeForX86();
 }
+
+#if (CPU(X86) || CPU(X86_64)) && OS(DARWIN)
+bool isKernTCSMAvailable();
+bool enableKernTCSM();
+int kernTCSMAwareNumberOfProcessorCores();
+#else
+ALWAYS_INLINE bool isKernTCSMAvailable() { return false; }
+ALWAYS_INLINE bool enableKernTCSM() { return false; }
+ALWAYS_INLINE int kernTCSMAwareNumberOfProcessorCores() { return WTF::numberOfProcessorCores(); }
+#endif
 
 } // namespace JSC
 

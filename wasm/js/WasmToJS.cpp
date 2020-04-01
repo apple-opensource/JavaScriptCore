@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,6 +41,7 @@
 #include "WasmContext.h"
 #include "WasmExceptionType.h"
 #include "WasmInstance.h"
+#include "WasmSignatureInlines.h"
 
 namespace JSC { namespace Wasm {
 
@@ -248,7 +249,7 @@ Expected<MacroAssemblerCodeRef<WasmEntryPtrTag>, BindingFailure> wasmToJS(VM* vm
                         break;
                     case F32:
                     case F64:
-                        arg = jsNumber(bitwise_cast<double>(buffer[argNum]));
+                        arg = jsNumber(purifyNaN(bitwise_cast<double>(buffer[argNum])));
                         break;
                     }
                     args.append(arg);
@@ -301,7 +302,8 @@ Expected<MacroAssemblerCodeRef<WasmEntryPtrTag>, BindingFailure> wasmToJS(VM* vm
         jit.move(CCallHelpers::TrustedImm32(0), GPRInfo::argumentGPR3);
 
         static_assert(GPRInfo::numberOfArgumentRegisters >= 4, "We rely on this with the call below.");
-        jit.setupArguments<decltype(callFunc)>(GPRInfo::argumentGPR1, CCallHelpers::TrustedImm32(signatureIndex), CCallHelpers::TrustedImmPtr(buffer));
+        static_assert(sizeof(SignatureIndex) == sizeof(uint64_t), "Following code assumes SignatureIndex is 64bit.");
+        jit.setupArguments<decltype(callFunc)>(GPRInfo::argumentGPR1, CCallHelpers::TrustedImm64(signatureIndex), CCallHelpers::TrustedImmPtr(buffer));
         auto call = jit.call(OperationPtrTag);
         auto noException = jit.emitExceptionCheck(*vm, AssemblyHelpers::InvertedExceptionCheck);
 

@@ -90,7 +90,7 @@ static void slowPathFor(CCallHelpers& jit, VM* vm, Sprt_JITOperation_ECli slowPa
     // Other argument values are shift by 1. Use space on the stack for our two return values.
     // Moving the stack down maxFrameExtentForSlowPathCall bytes gives us room for our 3 arguments
     // and space for the 16 byte return area.
-    jit.addPtr(CCallHelpers::TrustedImm32(-maxFrameExtentForSlowPathCall), CCallHelpers::stackPointerRegister);
+    jit.addPtr(CCallHelpers::TrustedImm32(-static_cast<int32_t>(maxFrameExtentForSlowPathCall)), CCallHelpers::stackPointerRegister);
     jit.move(GPRInfo::regT2, GPRInfo::argumentGPR2);
     jit.addPtr(CCallHelpers::TrustedImm32(32), CCallHelpers::stackPointerRegister, GPRInfo::argumentGPR0);
     jit.move(GPRInfo::callFrameRegister, GPRInfo::argumentGPR1);
@@ -183,20 +183,17 @@ MacroAssemblerCodeRef<JITStubRoutinePtrTag> virtualThunkFor(VM* vm, CallLinkInfo
     // the DFG knows that the value is definitely a cell, or definitely a function.
     
 #if USE(JSVALUE64)
-    GPRReg tagMaskRegister = GPRInfo::tagMaskRegister;
     if (callLinkInfo.isTailCall()) {
         // Tail calls could have clobbered the GPRInfo::tagMaskRegister because they
         // restore callee saved registers before getthing here. So, let's materialize
         // the TagMask in a temp register and use the temp instead.
-        tagMaskRegister = GPRInfo::regT4;
-        jit.move(CCallHelpers::TrustedImm64(TagMask), tagMaskRegister);
-    }
-    slowCase.append(
-        jit.branchTest64(CCallHelpers::NonZero, GPRInfo::regT0, tagMaskRegister));
+        slowCase.append(jit.branchIfNotCell(GPRInfo::regT0, DoNotHaveTagRegisters));
+    } else
+        slowCase.append(jit.branchIfNotCell(GPRInfo::regT0));
 #else
     slowCase.append(jit.branchIfNotCell(GPRInfo::regT1));
 #endif
-    auto notJSFunction = jit.branchIfNotType(GPRInfo::regT0, JSFunctionType);
+    auto notJSFunction = jit.branchIfNotFunction(GPRInfo::regT0);
     
     // Now we know we have a JSFunction.
 
@@ -350,7 +347,7 @@ static MacroAssemblerCodeRef<JITThunkPtrTag> nativeForGenerator(VM* vm, ThunkFun
     jit.xor64(ARM64Registers::x1, ARM64Registers::x2);
     jit.call(ARM64Registers::x2, JSEntryPtrTag);
 
-#elif CPU(ARM) || CPU(MIPS)
+#elif CPU(ARM_THUMB2) || CPU(MIPS)
 #if CPU(MIPS)
     // Allocate stack space for (unused) 16 bytes (8-byte aligned) for 4 arguments.
     jit.subPtr(JSInterfaceJIT::TrustedImm32(16), JSInterfaceJIT::stackPointerRegister);
@@ -772,7 +769,7 @@ MacroAssemblerCodeRef<JITThunkPtrTag> sqrtThunkGenerator(VM* vm)
 enum MathThunkCallingConvention { };
 typedef MathThunkCallingConvention(*MathThunk)(MathThunkCallingConvention);
 
-#if CPU(X86_64) && COMPILER(GCC_OR_CLANG) && (OS(DARWIN) || OS(LINUX))
+#if CPU(X86_64) && COMPILER(GCC_COMPATIBLE) && (OS(DARWIN) || OS(LINUX))
 
 #define defineUnaryDoubleOpWrapper(function) \
     asm( \
@@ -790,7 +787,7 @@ typedef MathThunkCallingConvention(*MathThunk)(MathThunkCallingConvention);
     } \
     static MathThunk UnaryDoubleOpWrapper(function) = &function##Thunk;
 
-#elif CPU(X86) && COMPILER(GCC_OR_CLANG) && OS(LINUX) && defined(__PIC__)
+#elif CPU(X86) && COMPILER(GCC_COMPATIBLE) && OS(LINUX) && defined(__PIC__)
 #define defineUnaryDoubleOpWrapper(function) \
     asm( \
         ".text\n" \
@@ -814,7 +811,7 @@ typedef MathThunkCallingConvention(*MathThunk)(MathThunkCallingConvention);
     } \
     static MathThunk UnaryDoubleOpWrapper(function) = &function##Thunk;
 
-#elif CPU(X86) && COMPILER(GCC_OR_CLANG) && (OS(DARWIN) || OS(LINUX))
+#elif CPU(X86) && COMPILER(GCC_COMPATIBLE) && (OS(DARWIN) || OS(LINUX))
 #define defineUnaryDoubleOpWrapper(function) \
     asm( \
         ".text\n" \
@@ -834,7 +831,7 @@ typedef MathThunkCallingConvention(*MathThunk)(MathThunkCallingConvention);
     } \
     static MathThunk UnaryDoubleOpWrapper(function) = &function##Thunk;
 
-#elif CPU(ARM_THUMB2) && COMPILER(GCC_OR_CLANG) && PLATFORM(IOS)
+#elif CPU(ARM_THUMB2) && COMPILER(GCC_COMPATIBLE) && PLATFORM(IOS_FAMILY)
 
 #define defineUnaryDoubleOpWrapper(function) \
     asm( \
