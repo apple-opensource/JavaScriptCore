@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,13 +32,16 @@
 #include "InitializeThreading.h"
 #include "LinkBuffer.h"
 #include "ProbeContext.h"
+#include "StackAlignment.h"
 #include <limits>
 #include <wtf/Compiler.h>
 #include <wtf/DataLog.h>
 #include <wtf/Function.h>
 #include <wtf/Lock.h>
 #include <wtf/NumberOfCores.h>
+#include <wtf/PtrTag.h>
 #include <wtf/Threading.h>
+#include <wtf/text/StringCommon.h>
 
 // We don't have a NO_RETURN_DUE_TO_EXIT, nor should we. That's ridiculous.
 static bool hiddenTruthBecauseNoReturnIsStupid() { return true; }
@@ -79,7 +82,7 @@ namespace {
 using CPUState = Probe::CPUState;
 #endif
 
-StaticLock crashLock;
+Lock crashLock;
 
 typedef WTF::Function<void(CCallHelpers&)> Generator;
 
@@ -107,10 +110,19 @@ template<typename T> T nextID(T id) { return static_cast<T>(id + 1); }
         CRASH();                                                        \
     } while (false)
 
+#define CHECK_NOT_EQ(_actual, _expected) do {                               \
+        if ((_actual) != (_expected))                                   \
+            break;                                                      \
+        crashLock.lock();                                               \
+        dataLog("FAILED while testing " #_actual ": expected not: ", _expected, ", actual: ", _actual, "\n"); \
+        WTFReportAssertionFailure(__FILE__, __LINE__, WTF_PRETTY_FUNCTION, "CHECK_NOT_EQ("#_actual ", " #_expected ")"); \
+        CRASH();                                                        \
+    } while (false)
+
 #if ENABLE(MASM_PROBE)
 bool isPC(MacroAssembler::RegisterID id)
 {
-#if CPU(ARM_THUMB2) || CPU(ARM_TRADITIONAL)
+#if CPU(ARM_THUMB2)
     return id == ARMRegisters::pc;
 #else
     UNUSED_PARAM(id);
@@ -143,18 +155,19 @@ bool isSpecialGPR(MacroAssembler::RegisterID id)
 }
 #endif // ENABLE(MASM_PROBE)
 
-MacroAssemblerCodeRef compile(Generator&& generate)
+MacroAssemblerCodeRef<JSEntryPtrTag> compile(Generator&& generate)
 {
     CCallHelpers jit;
     generate(jit);
     LinkBuffer linkBuffer(jit, nullptr);
-    return FINALIZE_CODE(linkBuffer, ("testmasm compilation"));
+    return FINALIZE_CODE(linkBuffer, JSEntryPtrTag, "testmasm compilation");
 }
 
 template<typename T, typename... Arguments>
-T invoke(MacroAssemblerCodeRef code, Arguments... arguments)
+T invoke(const MacroAssemblerCodeRef<JSEntryPtrTag>& code, Arguments... arguments)
 {
-    T (*function)(Arguments...) = bitwise_cast<T(*)(Arguments...)>(code.code().executableAddress());
+    void* executableAddress = untagCFunctionPtr<JSEntryPtrTag>(code.code().executableAddress());
+    T (*function)(Arguments...) = bitwise_cast<T(*)(Arguments...)>(executableAddress);
     return function(arguments...);
 }
 
@@ -198,7 +211,7 @@ void testBranchTruncateDoubleToInt32(double val, int32_t expected)
 #endif
     CHECK_EQ(compileAndRun<int>([&] (CCallHelpers& jit) {
         jit.emitFunctionPrologue();
-        jit.subPtr(CCallHelpers::TrustedImm32(8), MacroAssembler::stackPointerRegister);
+        jit.subPtr(CCallHelpers::TrustedImm32(stackAlignmentBytes()), MacroAssembler::stackPointerRegister);
         if (isBigEndian) {
             jit.store32(CCallHelpers::TrustedImm32(valAsUInt >> 32),
                 MacroAssembler::stackPointerRegister);
@@ -218,12 +231,187 @@ void testBranchTruncateDoubleToInt32(double val, int32_t expected)
         jit.move(CCallHelpers::TrustedImm32(0), GPRInfo::returnValueGPR);
 
         done.link(&jit);
-        jit.addPtr(CCallHelpers::TrustedImm32(8), MacroAssembler::stackPointerRegister);
+        jit.addPtr(CCallHelpers::TrustedImm32(stackAlignmentBytes()), MacroAssembler::stackPointerRegister);
         jit.emitFunctionEpilogue();
         jit.ret();
     }), expected);
 }
 
+
+static Vector<double> doubleOperands()
+{
+    return Vector<double> {
+        0,
+        -0,
+        1,
+        -1,
+        42,
+        -42,
+        std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::min(),
+        std::numeric_limits<double>::lowest(),
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+    };
+}
+
+
+#if CPU(X86) || CPU(X86_64) || CPU(ARM64)
+static Vector<float> floatOperands()
+{
+    return Vector<float> {
+        0,
+        -0,
+        1,
+        -1,
+        42,
+        -42,
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::min(),
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+    };
+}
+#endif
+
+static Vector<int32_t> int32Operands()
+{
+    return Vector<int32_t> {
+        0,
+        1,
+        -1,
+        2,
+        -2,
+        42,
+        -42,
+        64,
+        std::numeric_limits<int32_t>::max(),
+        std::numeric_limits<int32_t>::min(),
+    };
+}
+
+void testCompareDouble(MacroAssembler::DoubleCondition condition)
+{
+    double arg1 = 0;
+    double arg2 = 0;
+
+    auto compareDouble = compile([&, condition] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT0);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(-1), GPRInfo::returnValueGPR);
+        jit.compareDouble(condition, FPRInfo::fpRegT0, FPRInfo::fpRegT1, GPRInfo::returnValueGPR);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    auto compareDoubleGeneric = compile([&, condition] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT0);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(1), GPRInfo::returnValueGPR);
+        auto jump = jit.branchDouble(condition, FPRInfo::fpRegT0, FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(0), GPRInfo::returnValueGPR);
+        jump.link(&jit);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    auto operands = doubleOperands();
+    for (auto a : operands) {
+        for (auto b : operands) {
+            arg1 = a;
+            arg2 = b;
+            CHECK_EQ(invoke<int>(compareDouble), invoke<int>(compareDoubleGeneric));
+        }
+    }
+}
+
+void testMul32WithImmediates()
+{
+    for (auto immediate : int32Operands()) {
+        auto mul = compile([=] (CCallHelpers& jit) {
+            jit.emitFunctionPrologue();
+
+            jit.mul32(CCallHelpers::TrustedImm32(immediate), GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+
+            jit.emitFunctionEpilogue();
+            jit.ret();
+        });
+
+        for (auto value : int32Operands())
+            CHECK_EQ(invoke<int>(mul, value), immediate * value);
+    }
+}
+
+#if CPU(ARM64)
+void testMul32SignExtend()
+{
+    for (auto value : int32Operands()) {
+        auto mul = compile([=] (CCallHelpers& jit) {
+            jit.emitFunctionPrologue();
+
+            jit.multiplySignExtend32(GPRInfo::argumentGPR0, GPRInfo::argumentGPR1, GPRInfo::returnValueGPR);
+
+            jit.emitFunctionEpilogue();
+            jit.ret();
+        });
+
+        for (auto value2 : int32Operands())
+            CHECK_EQ(invoke<long int>(mul, value, value2), ((long int) value) * ((long int) value2));
+    }
+}
+#endif
+
+#if CPU(X86) || CPU(X86_64) || CPU(ARM64)
+void testCompareFloat(MacroAssembler::DoubleCondition condition)
+{
+    float arg1 = 0;
+    float arg2 = 0;
+
+    auto compareFloat = compile([&, condition] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+
+        jit.loadFloat(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT0);
+        jit.loadFloat(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(-1), GPRInfo::returnValueGPR);
+        jit.compareFloat(condition, FPRInfo::fpRegT0, FPRInfo::fpRegT1, GPRInfo::returnValueGPR);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    auto compareFloatGeneric = compile([&, condition] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+
+        jit.loadFloat(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT0);
+        jit.loadFloat(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(1), GPRInfo::returnValueGPR);
+        auto jump = jit.branchFloat(condition, FPRInfo::fpRegT0, FPRInfo::fpRegT1);
+        jit.move(CCallHelpers::TrustedImm32(0), GPRInfo::returnValueGPR);
+        jump.link(&jit);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    auto operands = floatOperands();
+    for (auto a : operands) {
+        for (auto b : operands) {
+            arg1 = a;
+            arg2 = b;
+            CHECK_EQ(invoke<int>(compareFloat), invoke<int>(compareFloatGeneric));
+        }
+    }
+}
+#endif
 
 #if ENABLE(MASM_PROBE)
 void testProbeReadsArgumentRegisters()
@@ -232,10 +420,8 @@ void testProbeReadsArgumentRegisters()
     compileAndRun<void>([&] (CCallHelpers& jit) {
         jit.emitFunctionPrologue();
 
-        jit.push(GPRInfo::argumentGPR0);
-        jit.push(GPRInfo::argumentGPR1);
-        jit.push(GPRInfo::argumentGPR2);
-        jit.push(GPRInfo::argumentGPR3);
+        jit.pushPair(GPRInfo::argumentGPR0, GPRInfo::argumentGPR1);
+        jit.pushPair(GPRInfo::argumentGPR2, GPRInfo::argumentGPR3);
 
         jit.move(CCallHelpers::TrustedImm32(testWord32(0)), GPRInfo::argumentGPR0);
         jit.convertInt32ToDouble(GPRInfo::argumentGPR0, FPRInfo::fpRegT0);
@@ -265,10 +451,8 @@ void testProbeReadsArgumentRegisters()
             CHECK_EQ(cpu.fpr(FPRInfo::fpRegT1), testWord32(1));
         });
 
-        jit.pop(GPRInfo::argumentGPR3);
-        jit.pop(GPRInfo::argumentGPR2);
-        jit.pop(GPRInfo::argumentGPR1);
-        jit.pop(GPRInfo::argumentGPR0);
+        jit.popPair(GPRInfo::argumentGPR2, GPRInfo::argumentGPR3);
+        jit.popPair(GPRInfo::argumentGPR0, GPRInfo::argumentGPR1);
 
         jit.emitFunctionEpilogue();
         jit.ret();
@@ -285,10 +469,8 @@ void testProbeWritesArgumentRegisters()
     compileAndRun<void>([&] (CCallHelpers& jit) {
         jit.emitFunctionPrologue();
 
-        jit.push(GPRInfo::argumentGPR0);
-        jit.push(GPRInfo::argumentGPR1);
-        jit.push(GPRInfo::argumentGPR2);
-        jit.push(GPRInfo::argumentGPR3);
+        jit.pushPair(GPRInfo::argumentGPR0, GPRInfo::argumentGPR1);
+        jit.pushPair(GPRInfo::argumentGPR2, GPRInfo::argumentGPR3);
 
         // Pre-initialize with non-expected values.
 #if USE(JSVALUE64)
@@ -331,10 +513,8 @@ void testProbeWritesArgumentRegisters()
             CHECK_EQ(cpu.fpr<uint64_t>(FPRInfo::fpRegT1), testWord64(1));
         });
 
-        jit.pop(GPRInfo::argumentGPR3);
-        jit.pop(GPRInfo::argumentGPR2);
-        jit.pop(GPRInfo::argumentGPR1);
-        jit.pop(GPRInfo::argumentGPR0);
+        jit.popPair(GPRInfo::argumentGPR2, GPRInfo::argumentGPR3);
+        jit.popPair(GPRInfo::argumentGPR0, GPRInfo::argumentGPR1);
 
         jit.emitFunctionEpilogue();
         jit.ret();
@@ -457,7 +637,7 @@ void testProbeModifiesStackPointer(WTF::Function<void*(Probe::Context&)> compute
 #if CPU(X86) || CPU(X86_64)
     auto flagsSPR = X86Registers::eflags;
     uintptr_t flagsMask = 0xc5;
-#elif CPU(ARM_THUMB2) || CPU(ARM_TRADITIONAL)
+#elif CPU(ARM_THUMB2)
     auto flagsSPR = ARMRegisters::apsr;
     uintptr_t flagsMask = 0xf8000000;
 #elif CPU(ARM64)
@@ -599,7 +779,7 @@ void testProbeModifiesProgramCounter()
     unsigned probeCallCount = 0;
     bool continuationWasReached = false;
 
-    MacroAssemblerCodeRef continuation = compile([&] (CCallHelpers& jit) {
+    MacroAssemblerCodeRef<JSEntryPtrTag> continuation = compile([&] (CCallHelpers& jit) {
         // Validate that we reached the continuation.
         jit.probe([&] (Probe::Context&) {
             probeCallCount++;
@@ -616,7 +796,7 @@ void testProbeModifiesProgramCounter()
         // Write expected values into the registers.
         jit.probe([&] (Probe::Context& context) {
             probeCallCount++;
-            context.cpu.pc() = continuation.code().executableAddress();
+            context.cpu.pc() = untagCodePtr(continuation.code().executableAddress(), JSEntryPtrTag);
         });
 
         jit.breakpoint(); // We should never get here.
@@ -631,13 +811,15 @@ void testProbeModifiesStackValues()
     CPUState originalState;
     void* originalSP { nullptr };
     void* newSP { nullptr };
+#if !CPU(MIPS)
     uintptr_t modifiedFlags { 0 };
+#endif
     size_t numberOfExtraEntriesToWrite { 10 }; // ARM64 requires that this be 2 word aligned.
 
 #if CPU(X86) || CPU(X86_64)
     MacroAssembler::SPRegisterID flagsSPR = X86Registers::eflags;
     uintptr_t flagsMask = 0xc5;
-#elif CPU(ARM_THUMB2) || CPU(ARM_TRADITIONAL)
+#elif CPU(ARM_THUMB2)
     MacroAssembler::SPRegisterID flagsSPR = ARMRegisters::apsr;
     uintptr_t flagsMask = 0xf8000000;
 #elif CPU(ARM64)
@@ -747,6 +929,158 @@ void testProbeModifiesStackValues()
 }
 #endif // ENABLE(MASM_PROBE)
 
+void testByteSwap()
+{
+#if CPU(X86_64) || CPU(ARM64)
+    auto byteSwap16 = compile([] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.move(GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+        jit.byteSwap16(GPRInfo::returnValueGPR);
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+    CHECK_EQ(invoke<uint64_t>(byteSwap16, 0xaabbccddee001122), static_cast<uint64_t>(0x2211));
+    CHECK_EQ(invoke<uint64_t>(byteSwap16, 0xaabbccddee00ffaa), static_cast<uint64_t>(0xaaff));
+
+    auto byteSwap32 = compile([] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.move(GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+        jit.byteSwap32(GPRInfo::returnValueGPR);
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+    CHECK_EQ(invoke<uint64_t>(byteSwap32, 0xaabbccddee001122), static_cast<uint64_t>(0x221100ee));
+    CHECK_EQ(invoke<uint64_t>(byteSwap32, 0xaabbccddee00ffaa), static_cast<uint64_t>(0xaaff00ee));
+
+    auto byteSwap64 = compile([] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.move(GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+        jit.byteSwap64(GPRInfo::returnValueGPR);
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+    CHECK_EQ(invoke<uint64_t>(byteSwap64, 0xaabbccddee001122), static_cast<uint64_t>(0x221100eeddccbbaa));
+    CHECK_EQ(invoke<uint64_t>(byteSwap64, 0xaabbccddee00ffaa), static_cast<uint64_t>(0xaaff00eeddccbbaa));
+#endif
+}
+
+void testMoveDoubleConditionally32()
+{
+#if CPU(X86_64) | CPU(ARM64)
+    double arg1 = 0;
+    double arg2 = 0;
+    const double zero = -0;
+
+    const double chosenDouble = 6.00000059604644775390625;
+    CHECK_EQ(static_cast<double>(static_cast<float>(chosenDouble)) == chosenDouble, false);
+
+    auto sel = compile([&] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&zero), FPRInfo::returnValueFPR);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT1);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT2);
+
+        jit.move(MacroAssembler::TrustedImm32(-1), GPRInfo::regT0);
+        jit.moveDoubleConditionally32(MacroAssembler::Equal, GPRInfo::regT0, GPRInfo::regT0, FPRInfo::fpRegT1, FPRInfo::fpRegT2, FPRInfo::returnValueFPR);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    arg1 = chosenDouble;
+    arg2 = 43;
+    CHECK_EQ(invoke<double>(sel), chosenDouble);
+
+    arg1 = 43;
+    arg2 = chosenDouble;
+    CHECK_EQ(invoke<double>(sel), 43.0);
+
+#endif
+}
+
+void testMoveDoubleConditionally64()
+{
+#if CPU(X86_64) | CPU(ARM64)
+    double arg1 = 0;
+    double arg2 = 0;
+    const double zero = -0;
+
+    const double chosenDouble = 6.00000059604644775390625;
+    CHECK_EQ(static_cast<double>(static_cast<float>(chosenDouble)) == chosenDouble, false);
+
+    auto sel = compile([&] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&zero), FPRInfo::returnValueFPR);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg1), FPRInfo::fpRegT1);
+        jit.loadDouble(CCallHelpers::TrustedImmPtr(&arg2), FPRInfo::fpRegT2);
+
+        jit.move(MacroAssembler::TrustedImm64(-1), GPRInfo::regT0);
+        jit.moveDoubleConditionally64(MacroAssembler::Equal, GPRInfo::regT0, GPRInfo::regT0, FPRInfo::fpRegT1, FPRInfo::fpRegT2, FPRInfo::returnValueFPR);
+
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    arg1 = chosenDouble;
+    arg2 = 43;
+    CHECK_EQ(invoke<double>(sel), chosenDouble);
+
+    arg1 = 43;
+    arg2 = chosenDouble;
+    CHECK_EQ(invoke<double>(sel), 43.0);
+
+#endif
+}
+
+static void testCagePreservesPACFailureBit()
+{
+#if GIGACAGE_ENABLED
+    ASSERT(!Gigacage::isDisablingPrimitiveGigacageDisabled());
+    auto cage = compile([] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.cageConditionally(Gigacage::Primitive, GPRInfo::argumentGPR0, GPRInfo::argumentGPR1, GPRInfo::argumentGPR2);
+        jit.move(GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    void* ptr = Gigacage::tryMalloc(Gigacage::Primitive, 1);
+    void* taggedPtr = tagArrayPtr(ptr, 1);
+    ASSERT(hasOneBitSet(Gigacage::size(Gigacage::Primitive) << 2));
+    void* notCagedPtr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(ptr) + (Gigacage::size(Gigacage::Primitive) << 2));
+    CHECK_NOT_EQ(Gigacage::caged(Gigacage::Primitive, notCagedPtr), notCagedPtr);
+    void* taggedNotCagedPtr = tagArrayPtr(notCagedPtr, 1);
+
+    if (isARM64E()) {
+        // FIXME: This won't work if authentication failures trap but I don't know how to test for that right now.
+        CHECK_NOT_EQ(invoke<void*>(cage, taggedPtr, 2), ptr);
+        CHECK_EQ(invoke<void*>(cage, taggedNotCagedPtr, 1), untagArrayPtr(taggedPtr, 2));
+    } else
+        CHECK_EQ(invoke<void*>(cage, taggedPtr, 2), ptr);
+
+    CHECK_EQ(invoke<void*>(cage, taggedPtr, 1), ptr);
+
+    auto cageWithoutAuthentication = compile([] (CCallHelpers& jit) {
+        jit.emitFunctionPrologue();
+        jit.cageWithoutUntagging(Gigacage::Primitive, GPRInfo::argumentGPR0);
+        jit.move(GPRInfo::argumentGPR0, GPRInfo::returnValueGPR);
+        jit.emitFunctionEpilogue();
+        jit.ret();
+    });
+
+    CHECK_EQ(invoke<void*>(cageWithoutAuthentication, taggedPtr), taggedPtr);
+    if (isARM64E()) {
+        // FIXME: This won't work if authentication failures trap but I don't know how to test for that right now.
+        CHECK_NOT_EQ(invoke<void*>(cageWithoutAuthentication, taggedNotCagedPtr), taggedNotCagedPtr);
+        CHECK_NOT_EQ(untagArrayPtr(invoke<void*>(cageWithoutAuthentication, taggedNotCagedPtr), 1), notCagedPtr);
+        CHECK_NOT_EQ(invoke<void*>(cageWithoutAuthentication, taggedNotCagedPtr), taggedPtr);
+        CHECK_NOT_EQ(untagArrayPtr(invoke<void*>(cageWithoutAuthentication, taggedNotCagedPtr), 1), ptr);
+    }
+
+    Gigacage::free(Gigacage::Primitive, ptr);
+#endif
+}
+
 #define RUN(test) do {                          \
         if (!shouldRun(#test))                  \
             break;                              \
@@ -768,11 +1102,7 @@ void run(const char* filter)
     Deque<RefPtr<SharedTask<void()>>> tasks;
 
     auto shouldRun = [&] (const char* testName) -> bool {
-#if OS(UNIX)
-        return !filter || !!strcasestr(testName, filter);
-#else
-        return !filter || !!strstr(testName, filter);
-#endif
+        return !filter || WTF::findIgnoringASCIICaseWithoutLength(testName, filter) != WTF::notFound;
     };
 
     RUN(testSimple());
@@ -793,6 +1123,39 @@ void run(const char* filter)
     // reset to check a conversion result
     RUN(testBranchTruncateDoubleToInt32(123, 123));
 
+    RUN(testCompareDouble(MacroAssembler::DoubleEqual));
+    RUN(testCompareDouble(MacroAssembler::DoubleNotEqual));
+    RUN(testCompareDouble(MacroAssembler::DoubleGreaterThan));
+    RUN(testCompareDouble(MacroAssembler::DoubleGreaterThanOrEqual));
+    RUN(testCompareDouble(MacroAssembler::DoubleLessThan));
+    RUN(testCompareDouble(MacroAssembler::DoubleLessThanOrEqual));
+    RUN(testCompareDouble(MacroAssembler::DoubleEqualOrUnordered));
+    RUN(testCompareDouble(MacroAssembler::DoubleNotEqualOrUnordered));
+    RUN(testCompareDouble(MacroAssembler::DoubleGreaterThanOrUnordered));
+    RUN(testCompareDouble(MacroAssembler::DoubleGreaterThanOrEqualOrUnordered));
+    RUN(testCompareDouble(MacroAssembler::DoubleLessThanOrUnordered));
+    RUN(testCompareDouble(MacroAssembler::DoubleLessThanOrEqualOrUnordered));
+    RUN(testMul32WithImmediates());
+
+#if CPU(ARM64)
+    RUN(testMul32SignExtend());
+#endif
+
+#if CPU(X86) || CPU(X86_64) || CPU(ARM64)
+    RUN(testCompareFloat(MacroAssembler::DoubleEqual));
+    RUN(testCompareFloat(MacroAssembler::DoubleNotEqual));
+    RUN(testCompareFloat(MacroAssembler::DoubleGreaterThan));
+    RUN(testCompareFloat(MacroAssembler::DoubleGreaterThanOrEqual));
+    RUN(testCompareFloat(MacroAssembler::DoubleLessThan));
+    RUN(testCompareFloat(MacroAssembler::DoubleLessThanOrEqual));
+    RUN(testCompareFloat(MacroAssembler::DoubleEqualOrUnordered));
+    RUN(testCompareFloat(MacroAssembler::DoubleNotEqualOrUnordered));
+    RUN(testCompareFloat(MacroAssembler::DoubleGreaterThanOrUnordered));
+    RUN(testCompareFloat(MacroAssembler::DoubleGreaterThanOrEqualOrUnordered));
+    RUN(testCompareFloat(MacroAssembler::DoubleLessThanOrUnordered));
+    RUN(testCompareFloat(MacroAssembler::DoubleLessThanOrEqualOrUnordered));
+#endif
+
 #if ENABLE(MASM_PROBE)
     RUN(testProbeReadsArgumentRegisters());
     RUN(testProbeWritesArgumentRegisters());
@@ -802,6 +1165,12 @@ void run(const char* filter)
     RUN(testProbeModifiesProgramCounter());
     RUN(testProbeModifiesStackValues());
 #endif // ENABLE(MASM_PROBE)
+
+    RUN(testByteSwap());
+    RUN(testMoveDoubleConditionally32());
+    RUN(testMoveDoubleConditionally64());
+
+    RUN(testCagePreservesPACFailureBit());
 
     if (tasks.isEmpty())
         usage();

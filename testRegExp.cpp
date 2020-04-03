@@ -21,14 +21,15 @@
 #include "config.h"
 #include "RegExp.h"
 
-#include <wtf/CurrentTime.h>
 #include "InitializeThreading.h"
 #include "JSCInlines.h"
 #include "JSGlobalObject.h"
+#include "YarrFlags.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wtf/Vector.h>
 #include <wtf/text/StringBuilder.h>
 
 #if !OS(WINDOWS)
@@ -48,7 +49,6 @@
 const int MaxLineLength = 100 * 1024;
 
 using namespace JSC;
-using namespace WTF;
 
 struct CommandLine {
     CommandLine()
@@ -70,23 +70,23 @@ public:
     long getElapsedMS(); // call stop() first
 
 private:
-    double m_startTime;
-    double m_stopTime;
+    MonotonicTime m_startTime;
+    MonotonicTime m_stopTime;
 };
 
 void StopWatch::start()
 {
-    m_startTime = monotonicallyIncreasingTime();
+    m_startTime = MonotonicTime::now();
 }
 
 void StopWatch::stop()
 {
-    m_stopTime = monotonicallyIncreasingTime();
+    m_stopTime = MonotonicTime::now();
 }
 
 long StopWatch::getElapsedMS()
 {
-    return static_cast<long>((m_stopTime - m_startTime) * 1000);
+    return (m_stopTime - m_startTime).millisecondsAs<long>();
 }
 
 struct RegExpTest {
@@ -329,11 +329,18 @@ static RegExp* parseRegExpLine(VM& vm, char* line, int lineLength, const char** 
 
     ++i;
 
-    RegExp* r = RegExp::create(vm, pattern.toString(), regExpFlags(line + i));
+    auto flags = Yarr::parseFlags(line + i);
+    if (!flags) {
+        *regexpError = Yarr::errorMessage(Yarr::ErrorCode::InvalidRegularExpressionFlags);
+        return nullptr;
+    }
+
+    RegExp* r = RegExp::create(vm, pattern.toString(), flags.value());
     if (!r->isValid()) {
         *regexpError = r->errorMessage();
         return nullptr;
     }
+
     return r;
 }
 
@@ -416,7 +423,7 @@ static bool runFromFiles(GlobalObject* globalObject, const Vector<String>& files
     Vector<char> scriptBuffer;
     unsigned tests = 0;
     unsigned failures = 0;
-    char* lineBuffer = new char[MaxLineLength + 1];
+    Vector<char> lineBuffer(MaxLineLength + 1);
 
     VM& vm = globalObject->vm();
 
@@ -435,7 +442,7 @@ static bool runFromFiles(GlobalObject* globalObject, const Vector<String>& files
         unsigned int lineNumber = 0;
         const char* regexpError = nullptr;
 
-        while ((linePtr = fgets(&lineBuffer[0], MaxLineLength, testCasesFile))) {
+        while ((linePtr = fgets(lineBuffer.data(), MaxLineLength, testCasesFile))) {
             lineLength = strlen(linePtr);
             if (linePtr[lineLength - 1] == '\n') {
                 linePtr[lineLength - 1] = '\0';
@@ -483,8 +490,6 @@ static bool runFromFiles(GlobalObject* globalObject, const Vector<String>& files
         printf("%u tests run, %u failures\n", tests, failures);
     else
         printf("%u tests passed\n", tests);
-
-    delete[] lineBuffer;
 
 #if ENABLE(REGEXP_TRACING)
     vm.dumpRegExpTrace();

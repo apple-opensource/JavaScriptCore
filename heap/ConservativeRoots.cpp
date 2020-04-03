@@ -31,7 +31,7 @@
 #include "HeapInlines.h"
 #include "HeapUtil.h"
 #include "JITStubRoutineSet.h"
-#include "JSCell.h"
+#include "JSCast.h"
 #include "JSObject.h"
 #include "JSCInlines.h"
 #include "MarkedBlockInlines.h"
@@ -68,12 +68,13 @@ void ConservativeRoots::grow()
 template<typename MarkHook>
 inline void ConservativeRoots::genericAddPointer(void* p, HeapVersion markingVersion, HeapVersion newlyAllocatedVersion, TinyBloomFilter filter, MarkHook& markHook)
 {
+    p = removeArrayPtrTag(p);
     markHook.mark(p);
 
     HeapUtil::findGCObjectPointersForMarking(
         m_heap, markingVersion, newlyAllocatedVersion, filter, p,
         [&] (void* p, HeapCell::Kind cellKind) {
-            if (cellKind == HeapCell::JSCell)
+            if (isJSCellKind(cellKind))
                 markHook.markKnownJSCell(static_cast<JSCell*>(p));
             
             if (m_size == m_capacity)

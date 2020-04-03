@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013, 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -122,10 +122,10 @@ public:
                 // cases where we need to append, we first carefully extract everything we need
                 // from the node, before doing any appending.
                 switch (node->op()) {
-                case SetArgument: {
+                case SetArgumentDefinitely: {
                     // Insert a GetLocal and a CheckStructure immediately following this
-                    // SetArgument, if the variable was a candidate for structure hoisting.
-                    // If the basic block previously only had the SetArgument as its
+                    // SetArgumentDefinitely, if the variable was a candidate for structure hoisting.
+                    // If the basic block previously only had the SetArgumentDefinitely as its
                     // variable-at-tail, then replace it with this GetLocal.
                     VariableAccessData* variable = node->variableAccessData();
                     HashMap<VariableAccessData*, CheckData>::iterator iter = m_map.find(variable);
@@ -147,7 +147,7 @@ public:
                         auto checkOp = CheckStructure;
                         if (SpecCellCheck & SpecEmpty) {
                             VirtualRegister local = node->variableAccessData()->local();
-                            auto* inlineCallFrame = node->origin.semantic.inlineCallFrame;
+                            auto* inlineCallFrame = node->origin.semantic.inlineCallFrame();
                             if ((local - (inlineCallFrame ? inlineCallFrame->stackOffset : 0)) == virtualRegisterForArgument(0)) {
                                 // |this| can be the TDZ value. The call entrypoint won't have |this| as TDZ,
                                 // but a catch or a loop OSR entry may have |this| be TDZ.
@@ -442,10 +442,11 @@ private:
             ASSERT(block->isReachable);
             if (!block->isOSRTarget)
                 continue;
-            if (block->bytecodeBegin != m_graph.m_plan.osrEntryBytecodeIndex)
+            if (block->bytecodeBegin != m_graph.m_plan.osrEntryBytecodeIndex())
                 continue;
-            for (size_t i = 0; i < m_graph.m_plan.mustHandleValues.size(); ++i) {
-                int operand = m_graph.m_plan.mustHandleValues.operandForIndex(i);
+            const Operands<Optional<JSValue>>& mustHandleValues = m_graph.m_plan.mustHandleValues();
+            for (size_t i = 0; i < mustHandleValues.size(); ++i) {
+                int operand = mustHandleValues.operandForIndex(i);
                 Node* node = block->variablesAtHead.operand(operand);
                 if (!node)
                     continue;
@@ -455,8 +456,8 @@ private:
                     continue;
                 if (!TypeCheck::isValidToHoist(iter->value))
                     continue;
-                JSValue value = m_graph.m_plan.mustHandleValues[i];
-                if (!value || !value.isCell() || TypeCheck::isContravenedByValue(iter->value, value)) {
+                Optional<JSValue> value = mustHandleValues[i];
+                if (!value || !value.value() || !value.value().isCell() || TypeCheck::isContravenedByValue(iter->value, value.value())) {
                     TypeCheck::disableHoisting(iter->value);
                     continue;
                 }

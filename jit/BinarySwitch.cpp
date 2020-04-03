@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013, 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -40,11 +40,11 @@ static const bool verbose = false;
 static unsigned globalCounter; // We use a different seed every time we are invoked.
 
 BinarySwitch::BinarySwitch(GPRReg value, const Vector<int64_t>& cases, Type type)
-    : m_value(value)
+    : m_type(type)
+    , m_value(value)
     , m_weakRandom(globalCounter++)
     , m_index(0)
     , m_caseIndex(UINT_MAX)
-    , m_type(type)
 {
     if (cases.isEmpty())
         return;
@@ -59,10 +59,12 @@ BinarySwitch::BinarySwitch(GPRReg value, const Vector<int64_t>& cases, Type type
 
     if (BinarySwitchInternal::verbose)
         dataLog("Sorted cases: ", listDump(m_cases), "\n");
-    
+
+#if !ASSERT_DISABLED
     for (unsigned i = 1; i < m_cases.size(); ++i)
-        RELEASE_ASSERT(m_cases[i - 1] < m_cases[i]);
-    
+        ASSERT(m_cases[i - 1] < m_cases[i], i, m_cases.size(), m_cases[i].value, m_cases[i].index);
+#endif
+
     build(0, false, m_cases.size());
 }
 
@@ -137,6 +139,27 @@ bool BinarySwitch::advance(MacroAssembler& jit)
     }
 }
 
+class RandomNumberGenerator {
+public:
+    using result_type = uint32_t;
+
+    RandomNumberGenerator(WeakRandom& weakRandom)
+        : m_weakRandom(weakRandom)
+    {
+    }
+
+    uint32_t operator()()
+    {
+        return m_weakRandom.getUint32();
+    }
+
+    static constexpr uint32_t min() { return std::numeric_limits<uint32_t>::min(); }
+    static constexpr uint32_t max() { return std::numeric_limits<uint32_t>::max(); }
+
+private:
+    WeakRandom& m_weakRandom;
+};
+
 void BinarySwitch::build(unsigned start, bool hardStart, unsigned end)
 {
     if (BinarySwitchInternal::verbose)
@@ -195,13 +218,9 @@ void BinarySwitch::build(unsigned start, bool hardStart, unsigned end)
         for (unsigned i = 0; i < size; ++i)
             localCaseIndices.append(start + i);
         
-        std::random_shuffle(
+        std::shuffle(
             localCaseIndices.begin(), localCaseIndices.end(),
-            [this] (unsigned n) {
-                // We use modulo to get a random number in the range we want fully knowing that
-                // this introduces a tiny amount of bias, but we're fine with such tiny bias.
-                return m_weakRandom.getUint32() % n;
-            });
+            RandomNumberGenerator(m_weakRandom));
         
         for (unsigned i = 0; i < size - 1; ++i) {
             append(BranchCode(NotEqualToPush, localCaseIndices[i]));

@@ -101,12 +101,12 @@ static bool tryToSetConstantRecovery(ValueRecovery& recovery, MinifiedNode* node
         return true;
     }
     
-    if (node->op() == PhantomDirectArguments) {
+    if (node->isPhantomDirectArguments()) {
         recovery = ValueRecovery::directArgumentsThatWereNotCreated(node->id());
         return true;
     }
     
-    if (node->op() == PhantomClonedArguments) {
+    if (node->isPhantomClonedArguments()) {
         recovery = ValueRecovery::clonedArgumentsThatWereNotCreated(node->id());
         return true;
     }
@@ -119,7 +119,7 @@ unsigned VariableEventStream::reconstruct(
     CodeBlock* codeBlock, CodeOrigin codeOrigin, MinifiedGraph& graph,
     unsigned index, Operands<ValueRecovery>& valueRecoveries, Vector<UndefinedOperandSpan>* undefinedOperandSpans) const
 {
-    ASSERT(codeBlock->jitType() == JITCode::DFGJIT);
+    ASSERT(codeBlock->jitType() == JITType::DFGJIT);
     CodeBlock* baselineCodeBlock = codeBlock->baselineVersion();
 
     unsigned numVariables;
@@ -147,10 +147,11 @@ unsigned VariableEventStream::reconstruct(
         }
     };
 
-    if (codeOrigin.inlineCallFrame)
-        numVariables = baselineCodeBlockForInlineCallFrame(codeOrigin.inlineCallFrame)->m_numCalleeLocals + VirtualRegister(codeOrigin.inlineCallFrame->stackOffset).toLocal() + 1;
+    auto* inlineCallFrame = codeOrigin.inlineCallFrame();
+    if (inlineCallFrame)
+        numVariables = baselineCodeBlockForInlineCallFrame(inlineCallFrame)->numCalleeLocals() + VirtualRegister(inlineCallFrame->stackOffset).toLocal() + 1;
     else
-        numVariables = baselineCodeBlock->m_numCalleeLocals;
+        numVariables = baselineCodeBlock->numCalleeLocals();
     
     // Crazy special case: if we're at index == 0 then this must be an argument check
     // failure, in which case all variables are already set up. The recoveries should

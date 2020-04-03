@@ -41,10 +41,10 @@ const ClassInfo MapConstructor::s_info = { "Function", &Base::s_info, nullptr, n
 
 void MapConstructor::finishCreation(VM& vm, MapPrototype* mapPrototype, GetterSetter* speciesSymbol)
 {
-    Base::finishCreation(vm, mapPrototype->classInfo(vm)->className);
+    Base::finishCreation(vm, "Map"_s, NameVisibility::Visible, NameAdditionMode::WithoutStructureTransition);
     putDirectWithoutTransition(vm, vm.propertyNames->prototype, mapPrototype, PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
     putDirectWithoutTransition(vm, vm.propertyNames->length, jsNumber(0), PropertyAttribute::DontEnum | PropertyAttribute::ReadOnly);
-    putDirectNonIndexAccessor(vm, vm.propertyNames->speciesSymbol, speciesSymbol, PropertyAttribute::Accessor | PropertyAttribute::ReadOnly | PropertyAttribute::DontEnum);
+    putDirectNonIndexAccessorWithoutTransition(vm, vm.propertyNames->speciesSymbol, speciesSymbol, PropertyAttribute::Accessor | PropertyAttribute::ReadOnly | PropertyAttribute::DontEnum);
 }
 
 static EncodedJSValue JSC_HOST_CALL callMap(ExecState*);
@@ -67,22 +67,17 @@ static EncodedJSValue JSC_HOST_CALL constructMap(ExecState* exec)
     VM& vm = exec->vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
 
-    JSGlobalObject* globalObject = asInternalFunction(exec->jsCallee())->globalObject();
+    JSGlobalObject* globalObject = jsCast<InternalFunction*>(exec->jsCallee())->globalObject(vm);
     Structure* mapStructure = InternalFunction::createSubclassStructure(exec, exec->newTarget(), globalObject->mapStructure());
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
 
     JSValue iterable = exec->argument(0);
-    if (iterable.isUndefinedOrNull()) {
-        scope.release();
-        return JSValue::encode(JSMap::create(exec, vm, mapStructure));
-    }
+    if (iterable.isUndefinedOrNull())
+        RELEASE_AND_RETURN(scope, JSValue::encode(JSMap::create(exec, vm, mapStructure)));
 
-    if (isJSMap(iterable)) {
-        JSMap* iterableMap = jsCast<JSMap*>(iterable);
-        if (iterableMap->canCloneFastAndNonObservable(mapStructure)) {
-            scope.release();
-            return JSValue::encode(iterableMap->clone(exec, vm, mapStructure));
-        }
+    if (auto* iterableMap = jsDynamicCast<JSMap*>(vm, iterable)) {
+        if (iterableMap->canCloneFastAndNonObservable(mapStructure))
+            RELEASE_AND_RETURN(scope, JSValue::encode(iterableMap->clone(exec, vm, mapStructure)));
     }
 
     JSMap* map = JSMap::create(exec, vm, mapStructure);
@@ -92,7 +87,7 @@ static EncodedJSValue JSC_HOST_CALL constructMap(ExecState* exec)
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
 
     CallData adderFunctionCallData;
-    CallType adderFunctionCallType = getCallData(adderFunction, adderFunctionCallData);
+    CallType adderFunctionCallType = getCallData(vm, adderFunction, adderFunctionCallData);
     if (adderFunctionCallType == CallType::None)
         return JSValue::encode(throwTypeError(exec, scope));
 
@@ -123,7 +118,7 @@ static EncodedJSValue JSC_HOST_CALL constructMap(ExecState* exec)
 
 EncodedJSValue JSC_HOST_CALL mapPrivateFuncMapBucketHead(ExecState* exec)
 {
-    ASSERT(isJSMap(exec->argument(0)));
+    ASSERT(jsDynamicCast<JSMap*>(exec->vm(), exec->argument(0)));
     JSMap* map = jsCast<JSMap*>(exec->uncheckedArgument(0));
     auto* head = map->head();
     ASSERT(head);
@@ -141,7 +136,7 @@ EncodedJSValue JSC_HOST_CALL mapPrivateFuncMapBucketNext(ExecState* exec)
             return JSValue::encode(bucket);
         bucket = bucket->next();
     }
-    return JSValue::encode(exec->vm().sentinelMapBucket.get());
+    return JSValue::encode(exec->vm().sentinelMapBucket());
 }
 
 EncodedJSValue JSC_HOST_CALL mapPrivateFuncMapBucketKey(ExecState* exec)

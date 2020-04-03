@@ -48,7 +48,9 @@ JSWebAssemblyModule* JSWebAssemblyModule::createStub(VM& vm, ExecState* exec, St
 {
     auto scope = DECLARE_THROW_SCOPE(vm);
     if (!result.has_value()) {
-        throwException(exec, scope, JSWebAssemblyCompileError::create(exec, vm, structure->globalObject()->WebAssemblyCompileErrorStructure(), result.error()));
+        auto* error = JSWebAssemblyCompileError::create(exec, vm, structure->globalObject()->webAssemblyCompileErrorStructure(), result.error());
+        RETURN_IF_EXCEPTION(scope, nullptr);
+        throwException(exec, scope, error);
         return nullptr;
     }
 
@@ -80,11 +82,11 @@ void JSWebAssemblyModule::finishCreation(VM& vm)
     for (auto& exp : moduleInformation.exports) {
         auto offset = exportSymbolTable->takeNextScopeOffset(NoLockingNecessary);
         String field = String::fromUTF8(exp.field);
-        exportSymbolTable->set(NoLockingNecessary, AtomicString(field).impl(), SymbolTableEntry(VarOffset(offset)));
+        exportSymbolTable->set(NoLockingNecessary, AtomString(field).impl(), SymbolTableEntry(VarOffset(offset)));
     }
 
     m_exportSymbolTable.set(vm, this, exportSymbolTable);
-    m_callee.set(vm, this, WebAssemblyToJSCallee::create(vm, this));
+    m_callee.set(vm, this, WebAssemblyToJSCallee::create(vm, globalObject(vm)->webAssemblyToJSCalleeStructure(), this));
 }
 
 void JSWebAssemblyModule::destroy(JSCell* cell)
@@ -138,11 +140,6 @@ void JSWebAssemblyModule::visitChildren(JSCell* cell, SlotVisitor& visitor)
     visitor.append(thisObject->m_callee);
     for (unsigned i = 0; i < Wasm::NumberOfMemoryModes; ++i)
         visitor.append(thisObject->m_codeBlocks[i]);
-}
-
-const Vector<uint8_t>& JSWebAssemblyModule::source() const
-{
-    return moduleInformation().source;
 }
 
 } // namespace JSC

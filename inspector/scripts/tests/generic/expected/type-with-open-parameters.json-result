@@ -66,8 +66,8 @@
 #if ENABLE(INSPECTOR_ALTERNATE_DISPATCHERS)
 
 #include "TestProtocolTypes.h"
-#include <inspector/InspectorFrontendRouter.h>
 #include <JavaScriptCore/InspectorBackendDispatcher.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 
 namespace Inspector {
 
@@ -121,7 +121,7 @@ private:
 #pragma once
 
 #include "TestProtocolObjects.h"
-#include <inspector/InspectorBackendDispatcher.h>
+#include <JavaScriptCore/InspectorBackendDispatcher.h>
 #include <wtf/text/WTFString.h>
 
 namespace Inspector {
@@ -167,7 +167,7 @@ typedef String ErrorString;
 #include "config.h"
 #include "TestBackendDispatchers.h"
 
-#include <inspector/InspectorFrontendRouter.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 #include <wtf/JSONValues.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
@@ -262,7 +262,7 @@ class FrontendRouter;
 #include "config.h"
 #include "TestFrontendDispatchers.h"
 
-#include <inspector/InspectorFrontendRouter.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 #include <wtf/text/CString.h>
 
 namespace Inspector {
@@ -304,7 +304,7 @@ namespace Inspector {
 
 #pragma once
 
-#include <inspector/InspectorProtocolTypes.h>
+#include <JavaScriptCore/InspectorProtocolTypes.h>
 #include <wtf/Assertions.h>
 
 namespace Inspector {
@@ -312,6 +312,8 @@ namespace Inspector {
 
 
 namespace Protocol {
+
+
 
 // Forward declarations.
 namespace Test {
@@ -354,14 +356,14 @@ public:
         Builder<STATE | OneSet>& setOne(double value)
         {
             COMPILE_ASSERT(!(STATE & OneSet), property_one_already_set);
-            m_result->setDouble(ASCIILiteral("one"), value);
+            m_result->setDouble("one"_s, value);
             return castState<OneSet>();
         }
 
         Builder<STATE | TwoSet>& setTwo(double value)
         {
             COMPILE_ASSERT(!(STATE & TwoSet), property_two_already_set);
-            m_result->setDouble(ASCIILiteral("two"), value);
+            m_result->setDouble("two"_s, value);
             return castState<TwoSet>();
         }
 
@@ -418,14 +420,14 @@ public:
         Builder<STATE | AlphaSet>& setAlpha(double value)
         {
             COMPILE_ASSERT(!(STATE & AlphaSet), property_alpha_already_set);
-            m_result->setDouble(ASCIILiteral("alpha"), value);
+            m_result->setDouble("alpha"_s, value);
             return castState<AlphaSet>();
         }
 
         Builder<STATE | BetaSet>& setBeta(double value)
         {
             COMPILE_ASSERT(!(STATE & BetaSet), property_beta_already_set);
-            m_result->setDouble(ASCIILiteral("beta"), value);
+            m_result->setDouble("beta"_s, value);
             return castState<BetaSet>();
         }
 
@@ -900,24 +902,24 @@ __attribute__((visibility ("default")))
 namespace Inspector {
 
 template<typename ObjCEnumType>
-std::optional<ObjCEnumType> fromProtocolString(const String& value);
+Optional<ObjCEnumType> fromProtocolString(const String& value);
 
 inline String toProtocolString(TestProtocolPlatform value)
 {
     switch(value) {
     case TestProtocolPlatformAll:
-        return ASCIILiteral("all");
+        return "all"_s;
     case TestProtocolPlatformGeneric:
-        return ASCIILiteral("generic");
+        return "generic"_s;
     case TestProtocolPlatformIOS:
-        return ASCIILiteral("ios");
+        return "ios"_s;
     case TestProtocolPlatformMacOS:
-        return ASCIILiteral("macos");
+        return "macos"_s;
     }
 }
 
 template<>
-inline std::optional<TestProtocolPlatform> fromProtocolString(const String& value)
+inline Optional<TestProtocolPlatform> fromProtocolString(const String& value)
 {
     if (value == "all")
         return TestProtocolPlatformAll;
@@ -927,7 +929,7 @@ inline std::optional<TestProtocolPlatform> fromProtocolString(const String& valu
         return TestProtocolPlatformIOS;
     if (value == "macos")
         return TestProtocolPlatformMacOS;
-    return std::nullopt;
+    return WTF::nullopt;
 }
 
 

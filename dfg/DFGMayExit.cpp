@@ -47,7 +47,8 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
     // This is a carefully curated list of nodes that definitely do not exit. We try to be very
     // conservative when maintaining this list, because adding new node types to it doesn't
     // generally make things a lot better but it might introduce subtle bugs.
-    case SetArgument:
+    case SetArgumentDefinitely:
+    case SetArgumentMaybe:
     case JSConstant:
     case DoubleConstant:
     case LazyJSConstant:
@@ -74,6 +75,7 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
     case KillStack:
     case GetStack:
     case GetCallee:
+    case SetCallee:
     case GetArgumentCountIncludingThis:
     case SetArgumentCountIncludingThis:
     case GetRestLength:
@@ -91,6 +93,7 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
     case ValueRep:
     case ExtractOSREntryLocal:
     case ExtractCatchLocal:
+    case ClearCatchLocals:
     case LogicalNot:
     case NotifyWrite:
     case PutStructure:
@@ -100,6 +103,10 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
     case PutClosureVar:
     case RecordRegExpCachedResult:
     case NukeStructureAndSetButterfly:
+    case FilterCallLinkStatus:
+    case FilterGetByIdStatus:
+    case FilterPutByIdStatus:
+    case FilterInByIdStatus:
         break;
 
     case StrCat:
@@ -118,10 +125,18 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
     case NewAsyncFunction:
     case NewAsyncGeneratorFunction:
     case NewStringObject:
+    case NewSymbol:
     case NewRegexp:
     case ToNumber:
+    case RegExpExecNonGlobalOrSticky:
+    case RegExpMatchFastGlobal:
         result = ExitsForExceptions;
         break;
+
+    case SetRegExpObjectLastIndex:
+        if (node->ignoreLastIndexIsWritable())
+            break;
+        return Exits;
 
     default:
         // If in doubt, return true.
@@ -158,13 +173,6 @@ ExitMode mayExitImpl(Graph& graph, Node* node, StateType& state)
             // ObjectUse then it will.
             case ObjectUse:
             case ObjectOrOtherUse:
-                result = Exits;
-                break;
-                
-            // These are shady because they check the structure even if the type of the child node
-            // passes the StringObject type filter.
-            case StringObjectUse:
-            case StringOrStringObjectUse:
                 result = Exits;
                 break;
                 

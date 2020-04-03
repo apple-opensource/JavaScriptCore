@@ -30,18 +30,18 @@ function next(value)
     const promiseCapability = @newPromiseCapability(@Promise);
 
     if (!@isObject(this) || !@isObject(@getByIdDirectPrivate(this, "syncIterator"))) {
-        promiseCapability.@reject.@call(@undefined, new @TypeError('Iterator is not an object.'));
+        promiseCapability.@reject.@call(@undefined, @makeTypeError('Iterator is not an object.'));
         return promiseCapability.@promise;
     }
 
     const syncIterator = @getByIdDirectPrivate(this, "syncIterator");
 
     try {
-        const { done: nextDone, value: nextValue } = @getByIdDirectPrivate(this, "nextMethod").@call(syncIterator, value);
+        const { value: nextValue, done: nextDone } = @getByIdDirectPrivate(this, "nextMethod").@call(syncIterator, value);
         const valueWrapperCapability = @newPromiseCapability(@Promise);
         valueWrapperCapability.@resolve.@call(@undefined, nextValue);
         valueWrapperCapability.@promise.@then(
-            function (result) { promiseCapability.@resolve.@call(@undefined, { done: !!nextDone, value: result }); },
+            function (result) { promiseCapability.@resolve.@call(@undefined, { value: result, done: !!nextDone }); },
             function (error) { promiseCapability.@reject.@call(@undefined, error); });
      } catch(e) {
          promiseCapability.@reject.@call(@undefined, e);
@@ -57,7 +57,7 @@ function return(value)
     const promiseCapability = @newPromiseCapability(@Promise);
 
     if (!@isObject(this) || !@isObject(@getByIdDirectPrivate(this, "syncIterator"))) {
-        promiseCapability.@reject.@call(@undefined, new @TypeError('Iterator is not an object.'));
+        promiseCapability.@reject.@call(@undefined, @makeTypeError('Iterator is not an object.'));
         return promiseCapability.@promise;
     }
 
@@ -81,16 +81,16 @@ function return(value)
         const returnResult = returnMethod.@call(syncIterator, value);
 
         if (!@isObject(returnResult)) {
-            promiseCapability.@reject.@call(@undefined, new @TypeError('Iterator result interface is not an object.'));
+            promiseCapability.@reject.@call(@undefined, @makeTypeError('Iterator result interface is not an object.'));
             return promiseCapability.@promise;
         }
 
-        const { done: resultDone, value: resultValue } = returnResult;
+        const { value: resultValue, done: resultDone } = returnResult;
         const valueWrapperCapability = @newPromiseCapability(@Promise);
 
         valueWrapperCapability.@resolve.@call(@undefined, resultValue);
         valueWrapperCapability.@promise.@then(
-            function (result) { promiseCapability.@resolve.@call(@undefined, { done: resultDone, value: result }); },
+            function (result) { promiseCapability.@resolve.@call(@undefined, { value: result, done: resultDone }); },
             function (error) { promiseCapability.@reject.@call(@undefined, error); });
     } catch (e) {
         promiseCapability.@reject.@call(@undefined, e);
@@ -106,7 +106,7 @@ function throw(exception)
     const promiseCapability = @newPromiseCapability(@Promise);
 
     if (!@isObject(this) || !@isObject(@getByIdDirectPrivate(this, "syncIterator"))) {
-        promiseCapability.@reject.@call(@undefined, new @TypeError('Iterator is not an object.'));
+        promiseCapability.@reject.@call(@undefined, @makeTypeError('Iterator is not an object.'));
         return promiseCapability.@promise;
     }
 
@@ -130,16 +130,16 @@ function throw(exception)
         const throwResult = throwMethod.@call(syncIterator, exception);
         
         if (!@isObject(throwResult)) {
-            promiseCapability.@reject.@call(@undefined, new @TypeError('Iterator result interface is not an object.'));
+            promiseCapability.@reject.@call(@undefined, @makeTypeError('Iterator result interface is not an object.'));
             return promiseCapability.@promise;
         }
         
-        const { done: throwDone, value: throwValue } = throwResult;
+        const { value: throwValue, done: throwDone } = throwResult;
         const valueWrapperCapability = @newPromiseCapability(@Promise);
         
         valueWrapperCapability.@resolve.@call(@undefined, throwValue);
         valueWrapperCapability.@promise.@then(
-            function (result) { promiseCapability.@resolve.@call(@undefined, { done: throwDone, value: result }); },
+            function (result) { promiseCapability.@resolve.@call(@undefined, { value: result, done: throwDone }); },
             function (error) { promiseCapability.@reject.@call(@undefined, error); });
     } catch (e) {
         promiseCapability.@reject.@call(@undefined, e);
@@ -151,16 +151,20 @@ function throw(exception)
 @globalPrivate
 function createAsyncFromSyncIterator(syncIterator, nextMethod)
 {
+    "use strict";
+
     if (!@isObject(syncIterator))
         @throwTypeError('Only objects can be wrapped by async-from-sync wrapper');
 
-    return new @AsyncFromSyncIteratorConstructor(syncIterator, nextMethod);
+    return new @AsyncFromSyncIterator(syncIterator, nextMethod);
 }
 
 @globalPrivate
 @constructor
-function AsyncFromSyncIteratorConstructor(syncIterator, nextMethod)
+function AsyncFromSyncIterator(syncIterator, nextMethod)
 {
+    "use strict";
+
     @putByIdDirectPrivate(this, "syncIterator", syncIterator);
     @putByIdDirectPrivate(this, "nextMethod", nextMethod);
 }

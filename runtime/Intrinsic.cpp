@@ -111,8 +111,16 @@ const char* intrinsicName(Intrinsic intrinsic)
         return "RegExpTestIntrinsic";
     case RegExpTestFastIntrinsic:
         return "RegExpTestFastIntrinsic";
+    case RegExpMatchFastIntrinsic:
+        return "RegExpMatchFastIntrinsic";
+    case ObjectCreateIntrinsic:
+        return "ObjectCreateIntrinsic";
     case ObjectGetPrototypeOfIntrinsic:
         return "ObjectGetPrototypeOfIntrinsic";
+    case ObjectIsIntrinsic:
+        return "ObjectIsIntrinsic";
+    case ObjectKeysIntrinsic:
+        return "ObjectKeysIntrinsic";
     case ReflectGetPrototypeOfIntrinsic:
         return "ReflectGetPrototypeOfIntrinsic";
     case StringPrototypeValueOfIntrinsic:
@@ -127,6 +135,8 @@ const char* intrinsicName(Intrinsic intrinsic)
         return "StringPrototypeToLowerCaseIntrinsic";
     case NumberPrototypeToStringIntrinsic:
         return "NumberPrototypeToStringIntrinsic";
+    case NumberIsIntegerIntrinsic:
+        return "NumberIsIntegerIntrinsic";
     case IMulIntrinsic:
         return "IMulIntrinsic";
     case RandomIntrinsic:
@@ -167,8 +177,12 @@ const char* intrinsicName(Intrinsic intrinsic)
         return "JSWeakMapGetIntrinsic";
     case JSWeakMapHasIntrinsic:
         return "JSWeakMapHasIntrinsic";
+    case JSWeakMapSetIntrinsic:
+        return "JSWeakMapSetIntrinsic";
     case JSWeakSetHasIntrinsic:
         return "JSWeakSetHasIntrinsic";
+    case JSWeakSetAddIntrinsic:
+        return "JSWeakSetAddIntrinsic";
     case HasOwnPropertyIntrinsic:
         return "HasOwnPropertyIntrinsic";
     case AtomicsAddIntrinsic:
@@ -207,6 +221,8 @@ const char* intrinsicName(Intrinsic intrinsic)
         return "UnderscoreProtoIntrinsic";
     case DFGTrueIntrinsic:
         return "DFGTrueIntrinsic";
+    case FTLTrueIntrinsic:
+        return "FTLTrueIntrinsic";
     case OSRExitIntrinsic:
         return "OSRExitIntrinsic";
     case IsFinalTierIntrinsic:
@@ -225,6 +241,38 @@ const char* intrinsicName(Intrinsic intrinsic)
         return "CPUCpuidIntrinsic";
     case CPUPauseIntrinsic:
         return "CPUPauseIntrinsic";
+    case DataViewGetInt8:
+        return "DataViewGetInt8";
+    case DataViewGetUint8:
+        return "DataViewGetUint8";
+    case DataViewGetInt16:
+        return "DataViewGetInt16";
+    case DataViewGetUint16:
+        return "DataViewGetUint16";
+    case DataViewGetInt32:
+        return "DataViewGetInt32";
+    case DataViewGetUint32:
+        return "DataViewGetUint32";
+    case DataViewGetFloat32:
+        return "DataViewGetFloat32";
+    case DataViewGetFloat64:
+        return "DataViewGetFloat64";
+    case DataViewSetInt8:
+        return "DataViewSetInt8";
+    case DataViewSetUint8:
+        return "DataViewSetUint8";
+    case DataViewSetInt16:
+        return "DataViewSetInt16";
+    case DataViewSetUint16:
+        return "DataViewSetUint16";
+    case DataViewSetInt32:
+        return "DataViewSetInt32";
+    case DataViewSetUint32:
+        return "DataViewSetUint32";
+    case DataViewSetFloat32:
+        return "DataViewSetFloat32";
+    case DataViewSetFloat64:
+        return "DataViewSetFloat64";
     }
     RELEASE_ASSERT_NOT_REACHED();
     return nullptr;

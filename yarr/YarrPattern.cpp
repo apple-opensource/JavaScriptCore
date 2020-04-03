@@ -33,11 +33,9 @@
 #include "YarrParser.h"
 #include <wtf/DataLog.h>
 #include <wtf/Optional.h>
+#include <wtf/StackPointer.h>
 #include <wtf/Threading.h>
 #include <wtf/Vector.h>
-#include <wtf/text/WTFString.h>
-
-using namespace WTF;
 
 namespace JSC { namespace Yarr {
 
@@ -47,8 +45,8 @@ class CharacterClassConstructor {
 public:
     CharacterClassConstructor(bool isCaseInsensitive, CanonicalMode canonicalMode)
         : m_isCaseInsensitive(isCaseInsensitive)
-        , m_hasNonBMPCharacters(false)
         , m_anyCharacter(false)
+        , m_characterWidths(CharacterClassWidths::Unknown)
         , m_canonicalMode(canonicalMode)
     {
     }
@@ -59,8 +57,8 @@ public:
         m_ranges.clear();
         m_matchesUnicode.clear();
         m_rangesUnicode.clear();
-        m_hasNonBMPCharacters = false;
         m_anyCharacter = false;
+        m_characterWidths = CharacterClassWidths::Unknown;
     }
 
     void append(const CharacterClass* other)
@@ -248,11 +246,11 @@ public:
         characterClass->m_ranges.swap(m_ranges);
         characterClass->m_matchesUnicode.swap(m_matchesUnicode);
         characterClass->m_rangesUnicode.swap(m_rangesUnicode);
-        characterClass->m_hasNonBMPCharacters = hasNonBMPCharacters();
         characterClass->m_anyCharacter = anyCharacter();
+        characterClass->m_characterWidths = characterWidths();
 
-        m_hasNonBMPCharacters = false;
         m_anyCharacter = false;
+        m_characterWidths = CharacterClassWidths::Unknown;
 
         return characterClass;
     }
@@ -268,8 +266,7 @@ private:
         unsigned pos = 0;
         unsigned range = matches.size();
 
-        if (!U_IS_BMP(ch))
-            m_hasNonBMPCharacters = true;
+        m_characterWidths |= (U_IS_BMP(ch) ? CharacterClassWidths::HasBMPChars : CharacterClassWidths::HasNonBMPChars);
 
         // binary chop, find position to insert char.
         while (range) {
@@ -318,8 +315,10 @@ private:
     {
         size_t end = ranges.size();
 
+        if (U_IS_BMP(lo))
+            m_characterWidths |= CharacterClassWidths::HasBMPChars;
         if (!U_IS_BMP(hi))
-            m_hasNonBMPCharacters = true;
+            m_characterWidths |= CharacterClassWidths::HasNonBMPChars;
 
         // Simple linear scan - I doubt there are that many ranges anyway...
         // feel free to fix this with something faster (eg binary chop).
@@ -410,7 +409,12 @@ private:
 
     bool hasNonBMPCharacters()
     {
-        return m_hasNonBMPCharacters;
+        return m_characterWidths & CharacterClassWidths::HasNonBMPChars;
+    }
+
+    CharacterClassWidths characterWidths()
+    {
+        return m_characterWidths;
     }
 
     bool anyCharacter()
@@ -419,8 +423,9 @@ private:
     }
 
     bool m_isCaseInsensitive : 1;
-    bool m_hasNonBMPCharacters : 1;
     bool m_anyCharacter : 1;
+    CharacterClassWidths m_characterWidths;
+    
     CanonicalMode m_canonicalMode;
 
     Vector<UChar32> m_matches;
@@ -446,9 +451,9 @@ public:
     {
     }
 
-    void reset()
+    void resetForReparsing()
     {
-        m_pattern.reset();
+        m_pattern.resetForReparsing();
         m_characterClassConstructor.reset();
 
         auto body = std::make_unique<PatternDisjunction>();
@@ -456,7 +461,17 @@ public:
         m_alternative = body->addNewAlternative();
         m_pattern.m_disjunctions.append(WTFMove(body));
     }
-    
+
+    void saveUnmatchedNamedForwardReferences()
+    {
+        m_unmatchedNamedForwardReferences.shrink(0);
+        
+        for (auto& entry : m_pattern.m_namedForwardReferences) {
+            if (!m_pattern.m_captureGroupNames.contains(entry))
+                m_unmatchedNamedForwardReferences.append(entry);
+        }
+    }
+
     void assertionBOL()
     {
         if (!m_alternative->m_terms.size() && !m_invertParentheticalAssertion) {
@@ -579,7 +594,7 @@ public:
         m_pattern.m_userCharacterClasses.append(WTFMove(newCharacterClass));
     }
 
-    void atomParenthesesSubpatternBegin(bool capture = true, std::optional<String> optGroupName = std::nullopt)
+    void atomParenthesesSubpatternBegin(bool capture = true, Optional<String> optGroupName = WTF::nullopt)
     {
         unsigned subpatternId = m_pattern.m_numSubpatterns + 1;
         if (capture) {
@@ -666,16 +681,32 @@ public:
         m_alternative->m_terms.append(PatternTerm(subpatternId));
     }
 
-    void atomNamedBackReference(String subpatternName)
+    void atomNamedBackReference(const String& subpatternName)
     {
         ASSERT(m_pattern.m_namedGroupToParenIndex.find(subpatternName) != m_pattern.m_namedGroupToParenIndex.end());
         atomBackReference(m_pattern.m_namedGroupToParenIndex.get(subpatternName));
     }
 
+    bool isValidNamedForwardReference(const String& subpatternName)
+    {
+        return !m_unmatchedNamedForwardReferences.contains(subpatternName);
+    }
+
+    void atomNamedForwardReference(const String& subpatternName)
+    {
+        m_pattern.m_namedForwardReferences.appendIfNotContains(subpatternName);
+        m_alternative->m_terms.append(PatternTerm::ForwardReference());
+    }
+    
     // deep copy the argument disjunction.  If filterStartsWithBOL is true,
     // skip alternatives with m_startsWithBOL set true.
     PatternDisjunction* copyDisjunction(PatternDisjunction* disjunction, bool filterStartsWithBOL = false)
     {
+        if (UNLIKELY(!isSafeToRecurse())) {
+            m_error = ErrorCode::PatternTooLarge;
+            return 0;
+        }
+
         std::unique_ptr<PatternDisjunction> newDisjunction;
         for (unsigned alt = 0; alt < disjunction->m_alternatives.size(); ++alt) {
             PatternAlternative* alternative = disjunction->m_alternatives[alt].get();
@@ -691,6 +722,11 @@ public:
             }
         }
         
+        if (hasError(error())) {
+            newDisjunction = 0;
+            return 0;
+        }
+
         if (!newDisjunction)
             return 0;
 
@@ -701,6 +737,11 @@ public:
     
     PatternTerm copyTerm(PatternTerm& term, bool filterStartsWithBOL = false)
     {
+        if (UNLIKELY(!isSafeToRecurse())) {
+            m_error = ErrorCode::PatternTooLarge;
+            return PatternTerm(term);
+        }
+
         if ((term.type != PatternTerm::TypeParenthesesSubpattern) && (term.type != PatternTerm::TypeParentheticalAssertion))
             return PatternTerm(term);
         
@@ -817,8 +858,16 @@ public:
                 } else if (m_pattern.unicode()) {
                     term.frameLocation = currentCallFrameSize;
                     currentCallFrameSize += YarrStackSpaceForBackTrackInfoCharacterClass;
-                    currentInputPosition += term.quantityMaxCount;
-                    alternative->m_hasFixedSize = false;
+                    if (term.characterClass->hasOneCharacterSize() && !term.invert()) {
+                        Checked<unsigned, RecordOverflow> tempCount = term.quantityMaxCount;
+                        tempCount *= term.characterClass->hasNonBMPCharacters() ? 2 : 1;
+                        if (tempCount.hasOverflowed())
+                            return ErrorCode::OffsetTooLarge;
+                        currentInputPosition += tempCount;
+                    } else {
+                        currentInputPosition += term.quantityMaxCount;
+                        alternative->m_hasFixedSize = false;
+                    }
                 } else
                     currentInputPosition += term.quantityMaxCount;
                 break;
@@ -1026,10 +1075,10 @@ public:
             }
             
             PatternTerm& firstNonAnchorTerm = terms[termIndex];
-            if ((firstNonAnchorTerm.type != PatternTerm::TypeCharacterClass)
-                || (firstNonAnchorTerm.characterClass != dotCharacterClass)
-                || !((firstNonAnchorTerm.quantityType == QuantifierGreedy)
-                    || (firstNonAnchorTerm.quantityType == QuantifierNonGreedy)))
+            if (firstNonAnchorTerm.type != PatternTerm::TypeCharacterClass
+                || firstNonAnchorTerm.characterClass != dotCharacterClass
+                || firstNonAnchorTerm.quantityMinCount
+                || firstNonAnchorTerm.quantityMaxCount != quantifyInfinite)
                 return;
             
             firstExpressionTerm = termIndex + 1;
@@ -1041,9 +1090,11 @@ public:
             }
             
             PatternTerm& lastNonAnchorTerm = terms[termIndex];
-            if ((lastNonAnchorTerm.type != PatternTerm::TypeCharacterClass)
-                || (lastNonAnchorTerm.characterClass != dotCharacterClass)
-                || (lastNonAnchorTerm.quantityType != QuantifierGreedy))
+            if (lastNonAnchorTerm.type != PatternTerm::TypeCharacterClass
+                || lastNonAnchorTerm.characterClass != dotCharacterClass
+                || lastNonAnchorTerm.quantityType != QuantifierGreedy
+                || lastNonAnchorTerm.quantityMinCount
+                || lastNonAnchorTerm.quantityMaxCount != quantifyInfinite)
                 return;
 
             size_t endIndex = termIndex;
@@ -1064,13 +1115,15 @@ public:
         }
     }
 
+    ErrorCode error() { return m_error; }
+
 private:
     bool isSafeToRecurse() const
     {
         if (!m_stackLimit)
             return true;
         ASSERT(Thread::current().stack().isGrowingDownward());
-        int8_t* curr = reinterpret_cast<int8_t*>(&curr);
+        int8_t* curr = reinterpret_cast<int8_t*>(currentStackPointer());
         int8_t* limit = reinterpret_cast<int8_t*>(m_stackLimit);
         return curr >= limit;
     }
@@ -1078,7 +1131,9 @@ private:
     YarrPattern& m_pattern;
     PatternAlternative* m_alternative;
     CharacterClassConstructor m_characterClassConstructor;
+    Vector<String> m_unmatchedNamedForwardReferences;
     void* m_stackLimit;
+    ErrorCode m_error { ErrorCode::NoError };
     bool m_invertCharacterClass;
     bool m_invertParentheticalAssertion { false };
 };
@@ -1086,9 +1141,6 @@ private:
 ErrorCode YarrPattern::compile(const String& patternString, void* stackLimit)
 {
     YarrPatternConstructor constructor(*this, stackLimit);
-
-    if (m_flags == InvalidFlags)
-        return ErrorCode::InvalidRegularExpressionFlags;
 
     {
         ErrorCode error = parse(constructor, patternString, unicode());
@@ -1100,13 +1152,14 @@ ErrorCode YarrPattern::compile(const String& patternString, void* stackLimit)
     // Quoting Netscape's "What's new in JavaScript 1.2",
     //      "Note: if the number of left parentheses is less than the number specified
     //       in \#, the \# is taken as an octal escape as described in the next row."
-    if (containsIllegalBackReference()) {
+    if (containsIllegalBackReference() || containsIllegalNamedForwardReferences()) {
         if (unicode())
             return ErrorCode::InvalidBackreference;
 
         unsigned numSubpatterns = m_numSubpatterns;
 
-        constructor.reset();
+        constructor.saveUnmatchedNamedForwardReferences();
+        constructor.resetForReparsing();
         ErrorCode error = parse(constructor, patternString, unicode(), numSubpatterns);
         ASSERT_UNUSED(error, !hasError(error));
         ASSERT(numSubpatterns == m_numSubpatterns);
@@ -1115,6 +1168,9 @@ ErrorCode YarrPattern::compile(const String& patternString, void* stackLimit)
     constructor.checkForTerminalParentheses();
     constructor.optimizeDotStarWrappedExpressions();
     constructor.optimizeBOL();
+
+    if (hasError(constructor.error()))
+        return constructor.error();
 
     {
         ErrorCode error = constructor.setupOffsets();
@@ -1128,7 +1184,7 @@ ErrorCode YarrPattern::compile(const String& patternString, void* stackLimit)
     return ErrorCode::NoError;
 }
 
-YarrPattern::YarrPattern(const String& pattern, RegExpFlags flags, ErrorCode& error, void* stackLimit)
+YarrPattern::YarrPattern(const String& pattern, OptionSet<Flags> flags, ErrorCode& error, void* stackLimit)
     : m_containsBackreferences(false)
     , m_containsBOL(false)
     , m_containsUnsignedLengthPattern(false)
@@ -1136,6 +1192,7 @@ YarrPattern::YarrPattern(const String& pattern, RegExpFlags flags, ErrorCode& er
     , m_saveInitialStartValue(false)
     , m_flags(flags)
 {
+    ASSERT(m_flags != Flags::DeletedValue);
     error = compile(pattern, stackLimit);
 }
 
@@ -1167,7 +1224,7 @@ void dumpCharacterClass(PrintStream& out, YarrPattern* pattern, CharacterClass* 
     else if (characterClass == pattern->wordcharCharacterClass())
         out.print("<word>");
     else if (characterClass == pattern->wordUnicodeIgnoreCaseCharCharacterClass())
-        out.print("<unicode ignore case>");
+        out.print("<unicode word ignore case>");
     else if (characterClass == pattern->nondigitsCharacterClass())
         out.print("<non-digits>");
     else if (characterClass == pattern->nonspacesCharacterClass())
@@ -1175,7 +1232,7 @@ void dumpCharacterClass(PrintStream& out, YarrPattern* pattern, CharacterClass* 
     else if (characterClass == pattern->nonwordcharCharacterClass())
         out.print("<non-word>");
     else if (characterClass == pattern->nonwordUnicodeIgnoreCaseCharCharacterClass())
-        out.print("<unicode non-ignore case>");
+        out.print("<unicode non-word ignore case>");
     else {
         bool needMatchesRangesSeperator = false;
 
@@ -1297,75 +1354,8 @@ void PatternTerm::dump(PrintStream& out, YarrPattern* thisPattern, unsigned nest
         break;
     case TypeCharacterClass:
         out.print("character class ");
-        if (characterClass->m_anyCharacter)
-            out.print("<any character>");
-        else if (characterClass == thisPattern->newlineCharacterClass())
-            out.print("<newline>");
-        else if (characterClass == thisPattern->digitsCharacterClass())
-            out.print("<digits>");
-        else if (characterClass == thisPattern->spacesCharacterClass())
-            out.print("<whitespace>");
-        else if (characterClass == thisPattern->wordcharCharacterClass())
-            out.print("<word>");
-        else if (characterClass == thisPattern->wordUnicodeIgnoreCaseCharCharacterClass())
-            out.print("<unicode ignore case>");
-        else if (characterClass == thisPattern->nondigitsCharacterClass())
-            out.print("<non-digits>");
-        else if (characterClass == thisPattern->nonspacesCharacterClass())
-            out.print("<non-whitespace>");
-        else if (characterClass == thisPattern->nonwordcharCharacterClass())
-            out.print("<non-word>");
-        else if (characterClass == thisPattern->nonwordUnicodeIgnoreCaseCharCharacterClass())
-            out.print("<unicode non-ignore case>");
-        else {
-            bool needMatchesRangesSeperator = false;
-
-            auto dumpMatches = [&] (const char* prefix, Vector<UChar32> matches) {
-                size_t matchesSize = matches.size();
-                if (matchesSize) {
-                    if (needMatchesRangesSeperator)
-                        out.print(",");
-                    needMatchesRangesSeperator = true;
-
-                    out.print(prefix, ":(");
-                    for (size_t i = 0; i < matchesSize; ++i) {
-                        if (i)
-                            out.print(",");
-                        dumpUChar32(out, matches[i]);
-                    }
-                    out.print(")");
-                }
-            };
-
-            auto dumpRanges = [&] (const char* prefix, Vector<CharacterRange> ranges) {
-                size_t rangeSize = ranges.size();
-                if (rangeSize) {
-                    if (needMatchesRangesSeperator)
-                        out.print(",");
-                    needMatchesRangesSeperator = true;
-
-                    out.print(prefix, " ranges:(");
-                    for (size_t i = 0; i < rangeSize; ++i) {
-                        if (i)
-                            out.print(",");
-                        CharacterRange range = ranges[i];
-                        out.print("(");
-                        dumpUChar32(out, range.begin);
-                        out.print("..");
-                        dumpUChar32(out, range.end);
-                        out.print(")");
-                    }
-                    out.print(")");
-                }
-            };
-
-            out.print("[");
-            dumpMatches("ASCII", characterClass->m_matches);
-            dumpRanges("ASCII", characterClass->m_ranges);
-            dumpMatches("Unicode", characterClass->m_matchesUnicode);
-            dumpRanges("Unicode", characterClass->m_rangesUnicode);
-            out.print("]");
-        }
+        out.printf("inputPosition %u ", inputPosition);
+        dumpCharacterClass(out, thisPattern, characterClass);
         dumpQuantifier(out);
         if (quantityType != QuantifierFixedCount || thisPattern->unicode())
             out.print(",frame location ", frameLocation);
@@ -1438,16 +1428,10 @@ void PatternDisjunction::dump(PrintStream& out, YarrPattern* thisPattern, unsign
     }
 }
 
-void YarrPattern::dumpPattern(const String& patternString)
+void YarrPattern::dumpPatternString(PrintStream& out, const String& patternString)
 {
-    dumpPattern(WTF::dataFile(), patternString);
-}
+    out.print("/", patternString, "/");
 
-void YarrPattern::dumpPattern(PrintStream& out, const String& patternString)
-{
-    out.print("RegExp pattern for /");
-    out.print(patternString);
-    out.print("/");
     if (global())
         out.print("g");
     if (ignoreCase())
@@ -1458,36 +1442,47 @@ void YarrPattern::dumpPattern(PrintStream& out, const String& patternString)
         out.print("u");
     if (sticky())
         out.print("y");
-    if (m_flags != NoFlags) {
-        bool printSeperator = false;
+}
+
+void YarrPattern::dumpPattern(const String& patternString)
+{
+    dumpPattern(WTF::dataFile(), patternString);
+}
+
+void YarrPattern::dumpPattern(PrintStream& out, const String& patternString)
+{
+    out.print("RegExp pattern for ");
+    dumpPatternString(out, patternString);
+
+    if (m_flags) {
+        bool printSeparator = false;
         out.print(" (");
         if (global()) {
             out.print("global");
-            printSeperator = true;
+            printSeparator = true;
         }
         if (ignoreCase()) {
-            if (printSeperator)
+            if (printSeparator)
                 out.print("|");
             out.print("ignore case");
-            printSeperator = true;
+            printSeparator = true;
         }
         if (multiline()) {
-            if (printSeperator)
+            if (printSeparator)
                 out.print("|");
             out.print("multiline");
-            printSeperator = true;
+            printSeparator = true;
         }
         if (unicode()) {
-            if (printSeperator)
+            if (printSeparator)
                 out.print("|");
             out.print("unicode");
-            printSeperator = true;
+            printSeparator = true;
         }
         if (sticky()) {
-            if (printSeperator)
+            if (printSeparator)
                 out.print("|");
             out.print("sticky");
-            printSeperator = true;
         }
         out.print(")");
     }
@@ -1502,7 +1497,7 @@ std::unique_ptr<CharacterClass> anycharCreate()
     auto characterClass = std::make_unique<CharacterClass>();
     characterClass->m_ranges.append(CharacterRange(0x00, 0x7f));
     characterClass->m_rangesUnicode.append(CharacterRange(0x0080, 0x10ffff));
-    characterClass->m_hasNonBMPCharacters = true;
+    characterClass->m_characterWidths = CharacterClassWidths::HasBothBMPAndNonBMP;
     characterClass->m_anyCharacter = true;
     return characterClass;
 }

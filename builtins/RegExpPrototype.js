@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -22,6 +22,19 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
+
+@globalPrivate
+@constructor
+function RegExpStringIterator(regExp, string, global, fullUnicode)
+{
+    "use strict";
+
+    @putByIdDirectPrivate(this, "regExpStringIteratorRegExp", regExp);
+    @putByIdDirectPrivate(this, "regExpStringIteratorString", string);
+    @putByIdDirectPrivate(this, "regExpStringIteratorGlobal", global);
+    @putByIdDirectPrivate(this, "regExpStringIteratorUnicode", fullUnicode);
+    @putByIdDirectPrivate(this, "regExpStringIteratorDone", false);
+}
 
 @globalPrivate
 function advanceStringIndex(string, index, unicode)
@@ -63,7 +76,13 @@ function regExpExec(regexp, str)
 }
 
 @globalPrivate
-function hasObservableSideEffectsForRegExpMatch(regexp) {
+function hasObservableSideEffectsForRegExpMatch(regexp)
+{
+    "use strict";
+
+    if (!@isRegExpObject(regexp))
+        return true;
+
     // This is accessed by the RegExpExec internal function.
     let regexpExec = @tryGetById(regexp, "exec");
     if (regexpExec !== @regExpBuiltinExec)
@@ -76,24 +95,13 @@ function hasObservableSideEffectsForRegExpMatch(regexp) {
     if (regexpUnicode !== @regExpProtoUnicodeGetter)
         return true;
 
-    return !@isRegExpObject(regexp);
+    return typeof regexp.lastIndex !== "number";
 }
 
-@overriddenName="[Symbol.match]"
-function match(strArg)
+@globalPrivate
+function matchSlow(regexp, str)
 {
     "use strict";
-
-    if (!@isObject(this))
-        @throwTypeError("RegExp.prototype.@@match requires that |this| be an Object");
-
-    let regexp = this;
-
-    // Check for observable side effects and call the fast path if there aren't any.
-    if (!@hasObservableSideEffectsForRegExpMatch(regexp))
-        return @regExpMatchFast.@call(regexp, strArg);
-
-    let str = @toString(strArg);
 
     if (!regexp.global)
         return @regExpExec(regexp, str);
@@ -119,9 +127,6 @@ function match(strArg)
         if (resultList.length > maximumReasonableMatchSize)
             @throwOutOfMemoryError();
 
-        if (!@isObject(result))
-            @throwTypeError("RegExp.prototype.@@match call to RegExp.exec didn't return null or an object");
-
         let resultString = @toString(result[0]);
 
         if (!resultString.length)
@@ -129,6 +134,44 @@ function match(strArg)
 
         resultList.@push(resultString);
     }
+}
+
+@overriddenName="[Symbol.match]"
+function match(strArg)
+{
+    "use strict";
+
+    if (!@isObject(this))
+        @throwTypeError("RegExp.prototype.@@match requires that |this| be an Object");
+
+    let str = @toString(strArg);
+
+    // Check for observable side effects and call the fast path if there aren't any.
+    if (!@hasObservableSideEffectsForRegExpMatch(this))
+        return @regExpMatchFast.@call(this, str);
+    return @matchSlow(this, str);
+}
+
+@overriddenName="[Symbol.matchAll]"
+function matchAll(strArg)
+{
+    "use strict";
+
+    let regExp = this;
+    if (!@isObject(regExp))
+        @throwTypeError("RegExp.prototype.@@matchAll requires |this| to be an Object");
+
+    let string = @toString(strArg);
+    let Matcher = @speciesConstructor(regExp, @RegExp);
+
+    let flags = @toString(regExp.flags);
+    let matcher = new Matcher(regExp, flags);
+    matcher.lastIndex = @toLength(regExp.lastIndex);
+
+    let global = @stringIncludesInternal.@call(flags, "g");
+    let fullUnicode = @stringIncludesInternal.@call(flags, "u");
+
+    return new @RegExpStringIterator(matcher, string, global, fullUnicode);
 }
 
 @overriddenName="[Symbol.replace]"
@@ -307,7 +350,9 @@ function search(strArg)
     let regexp = this;
 
     // Check for observable side effects and call the fast path if there aren't any.
-    if (@isRegExpObject(regexp) && @tryGetById(regexp, "exec") === @regExpBuiltinExec)
+    if (@isRegExpObject(regexp)
+        && @tryGetById(regexp, "exec") === @regExpBuiltinExec
+        && typeof regexp.lastIndex === "number")
         return @regExpSearchFast.@call(regexp, strArg);
 
     // 1. Let rx be the this value.
@@ -346,7 +391,13 @@ function search(strArg)
 }
 
 @globalPrivate
-function hasObservableSideEffectsForRegExpSplit(regexp) {
+function hasObservableSideEffectsForRegExpSplit(regexp)
+{
+    "use strict";
+
+    if (!@isRegExpObject(regexp))
+        return true;
+
     // This is accessed by the RegExpExec internal function.
     let regexpExec = @tryGetById(regexp, "exec");
     if (regexpExec !== @regExpBuiltinExec)
@@ -378,8 +429,8 @@ function hasObservableSideEffectsForRegExpSplit(regexp) {
     let regexpSource = @tryGetById(regexp, "source");
     if (regexpSource !== @regExpProtoSourceGetter)
         return true;
-    
-    return !@isRegExpObject(regexp);
+
+    return typeof regexp.lastIndex !== "number";
 }
 
 // ES 21.2.5.11 RegExp.prototype[@@split](string, limit)
@@ -525,7 +576,9 @@ function test(strArg)
     let regexp = this;
 
     // Check for observable side effects and call the fast path if there aren't any.
-    if (@isRegExpObject(regexp) && @tryGetById(regexp, "exec") === @regExpBuiltinExec)
+    if (@isRegExpObject(regexp)
+        && @tryGetById(regexp, "exec") === @regExpBuiltinExec
+        && typeof regexp.lastIndex === "number")
         return @regExpTestFast.@call(regexp, strArg);
 
     // 1. Let R be the this value.

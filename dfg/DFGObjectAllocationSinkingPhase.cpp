@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,8 +41,7 @@
 #include "DFGSSACalculator.h"
 #include "DFGValidate.h"
 #include "JSCInlines.h"
-
-#include <list>
+#include <wtf/StdList.h>
 
 namespace JSC { namespace DFG {
 
@@ -141,7 +140,7 @@ public:
     // once it is escaped if it still has pointers to it in order to
     // replace any use of those pointers by the corresponding
     // materialization
-    enum class Kind { Escaped, Object, Activation, Function, GeneratorFunction, AsyncFunction, AsyncGeneratorFunction };
+    enum class Kind { Escaped, Object, Activation, Function, GeneratorFunction, AsyncFunction, AsyncGeneratorFunction, RegExpObject };
 
     using Fields = HashMap<PromotedLocationDescriptor, Node*>;
 
@@ -246,6 +245,11 @@ public:
         return m_kind == Kind::Function || m_kind == Kind::GeneratorFunction || m_kind == Kind::AsyncFunction;
     }
 
+    bool isRegExpObjectAllocation() const
+    {
+        return m_kind == Kind::RegExpObject;
+    }
+
     bool operator==(const Allocation& other) const
     {
         return m_identifier == other.m_identifier
@@ -290,8 +294,13 @@ public:
         case Kind::AsyncGeneratorFunction:
             out.print("AsyncGeneratorFunction");
             break;
+
         case Kind::Activation:
             out.print("Activation");
+            break;
+
+        case Kind::RegExpObject:
+            out.print("RegExpObject");
             break;
         }
         out.print("Allocation(");
@@ -747,6 +756,7 @@ private:
         }
 
         promoteLocalHeap();
+        removeICStatusFilters();
 
         if (Options::validateGraphAtEachPhase())
             DFG::validate(m_graph, DumpGraph, graphBeforeSinking);
@@ -830,7 +840,7 @@ private:
         case NewGeneratorFunction:
         case NewAsyncGeneratorFunction:
         case NewAsyncFunction: {
-            if (isStillValid(node->castOperand<FunctionExecutable*>()->singletonFunction())) {
+            if (isStillValid(node->castOperand<FunctionExecutable*>())) {
                 m_heap.escape(node->child1().node());
                 break;
             }
@@ -849,8 +859,16 @@ private:
             break;
         }
 
+        case NewRegexp: {
+            target = &m_heap.newAllocation(node, Allocation::Kind::RegExpObject);
+
+            writes.add(RegExpObjectRegExpPLoc, LazyNode(node->cellOperand()));
+            writes.add(RegExpObjectLastIndexPLoc, LazyNode(node->child1().node()));
+            break;
+        }
+
         case CreateActivation: {
-            if (isStillValid(node->castOperand<SymbolTable*>()->singletonScope())) {
+            if (isStillValid(node->castOperand<SymbolTable*>())) {
                 m_heap.escape(node->child1().node());
                 break;
             }
@@ -859,11 +877,10 @@ private:
             writes.add(ActivationScopePLoc, LazyNode(node->child1().node()));
             {
                 SymbolTable* symbolTable = node->castOperand<SymbolTable*>();
-                ConcurrentJSLocker locker(symbolTable->m_lock);
                 LazyNode initialValue(m_graph.freeze(node->initializationValueForActivation()));
-                for (auto iter = symbolTable->begin(locker), end = symbolTable->end(locker); iter != end; ++iter) {
+                for (unsigned offset = 0; offset < symbolTable->scopeSize(); ++offset) {
                     writes.add(
-                        PromotedLocationDescriptor(ClosureVarPLoc, iter->value.scopeOffset().offset()),
+                        PromotedLocationDescriptor(ClosureVarPLoc, offset),
                         initialValue);
                 }
             }
@@ -943,7 +960,7 @@ private:
                 PromotedHeapLocation location(NamedPropertyPLoc, allocation->identifier(), identifierNumber);
                 if (Node* value = heapResolve(location)) {
                     if (allocation->structures().isSubsetOf(validStructures))
-                        node->replaceWith(m_graph, value);
+                        node->replaceWithWithoutChecks(value);
                     else {
                         Node* structure = heapResolve(PromotedHeapLocation(allocation->identifier(), StructurePLoc));
                         ASSERT(structure);
@@ -1032,6 +1049,26 @@ private:
                 m_heap.escape(node->child1().node());
             break;
 
+        case GetRegExpObjectLastIndex:
+            target = m_heap.onlyLocalAllocation(node->child1().node());
+            if (target && target->isRegExpObjectAllocation())
+                exactRead = RegExpObjectLastIndexPLoc;
+            else
+                m_heap.escape(node->child1().node());
+            break;
+
+        case SetRegExpObjectLastIndex:
+            target = m_heap.onlyLocalAllocation(node->child1().node());
+            if (target && target->isRegExpObjectAllocation()) {
+                writes.add(
+                    PromotedLocationDescriptor(RegExpObjectLastIndexPLoc),
+                    LazyNode(node->child2().node()));
+            } else {
+                m_heap.escape(node->child1().node());
+                m_heap.escape(node->child2().node());
+            }
+            break;
+
         case Check:
         case CheckVarargs:
             m_graph.doToChildren(
@@ -1050,6 +1087,12 @@ private:
         case MovHint:
         case PutHint:
             // Handled by OSR availability analysis
+            break;
+            
+        case FilterCallLinkStatus:
+        case FilterGetByIdStatus:
+        case FilterPutByIdStatus:
+        case FilterInByIdStatus:
             break;
 
         default:
@@ -1172,7 +1215,70 @@ private:
             }
         }
 
+        auto forEachEscapee = [&] (auto callback) {
+            for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
+                m_heap = m_heapAtHead[block];
+                m_heap.setWantEscapees();
+
+                for (Node* node : *block) {
+                    handleNode(
+                        node,
+                        [] (PromotedHeapLocation, LazyNode) { },
+                        [] (PromotedHeapLocation) -> Node* {
+                            return nullptr;
+                        });
+                    auto escapees = m_heap.takeEscapees();
+                    escapees.removeIf([&] (const auto& entry) { return !m_sinkCandidates.contains(entry.key); });
+                    callback(escapees, node);
+                }
+
+                m_heap.pruneByLiveness(m_combinedLiveness.liveAtTail[block]);
+
+                {
+                    HashMap<Node*, Allocation> escapingOnEdge;
+                    for (const auto& entry : m_heap.allocations()) {
+                        if (entry.value.isEscapedAllocation())
+                            continue;
+
+                        bool mustEscape = false;
+                        for (BasicBlock* successorBlock : block->successors()) {
+                            if (!m_heapAtHead[successorBlock].isAllocation(entry.key)
+                                || m_heapAtHead[successorBlock].getAllocation(entry.key).isEscapedAllocation())
+                                mustEscape = true;
+                        }
+
+                        if (mustEscape && m_sinkCandidates.contains(entry.key))
+                            escapingOnEdge.add(entry.key, entry.value);
+                    }
+                    callback(escapingOnEdge, block->terminal());
+                }
+            }
+        };
+
+        if (m_sinkCandidates.size()) {
+            // If we're moving an allocation to `where` in the program, we need to ensure
+            // we can still walk the stack at that point in the program for the
+            // InlineCallFrame of the original allocation. Certain InlineCallFrames rely on
+            // data in the stack when taking a stack trace. All allocation sites can do a
+            // stack walk (we do a stack walk when we GC). Conservatively, we say we're
+            // still ok to move this allocation if we are moving within the same InlineCallFrame.
+            // We could be more precise here and do an analysis of stack writes. However,
+            // this scenario is so rare that we just take the conservative-and-straight-forward 
+            // approach of checking that we're in the same InlineCallFrame.
+
+            forEachEscapee([&] (HashMap<Node*, Allocation>& escapees, Node* where) {
+                for (Node* allocation : escapees.keys()) {
+                    InlineCallFrame* inlineCallFrame = allocation->origin.semantic.inlineCallFrame();
+                    if (!inlineCallFrame)
+                        continue;
+                    if ((inlineCallFrame->isClosureCall || inlineCallFrame->isVarargs()) && inlineCallFrame != where->origin.semantic.inlineCallFrame())
+                        m_sinkCandidates.remove(allocation);
+                }
+            });
+        }
+
         // Ensure that the set of sink candidates is closed for put operations
+        // This is (2) as described above.
         Vector<Node*> worklist;
         worklist.appendRange(m_sinkCandidates.begin(), m_sinkCandidates.end());
 
@@ -1189,59 +1295,17 @@ private:
         if (DFGObjectAllocationSinkingPhaseInternal::verbose)
             dataLog("Candidates: ", listDump(m_sinkCandidates), "\n");
 
-        // Create the materialization nodes
-        for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
-            m_heap = m_heapAtHead[block];
-            m_heap.setWantEscapees();
 
-            for (Node* node : *block) {
-                handleNode(
-                    node,
-                    [] (PromotedHeapLocation, LazyNode) { },
-                    [] (PromotedHeapLocation) -> Node* {
-                        return nullptr;
-                    });
-                auto escapees = m_heap.takeEscapees();
-                if (!escapees.isEmpty())
-                    placeMaterializations(escapees, node);
-            }
-
-            m_heap.pruneByLiveness(m_combinedLiveness.liveAtTail[block]);
-
-            {
-                HashMap<Node*, Allocation> escapingOnEdge;
-                for (const auto& entry : m_heap.allocations()) {
-                    if (entry.value.isEscapedAllocation())
-                        continue;
-
-                    bool mustEscape = false;
-                    for (BasicBlock* successorBlock : block->successors()) {
-                        if (!m_heapAtHead[successorBlock].isAllocation(entry.key)
-                            || m_heapAtHead[successorBlock].getAllocation(entry.key).isEscapedAllocation())
-                            mustEscape = true;
-                    }
-
-                    if (mustEscape)
-                        escapingOnEdge.add(entry.key, entry.value);
-                }
-                placeMaterializations(WTFMove(escapingOnEdge), block->terminal());
-            }
-        }
+        // Create the materialization nodes.
+        forEachEscapee([&] (HashMap<Node*, Allocation>& escapees, Node* where) {
+            placeMaterializations(WTFMove(escapees), where);
+        });
 
         return hasUnescapedReads || !m_sinkCandidates.isEmpty();
     }
 
     void placeMaterializations(HashMap<Node*, Allocation> escapees, Node* where)
     {
-        // We don't create materializations if the escapee is not a
-        // sink candidate
-        escapees.removeIf(
-            [&] (const auto& entry) {
-                return !m_sinkCandidates.contains(entry.key);
-            });
-        if (escapees.isEmpty())
-            return;
-
         // First collect the hints that will be needed when the node
         // we materialize is still stored into other unescaped sink candidates.
         // The way to interpret this vector is:
@@ -1346,7 +1410,7 @@ private:
         // Nodes without remaining unmaterialized fields will be
         // materialized first - amongst the remaining unmaterialized
         // nodes
-        std::list<Allocation, FastAllocator<Allocation>> toMaterialize;
+        StdList<Allocation> toMaterialize;
         auto firstPos = toMaterialize.begin();
         auto materializeFirst = [&] (Allocation&& allocation) {
             materialize(allocation.identifier());
@@ -1495,7 +1559,6 @@ private:
                 where->origin.withSemantic(
                     allocation.identifier()->origin.semantic),
                 OpInfo(executable));
-            break;
         }
 
         case Allocation::Kind::Activation: {
@@ -1507,6 +1570,15 @@ private:
                 where->origin.withSemantic(
                     allocation.identifier()->origin.semantic),
                 OpInfo(symbolTable), OpInfo(data), 0, 0);
+        }
+
+        case Allocation::Kind::RegExpObject: {
+            FrozenValue* regExp = allocation.identifier()->cellOperand();
+            return m_graph.addNode(
+                allocation.identifier()->prediction(), NewRegexp,
+                where->origin.withSemantic(
+                    allocation.identifier()->origin.semantic),
+                OpInfo(regExp));
         }
 
         default:
@@ -1865,15 +1937,21 @@ private:
                     case NewGeneratorFunction:
                         node->convertToPhantomNewGeneratorFunction();
                         break;
+
                     case NewAsyncGeneratorFunction:
                         node->convertToPhantomNewAsyncGeneratorFunction();
                         break;
+
                     case NewAsyncFunction:
                         node->convertToPhantomNewAsyncFunction();
                         break;
 
                     case CreateActivation:
                         node->convertToPhantomCreateActivation();
+                        break;
+
+                    case NewRegexp:
+                        node->convertToPhantomNewRegexp();
                         break;
 
                     default:
@@ -2144,6 +2222,23 @@ private:
             break;
         }
 
+        case NewRegexp: {
+            Vector<PromotedHeapLocation> locations = m_locationsForAllocation.get(escapee);
+            ASSERT(locations.size() == 2);
+
+            PromotedHeapLocation regExp(RegExpObjectRegExpPLoc, allocation.identifier());
+            ASSERT_UNUSED(regExp, locations.contains(regExp));
+
+            PromotedHeapLocation lastIndex(RegExpObjectLastIndexPLoc, allocation.identifier());
+            ASSERT(locations.contains(lastIndex));
+            Node* value = resolve(block, lastIndex);
+            if (m_sinkCandidates.contains(value))
+                node->child1() = Edge(m_bottom);
+            else
+                node->child1() = Edge(value);
+            break;
+        }
+
         default:
             DFG_CRASH(m_graph, node, "Bad materialize op");
         }
@@ -2220,14 +2315,14 @@ private:
                         // at this point, we can simply trust that the incoming value has the right type
                         // for whatever structure we are using.
                         data->variants.append(
-                            PutByIdVariant::replace(currentSet, currentOffset, InferredType::Top));
+                            PutByIdVariant::replace(currentSet, currentOffset));
                         currentOffset = offset;
                         currentSet.clear();
                     }
                     currentSet.add(structure.get());
                 }
                 data->variants.append(
-                    PutByIdVariant::replace(currentSet, currentOffset, InferredType::Top));
+                    PutByIdVariant::replace(currentSet, currentOffset));
             }
 
             return m_graph.addNode(
@@ -2236,7 +2331,6 @@ private:
                 OpInfo(data),
                 Edge(base, KnownCellUse),
                 value->defaultEdge());
-            break;
         }
 
         case ClosureVarPLoc: {
@@ -2246,12 +2340,41 @@ private:
                 OpInfo(location.info()),
                 Edge(base, KnownCellUse),
                 value->defaultEdge());
-            break;
+        }
+
+        case RegExpObjectLastIndexPLoc: {
+            return m_graph.addNode(
+                SetRegExpObjectLastIndex,
+                origin.takeValidExit(canExit),
+                OpInfo(true),
+                Edge(base, KnownCellUse),
+                value->defaultEdge());
         }
 
         default:
             DFG_CRASH(m_graph, base, "Bad location kind");
             break;
+        }
+
+        RELEASE_ASSERT_NOT_REACHED();
+    }
+    
+    void removeICStatusFilters()
+    {
+        for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
+            for (Node* node : *block) {
+                switch (node->op()) {
+                case FilterCallLinkStatus:
+                case FilterGetByIdStatus:
+                case FilterPutByIdStatus:
+                case FilterInByIdStatus:
+                    if (node->child1()->isPhantomAllocation())
+                        node->removeWithoutChecks();
+                    break;
+                default:
+                    break;
+                }
+            }
         }
     }
 
@@ -2259,10 +2382,16 @@ private:
     // different answers. It turns out that this analysis works OK regardless of what this
     // returns but breaks badly if this changes its mind for any particular InferredValue. This
     // method protects us from that.
-    bool isStillValid(InferredValue* value)
+    bool isStillValid(SymbolTable* value)
     {
-        return m_validInferredValues.add(value, value->isStillValid()).iterator->value;
+        return m_validInferredValues.add(value, value->singleton().isStillValid()).iterator->value;
     }
+
+    bool isStillValid(FunctionExecutable* value)
+    {
+        return m_validInferredValues.add(value, value->singleton().isStillValid()).iterator->value;
+    }
+
 
     SSACalculator m_pointerSSA;
     SSACalculator m_allocationSSA;
@@ -2274,7 +2403,7 @@ private:
     InsertionSet m_insertionSet;
     CombinedLiveness m_combinedLiveness;
 
-    HashMap<InferredValue*, bool> m_validInferredValues;
+    HashMap<JSCell*, bool> m_validInferredValues;
 
     HashMap<Node*, Node*> m_materializationToEscapee;
     HashMap<Node*, Vector<Node*>> m_materializationSiteToMaterializations;

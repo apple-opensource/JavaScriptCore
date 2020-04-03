@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,8 +41,8 @@ namespace JSC {
 
 JITDisassembler::JITDisassembler(CodeBlock *codeBlock)
     : m_codeBlock(codeBlock)
-    , m_labelForBytecodeIndexInMainPath(codeBlock->instructionCount())
-    , m_labelForBytecodeIndexInSlowPath(codeBlock->instructionCount())
+    , m_labelForBytecodeIndexInMainPath(codeBlock->instructions().size())
+    , m_labelForBytecodeIndexInSlowPath(codeBlock->instructions().size())
 {
 }
 
@@ -89,7 +89,7 @@ void JITDisassembler::reportToProfiler(Profiler::Compilation* compilation, LinkB
 
 void JITDisassembler::dumpHeader(PrintStream& out, LinkBuffer& linkBuffer)
 {
-    out.print("Generated Baseline JIT code for ", CodeBlockWithJITType(m_codeBlock, JITCode::BaselineJIT), ", instruction count = ", m_codeBlock->instructionCount(), "\n");
+    out.print("Generated Baseline JIT code for ", CodeBlockWithJITType(m_codeBlock, JITType::BaselineJIT), ", instructions size = ", m_codeBlock->instructionsSize(), "\n");
     out.print("   Source: ", m_codeBlock->sourceCodeOnOneLine(), "\n");
     out.print("   Code at [", RawPointer(linkBuffer.debugAddress()), ", ", RawPointer(static_cast<char*>(linkBuffer.debugAddress()) + linkBuffer.size()), "):\n");
 }
@@ -161,9 +161,9 @@ void JITDisassembler::reportInstructions(Profiler::Compilation* compilation, Lin
 
 void JITDisassembler::dumpDisassembly(PrintStream& out, LinkBuffer& linkBuffer, MacroAssembler::Label from, MacroAssembler::Label to)
 {
-    CodeLocationLabel fromLocation = linkBuffer.locationOf(from);
-    CodeLocationLabel toLocation = linkBuffer.locationOf(to);
-    disassemble(fromLocation, toLocation.executableAddress<uintptr_t>() - fromLocation.executableAddress<uintptr_t>(), "        ", out);
+    CodeLocationLabel<DisassemblyPtrTag> fromLocation = linkBuffer.locationOf<DisassemblyPtrTag>(from);
+    CodeLocationLabel<DisassemblyPtrTag> toLocation = linkBuffer.locationOf<DisassemblyPtrTag>(to);
+    disassemble(fromLocation, toLocation.dataLocation<uintptr_t>() - fromLocation.dataLocation<uintptr_t>(), "        ", out);
 }
 
 } // namespace JSC

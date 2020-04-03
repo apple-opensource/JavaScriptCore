@@ -26,6 +26,7 @@
 #include "config.h"
 #include "ExecutableToCodeBlockEdge.h"
 
+#include "CodeBlock.h"
 #include "IsoCellSetInlines.h"
 
 namespace JSC {
@@ -44,10 +45,18 @@ ExecutableToCodeBlockEdge* ExecutableToCodeBlockEdge::create(VM& vm, CodeBlock* 
     return result;
 }
 
+void ExecutableToCodeBlockEdge::finishCreation(VM& vm)
+{
+    Base::finishCreation(vm);
+    ASSERT(!isActive());
+}
+
 void ExecutableToCodeBlockEdge::visitChildren(JSCell* cell, SlotVisitor& visitor)
 {
     VM& vm = visitor.vm();
     ExecutableToCodeBlockEdge* edge = jsCast<ExecutableToCodeBlockEdge*>(cell);
+    Base::visitChildren(cell, visitor);
+
     CodeBlock* codeBlock = edge->m_codeBlock.get();
     
     // It's possible for someone to hold a pointer to the edge after the edge has cleared its weak
@@ -57,7 +66,7 @@ void ExecutableToCodeBlockEdge::visitChildren(JSCell* cell, SlotVisitor& visitor
     if (!codeBlock)
         return;
     
-    if (!edge->m_isActive) {
+    if (!edge->isActive()) {
         visitor.appendUnbarriered(codeBlock);
         return;
     }
@@ -67,7 +76,7 @@ void ExecutableToCodeBlockEdge::visitChildren(JSCell* cell, SlotVisitor& visitor
     if (codeBlock->shouldVisitStrongly(locker))
         visitor.appendUnbarriered(codeBlock);
     
-    if (!Heap::isMarked(codeBlock))
+    if (!vm.heap.isMarked(codeBlock))
         vm.executableToCodeBlockEdgesWithFinalizers.add(edge);
     
     if (JITCode::isOptimizingJIT(codeBlock->jitType())) {
@@ -117,8 +126,8 @@ void ExecutableToCodeBlockEdge::finalizeUnconditionally(VM& vm)
 {
     CodeBlock* codeBlock = m_codeBlock.get();
     
-    if (!Heap::isMarked(codeBlock)) {
-        if (codeBlock->shouldJettisonDueToWeakReference())
+    if (!vm.heap.isMarked(codeBlock)) {
+        if (codeBlock->shouldJettisonDueToWeakReference(vm))
             codeBlock->jettison(Profiler::JettisonDueToWeakReference);
         else
             codeBlock->jettison(Profiler::JettisonDueToOldAge);
@@ -129,14 +138,19 @@ void ExecutableToCodeBlockEdge::finalizeUnconditionally(VM& vm)
     vm.executableToCodeBlockEdgesWithConstraints.remove(this);
 }
 
-void ExecutableToCodeBlockEdge::activate()
+inline void ExecutableToCodeBlockEdge::activate()
 {
-    m_isActive = true;
+    setPerCellBit(true);
 }
 
-void ExecutableToCodeBlockEdge::deactivate()
+inline void ExecutableToCodeBlockEdge::deactivate()
 {
-    m_isActive = false;
+    setPerCellBit(false);
+}
+
+inline bool ExecutableToCodeBlockEdge::isActive() const
+{
+    return perCellBit();
 }
 
 CodeBlock* ExecutableToCodeBlockEdge::deactivateAndUnwrap(ExecutableToCodeBlockEdge* edge)
@@ -176,7 +190,7 @@ void ExecutableToCodeBlockEdge::runConstraint(const ConcurrentJSLocker& locker, 
     codeBlock->propagateTransitions(locker, visitor);
     codeBlock->determineLiveness(locker, visitor);
     
-    if (Heap::isMarked(codeBlock))
+    if (vm.heap.isMarked(codeBlock))
         vm.executableToCodeBlockEdgesWithConstraints.remove(this);
 }
 

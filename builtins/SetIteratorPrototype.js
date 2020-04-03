@@ -38,14 +38,14 @@ function setIteratorNext(bucket, kind)
         if (kind === @iterationKindKeyValue)
             value = [ value, value ]
     }
-    return { done, value };
+    return { value, done };
 }
 
 function next()
 {
     "use strict";
 
-    if (this == null)
+    if (@isUndefinedOrNull(this))
         @throwTypeError("%SetIteratorPrototype%.next requires that |this| not be null or undefined");
 
     var bucket = @getByIdDirectPrivate(this, "setBucket");

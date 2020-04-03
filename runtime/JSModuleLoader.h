@@ -32,13 +32,15 @@ namespace JSC {
 
 class JSInternalPromise;
 class JSModuleNamespaceObject;
+class JSModuleRecord;
 class SourceCode;
 
-class JSModuleLoader : public JSNonFinalObject {
+class JSModuleLoader final : public JSNonFinalObject {
 private:
     JSModuleLoader(VM&, Structure*);
 public:
-    typedef JSNonFinalObject Base;
+    using Base = JSNonFinalObject;
+    static const unsigned StructureFlags = Base::StructureFlags | HasStaticPropertyTable;
 
     enum Status {
         Fetch = 1,
@@ -78,9 +80,11 @@ public:
 
     // Additional platform dependent hooked APIs.
     JSValue evaluate(ExecState*, JSValue key, JSValue moduleRecord, JSValue scriptFetcher);
+    JSValue evaluateNonVirtual(ExecState*, JSValue key, JSValue moduleRecord, JSValue scriptFetcher);
 
     // Utility functions.
     JSModuleNamespaceObject* getModuleNamespaceObject(ExecState*, JSValue moduleRecord);
+    JSArray* dependencyKeysIfEvaluated(ExecState*, JSValue key);
 
 protected:
     void finishCreation(ExecState*, VM&, JSGlobalObject*);

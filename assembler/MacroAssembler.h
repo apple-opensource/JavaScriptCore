@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2008-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,30 +30,35 @@
 #include "JSCJSValue.h"
 
 #if CPU(ARM_THUMB2)
+#define TARGET_ASSEMBLER ARMv7Assembler
+#define TARGET_MACROASSEMBLER MacroAssemblerARMv7
 #include "MacroAssemblerARMv7.h"
 namespace JSC { typedef MacroAssemblerARMv7 MacroAssemblerBase; };
 
-#elif CPU(ARM64)
-#include "MacroAssemblerARM64.h"
-namespace JSC { typedef MacroAssemblerARM64 MacroAssemblerBase; };
+#elif CPU(ARM64E)
+#define TARGET_ASSEMBLER ARM64EAssembler
+#define TARGET_MACROASSEMBLER MacroAssemblerARM64E
+#include "MacroAssemblerARM64E.h"
 
-#elif CPU(ARM_TRADITIONAL)
-#include "MacroAssemblerARM.h"
-namespace JSC { typedef MacroAssemblerARM MacroAssemblerBase; };
+#elif CPU(ARM64)
+#define TARGET_ASSEMBLER ARM64Assembler
+#define TARGET_MACROASSEMBLER MacroAssemblerARM64
+#include "MacroAssemblerARM64.h"
 
 #elif CPU(MIPS)
+#define TARGET_ASSEMBLER MIPSAssembler
+#define TARGET_MACROASSEMBLER MacroAssemblerMIPS
 #include "MacroAssemblerMIPS.h"
-namespace JSC {
-typedef MacroAssemblerMIPS MacroAssemblerBase;
-};
 
 #elif CPU(X86)
+#define TARGET_ASSEMBLER X86Assembler
+#define TARGET_MACROASSEMBLER MacroAssemblerX86
 #include "MacroAssemblerX86.h"
-namespace JSC { typedef MacroAssemblerX86 MacroAssemblerBase; };
 
 #elif CPU(X86_64)
+#define TARGET_ASSEMBLER X86Assembler
+#define TARGET_MACROASSEMBLER MacroAssemblerX86_64
 #include "MacroAssemblerX86_64.h"
-namespace JSC { typedef MacroAssemblerX86_64 MacroAssemblerBase; };
 
 #else
 #error "The MacroAssembler is not supported on this platform."
@@ -85,6 +90,8 @@ struct PrintRecord;
 typedef Vector<PrintRecord> PrintRecordList;
 
 } // namespace Printer
+
+using MacroAssemblerBase = TARGET_MACROASSEMBLER;
 
 class MacroAssembler : public MacroAssemblerBase {
 public:
@@ -130,7 +137,7 @@ public:
     using MacroAssemblerBase::and32;
     using MacroAssemblerBase::branchAdd32;
     using MacroAssemblerBase::branchMul32;
-#if CPU(ARM64) || CPU(ARM_THUMB2) || CPU(ARM_TRADITIONAL) || CPU(X86_64) || CPU(MIPS)
+#if CPU(ARM64) || CPU(ARM_THUMB2) || CPU(X86_64) || CPU(MIPS)
     using MacroAssemblerBase::branchPtr;
 #endif
     using MacroAssemblerBase::branchSub32;
@@ -295,6 +302,11 @@ public:
         storePtr(imm, addressForPoke(index));
     }
 
+    void poke(FPRegisterID src, int index = 0)
+    {
+        storeDouble(src, addressForPoke(index));
+    }
+
 #if !CPU(ARM64)
     void pushToSave(RegisterID src)
     {
@@ -336,14 +348,6 @@ public:
     void poke64(RegisterID src, int index = 0)
     {
         store64(src, addressForPoke(index));
-    }
-#endif
-    
-#if CPU(MIPS)
-    void poke(FPRegisterID src, int index = 0)
-    {
-        ASSERT(!(index & 1));
-        storeDouble(src, addressForPoke(index));
     }
 #endif
 
@@ -410,12 +414,12 @@ public:
     }
 
 #if !CPU(ARM_THUMB2) && !CPU(ARM64)
-    PatchableJump patchableBranchPtr(RelationalCondition cond, Address left, TrustedImmPtr right = TrustedImmPtr(0))
+    PatchableJump patchableBranchPtr(RelationalCondition cond, Address left, TrustedImmPtr right = TrustedImmPtr(nullptr))
     {
         return PatchableJump(branchPtr(cond, left, right));
     }
     
-    PatchableJump patchableBranchPtrWithPatch(RelationalCondition cond, Address left, DataLabelPtr& dataLabel, TrustedImmPtr initialRightValue = TrustedImmPtr(0))
+    PatchableJump patchableBranchPtrWithPatch(RelationalCondition cond, Address left, DataLabelPtr& dataLabel, TrustedImmPtr initialRightValue = TrustedImmPtr(nullptr))
     {
         return PatchableJump(branchPtrWithPatch(cond, left, dataLabel, initialRightValue));
     }
@@ -425,7 +429,6 @@ public:
         return PatchableJump(branch32WithPatch(cond, left, dataLabel, initialRightValue));
     }
 
-#if !CPU(ARM_TRADITIONAL)
     PatchableJump patchableJump()
     {
         return PatchableJump(jump());
@@ -441,11 +444,15 @@ public:
         return PatchableJump(branch32(cond, reg, imm));
     }
 
+    PatchableJump patchableBranch8(RelationalCondition cond, Address address, TrustedImm32 imm)
+    {
+        return PatchableJump(branch8(cond, address, imm));
+    }
+
     PatchableJump patchableBranch32(RelationalCondition cond, Address address, TrustedImm32 imm)
     {
         return PatchableJump(branch32(cond, address, imm));
     }
-#endif
 #endif
 
     void jump(Label target)
@@ -518,7 +525,13 @@ public:
         loadFloat(src, scratch);
         storeFloat(scratch, dest);
     }
-    
+
+    // Overload mostly for use in templates.
+    void move(FPRegisterID src, FPRegisterID dest)
+    {
+        moveDouble(src, dest);
+    }
+
     void moveDouble(Address src, Address dest, FPRegisterID scratch)
     {
         loadDouble(src, scratch);
@@ -1252,7 +1265,7 @@ public:
 
         // First off we'll special case common, "safe" values to avoid hurting
         // performance too much
-        uintptr_t value = imm.asTrustedImmPtr().asIntptr();
+        uint64_t value = imm.asTrustedImmPtr().asIntptr();
         switch (value) {
         case 0xffff:
         case 0xffffff:
@@ -1273,7 +1286,14 @@ public:
         if (!shouldConsiderBlinding())
             return false;
 
-        return shouldBlindPointerForSpecificArch(value);
+        return shouldBlindPointerForSpecificArch(static_cast<uintptr_t>(value));
+    }
+
+    uint8_t generateRotationSeed(size_t widthInBits)
+    {
+        // Generate the seed in [1, widthInBits - 1]. We should not generate widthInBits or 0
+        // since it leads to `<< widthInBits` or `>> widthInBits`, which cause undefined behaviors.
+        return (random() % (widthInBits - 1)) + 1;
     }
     
     struct RotatedImmPtr {
@@ -1288,7 +1308,7 @@ public:
     
     RotatedImmPtr rotationBlindConstant(ImmPtr imm)
     {
-        uint8_t rotation = random() % (sizeof(void*) * 8);
+        uint8_t rotation = generateRotationSeed(sizeof(void*) * 8);
         uintptr_t value = imm.asTrustedImmPtr().asIntptr();
         value = (value << rotation) | (value >> (sizeof(void*) * 8 - rotation));
         return RotatedImmPtr(value, rotation);
@@ -1356,7 +1376,7 @@ public:
     
     RotatedImm64 rotationBlindConstant(Imm64 imm)
     {
-        uint8_t rotation = random() % (sizeof(int64_t) * 8);
+        uint8_t rotation = generateRotationSeed(sizeof(int64_t) * 8);
         uint64_t value = imm.asTrustedImm64().m_value;
         value = (value << rotation) | (value >> (sizeof(int64_t) * 8 - rotation));
         return RotatedImm64(value, rotation);
@@ -1444,20 +1464,13 @@ public:
 
 #endif // !CPU(X86_64)
 
-#if ENABLE(B3_JIT)
+#if !CPU(X86) && !CPU(X86_64) && !CPU(ARM64)
     // We should implement this the right way eventually, but for now, it's fine because it arises so
     // infrequently.
     void compareDouble(DoubleCondition cond, FPRegisterID left, FPRegisterID right, RegisterID dest)
     {
         move(TrustedImm32(0), dest);
         Jump falseCase = branchDouble(invert(cond), left, right);
-        move(TrustedImm32(1), dest);
-        falseCase.link(this);
-    }
-    void compareFloat(DoubleCondition cond, FPRegisterID left, FPRegisterID right, RegisterID dest)
-    {
-        move(TrustedImm32(0), dest);
-        Jump falseCase = branchFloat(invert(cond), left, right);
         move(TrustedImm32(1), dest);
         falseCase.link(this);
     }
@@ -1546,7 +1559,7 @@ public:
     BlindedImm32 additionBlindedConstant(Imm32 imm)
     {
         // The addition immediate may be used as a pointer offset. Keep aligned based on "imm".
-        static uint32_t maskTable[4] = { 0xfffffffc, 0xffffffff, 0xfffffffe, 0xffffffff };
+        static const uint32_t maskTable[4] = { 0xfffffffc, 0xffffffff, 0xfffffffe, 0xffffffff };
 
         uint32_t baseValue = imm.asTrustedImm32().m_value;
         uint32_t key = keyForConstant(baseValue) & maskTable[baseValue & 3];
@@ -1891,6 +1904,15 @@ public:
         urshift32(src, trustedImm32ForShift(amount), dest);
     }
 
+    void mul32(TrustedImm32 imm, RegisterID src, RegisterID dest)
+    {
+        if (hasOneBitSet(imm.m_value)) {
+            lshift32(src, TrustedImm32(getLSBSet(imm.m_value)), dest);
+            return;
+        }
+        MacroAssemblerBase::mul32(imm, src, dest);
+    }
+
     // If the result jump is taken that means the assert passed.
     void jitAssert(const WTF::ScopedLambda<Jump(void)>&);
 
@@ -1946,7 +1968,7 @@ public:
     // MacroAssembler.
     void probe(Probe::Function, void* arg);
 
-    JS_EXPORT_PRIVATE void probe(std::function<void(Probe::Context&)>);
+    JS_EXPORT_PRIVATE void probe(Function<void(Probe::Context&)>);
 
     // Let's you print from your JIT generated code.
     // See comments in MacroAssemblerPrinter.h for examples of how to use this.
@@ -1982,8 +2004,8 @@ private:
     
 public:
     
-    enum RegisterID { NoRegister };
-    enum FPRegisterID { NoFPRegister };
+    enum RegisterID : int8_t { NoRegister, InvalidGPRReg = -1 };
+    enum FPRegisterID : int8_t { NoFPRegister, InvalidFPRReg = -1 };
 };
 
 } // namespace JSC

@@ -53,7 +53,7 @@ JSValue LazyJSValue::getValue(VM& vm) const
     case KnownStringImpl:
         return jsString(&vm, u.stringImpl);
     case NewStringImpl:
-        return jsString(&vm, AtomicStringImpl::add(u.stringImpl));
+        return jsString(&vm, AtomStringImpl::add(u.stringImpl));
     }
     RELEASE_ASSERT_NOT_REACHED();
     return JSValue();
@@ -250,7 +250,7 @@ void LazyJSValue::dumpInContext(PrintStream& out, DumpContext* context) const
     case SingleCharacterString:
         out.print("Lazy:SingleCharacterString(");
         out.printf("%04X", static_cast<unsigned>(character()));
-        out.print(" / ", StringImpl::utf8ForCharacters(&u.character, 1), ")");
+        out.print(" / ", StringImpl::utf8ForCharacters(&u.character, 1).value(), ")");
         return;
     case KnownStringImpl:
         out.print("Lazy:KnownString(", stringImpl(), ")");

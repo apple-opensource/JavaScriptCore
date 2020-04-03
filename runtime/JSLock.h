@@ -26,7 +26,7 @@
 #include <wtf/Noncopyable.h>
 #include <wtf/RefPtr.h>
 #include <wtf/Threading.h>
-#include <wtf/text/AtomicStringTable.h>
+#include <wtf/text/AtomStringTable.h>
 
 namespace JSC {
 
@@ -60,7 +60,7 @@ public:
     JS_EXPORT_PRIVATE GlobalJSLock();
     JS_EXPORT_PRIVATE ~GlobalJSLock();
 private:
-    static StaticLock s_sharedInstanceMutex;
+    static Lock s_sharedInstanceMutex;
 };
 
 class JSLockHolder {
@@ -70,9 +70,8 @@ public:
     JS_EXPORT_PRIVATE JSLockHolder(ExecState*);
 
     JS_EXPORT_PRIVATE ~JSLockHolder();
-private:
-    void init();
 
+private:
     RefPtr<VM> m_vm;
 };
 
@@ -92,11 +91,11 @@ public:
 
     VM* vm() { return m_vm; }
 
-    std::optional<RefPtr<Thread>> ownerThread() const
+    Optional<RefPtr<Thread>> ownerThread() const
     {
         if (m_hasOwnerThread)
             return m_ownerThread;
-        return std::nullopt;
+        return WTF::nullopt;
     }
     bool currentThreadIsHoldingLock() { return m_hasOwnerThread && m_ownerThread.get() == &Thread::current(); }
 
@@ -119,6 +118,13 @@ public:
         unsigned m_dropDepth;
     };
 
+    void makeWebThreadAware()
+    {
+        m_isWebThreadAware = true;
+    }
+
+    bool isWebThreadAware() const { return m_isWebThreadAware; }
+
 private:
     void lock(intptr_t lockCount);
     void unlock(intptr_t unlockCount);
@@ -130,6 +136,7 @@ private:
     void grabAllLocks(DropAllLocks*, unsigned lockCount);
 
     Lock m_lock;
+    bool m_isWebThreadAware { false };
     // We cannot make m_ownerThread an optional (instead of pairing it with an explicit
     // m_hasOwnerThread) because currentThreadIsHoldingLock() may be called from a
     // different thread, and an optional is vulnerable to races.
@@ -140,7 +147,7 @@ private:
     unsigned m_lockDropDepth;
     bool m_shouldReleaseHeapAccess;
     VM* m_vm;
-    AtomicStringTable* m_entryAtomicStringTable; 
+    AtomStringTable* m_entryAtomStringTable; 
 };
 
 } // namespace

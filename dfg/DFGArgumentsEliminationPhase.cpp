@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -128,7 +128,7 @@ private:
                 case NewArrayWithSpread: {
                     if (m_graph.isWatchingHavingABadTimeWatchpoint(node)) {
                         BitVector* bitVector = node->bitVector();
-                        // We only allow for Spreads to be of rest nodes for now.
+                        // We only allow for Spreads to be of CreateRest or NewArrayBuffer nodes for now.
                         bool isOK = true;
                         for (unsigned i = 0; i < node->numChildren(); i++) {
                             if (bitVector->get(i)) {
@@ -148,7 +148,7 @@ private:
                 }
 
                 case NewArrayBuffer: {
-                    if (m_graph.isWatchingHavingABadTimeWatchpoint(node) && !hasAnyArrayStorage(node->indexingType()))
+                    if (m_graph.isWatchingHavingABadTimeWatchpoint(node) && !hasAnyArrayStorage(node->indexingMode()))
                         m_candidates.add(node);
                     break;
                 }
@@ -252,7 +252,7 @@ private:
                 // If we're out-of-bounds then we proceed only if the prototype chain
                 // for the allocation is sane (i.e. doesn't have indexed properties).
                 JSGlobalObject* globalObject = m_graph.globalObjectFor(edge->origin.semantic);
-                Structure* objectPrototypeStructure = globalObject->objectPrototype()->structure();
+                Structure* objectPrototypeStructure = globalObject->objectPrototype()->structure(m_graph.m_vm);
                 if (objectPrototypeStructure->transitionWatchpointSetIsStillValid()
                     && globalObject->objectPrototypeIsSane()) {
                     m_graph.registerAndWatchStructureTransition(objectPrototypeStructure);
@@ -275,9 +275,9 @@ private:
                 // If we're out-of-bounds then we proceed only if the prototype chain
                 // for the allocation is sane (i.e. doesn't have indexed properties).
                 JSGlobalObject* globalObject = m_graph.globalObjectFor(edge->origin.semantic);
-                Structure* objectPrototypeStructure = globalObject->objectPrototype()->structure();
+                Structure* objectPrototypeStructure = globalObject->objectPrototype()->structure(m_graph.m_vm);
                 if (edge->op() == CreateRest) {
-                    Structure* arrayPrototypeStructure = globalObject->arrayPrototype()->structure();
+                    Structure* arrayPrototypeStructure = globalObject->arrayPrototype()->structure(m_graph.m_vm);
                     if (arrayPrototypeStructure->transitionWatchpointSetIsStillValid()
                         && objectPrototypeStructure->transitionWatchpointSetIsStillValid()
                         && globalObject->arrayPrototypeChainIsSane()) {
@@ -317,17 +317,16 @@ private:
                     escapeBasedOnArrayMode(node->arrayMode(), m_graph.varArgChild(node, 0), node);
                     escape(m_graph.varArgChild(node, 1), node);
                     escape(m_graph.varArgChild(node, 2), node);
-                    escape(m_graph.varArgChild(node, 3), node);
                     break;
 
                 case GetArrayLength:
-                    // FIXME: It would not be hard to support NewArrayWithSpread here if it is only over Spread(CreateRest) nodes.
                     escape(node->child2(), node);
+                    // Computing the length of a NewArrayWithSpread can require some additions.
+                    // These additions can overflow if the array is sufficiently enormous, and in that case we will need to exit.
+                    if ((node->child1()->op() == NewArrayWithSpread) && !node->origin.exitOK)
+                        escape(node->child1(), node);
                     break;
 
-                case GetArrayMask:
-                    break;
-                
                 case NewArrayWithSpread: {
                     BitVector* bitVector = node->bitVector();
                     bool isWatchingHavingABadTimeWatchpoint = m_graph.isWatchingHavingABadTimeWatchpoint(node); 
@@ -401,6 +400,12 @@ private:
                     // butterfly's child and check if it's a candidate.
                     break;
                     
+                case FilterGetByIdStatus:
+                case FilterPutByIdStatus:
+                case FilterCallLinkStatus:
+                case FilterInByIdStatus:
+                    break;
+
                 case CheckArray:
                     escapeBasedOnArrayMode(node->arrayMode(), node->child1(), node);
                     break;
@@ -430,9 +435,9 @@ private:
                         break;
                     case NewArrayBuffer: {
                         ASSERT(m_graph.isWatchingHavingABadTimeWatchpoint(target));
-                        IndexingType indexingType = target->indexingType();
-                        ASSERT(!hasAnyArrayStorage(indexingType));
-                        structure = globalObject->originalArrayStructureForIndexingType(indexingType);
+                        IndexingType indexingMode = target->indexingMode();
+                        ASSERT(!hasAnyArrayStorage(indexingMode));
+                        structure = globalObject->originalArrayStructureForIndexingType(indexingMode);
                         break;
                     }
                     default:
@@ -497,6 +502,33 @@ private:
             }
         }
         
+        using InlineCallFrames = HashSet<InlineCallFrame*, WTF::DefaultHash<InlineCallFrame*>::Hash, WTF::NullableHashTraits<InlineCallFrame*>>;
+        using InlineCallFramesForCanditates = HashMap<Node*, InlineCallFrames>;
+        InlineCallFramesForCanditates inlineCallFramesForCandidate;
+        auto forEachDependentNode = recursableLambda([&](auto self, Node* node, const auto& functor) -> void {
+            functor(node);
+
+            if (node->op() == Spread) {
+                self(node->child1().node(), functor);
+                return;
+            }
+
+            if (node->op() == NewArrayWithSpread) {
+                BitVector* bitVector = node->bitVector();
+                for (unsigned i = node->numChildren(); i--; ) {
+                    if (bitVector->get(i))
+                        self(m_graph.varArgChild(node, i).node(), functor);
+                }
+                return;
+            }
+        });
+        for (Node* candidate : m_candidates) {
+            auto& set = inlineCallFramesForCandidate.add(candidate, InlineCallFrames()).iterator->value;
+            forEachDependentNode(candidate, [&](Node* dependent) {
+                set.add(dependent->origin.semantic.inlineCallFrame());
+            });
+        }
+
         for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
             // Stop if we've already removed all candidates.
             if (m_candidates.isEmpty())
@@ -519,82 +551,97 @@ private:
                     if (!m_candidates.contains(candidate))
                         return;
                     
-                    // Check if this block has any clobbers that affect this candidate. This is a fairly
-                    // fast check.
-                    bool isClobberedByBlock = false;
-                    Operands<bool>& clobberedByThisBlock = clobberedByBlock[block];
-                    
-                    if (InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame) {
-                        if (inlineCallFrame->isVarargs()) {
-                            isClobberedByBlock |= clobberedByThisBlock.operand(
-                                inlineCallFrame->stackOffset + CallFrameSlot::argumentCount);
-                        }
+                    for (InlineCallFrame* inlineCallFrame : inlineCallFramesForCandidate.get(candidate)) {
+                        // Check if this block has any clobbers that affect this candidate. This is a fairly
+                        // fast check.
+                        bool isClobberedByBlock = false;
+                        Operands<bool>& clobberedByThisBlock = clobberedByBlock[block];
                         
-                        if (!isClobberedByBlock || inlineCallFrame->isClosureCall) {
-                            isClobberedByBlock |= clobberedByThisBlock.operand(
-                                inlineCallFrame->stackOffset + CallFrameSlot::callee);
-                        }
-                        
-                        if (!isClobberedByBlock) {
-                            for (unsigned i = 0; i < inlineCallFrame->argumentCountIncludingThis - 1; ++i) {
-                                VirtualRegister reg =
-                                    VirtualRegister(inlineCallFrame->stackOffset) +
-                                    CallFrame::argumentOffset(i);
-                                if (clobberedByThisBlock.operand(reg)) {
+                        if (inlineCallFrame) {
+                            if (inlineCallFrame->isVarargs()) {
+                                isClobberedByBlock |= clobberedByThisBlock.operand(
+                                    inlineCallFrame->stackOffset + CallFrameSlot::argumentCount);
+                            }
+
+                            if (!isClobberedByBlock || inlineCallFrame->isClosureCall) {
+                                isClobberedByBlock |= clobberedByThisBlock.operand(
+                                    inlineCallFrame->stackOffset + CallFrameSlot::callee);
+                            }
+
+                            if (!isClobberedByBlock) {
+                                for (unsigned i = 0; i < inlineCallFrame->argumentCountIncludingThis - 1; ++i) {
+                                    VirtualRegister reg =
+                                        VirtualRegister(inlineCallFrame->stackOffset) +
+                                        CallFrame::argumentOffset(i);
+                                    if (clobberedByThisBlock.operand(reg)) {
+                                        isClobberedByBlock = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            // We don't include the ArgumentCount or Callee in this case because we can be
+                            // damn sure that this won't be clobbered.
+                            for (unsigned i = 1; i < static_cast<unsigned>(codeBlock()->numParameters()); ++i) {
+                                if (clobberedByThisBlock.argument(i)) {
                                     isClobberedByBlock = true;
                                     break;
                                 }
                             }
                         }
-                    } else {
-                        // We don't include the ArgumentCount or Callee in this case because we can be
-                        // damn sure that this won't be clobbered.
-                        for (unsigned i = 1; i < static_cast<unsigned>(codeBlock()->numParameters()); ++i) {
-                            if (clobberedByThisBlock.argument(i)) {
-                                isClobberedByBlock = true;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if (!isClobberedByBlock)
-                        return;
-                    
-                    // Check if we can immediately eliminate this candidate. If the block has a clobber
-                    // for this arguments allocation, and we'd have to examine every node in the block,
-                    // then we can just eliminate the candidate.
-                    if (nodeIndex == block->size() && candidate->owner != block) {
-                        if (DFGArgumentsEliminationPhaseInternal::verbose)
-                            dataLog("eliminating candidate: ", candidate, " because it is clobbered by: ", block->at(nodeIndex), "\n");
-                        transitivelyRemoveCandidate(candidate);
-                        return;
-                    }
-                    
-                    // This loop considers all nodes up to the nodeIndex, excluding the nodeIndex.
-                    while (nodeIndex--) {
-                        Node* node = block->at(nodeIndex);
-                        if (node == candidate)
-                            break;
                         
-                        bool found = false;
-                        clobberize(
-                            m_graph, node, NoOpClobberize(),
-                            [&] (AbstractHeap heap) {
-                                if (heap.kind() == Stack && !heap.payload().isTop()) {
-                                    if (argumentsInvolveStackSlot(candidate, VirtualRegister(heap.payload().value32())))
-                                        found = true;
-                                    return;
-                                }
-                                if (heap.overlaps(Stack))
-                                    found = true;
-                            },
-                            NoOpClobberize());
+                        if (!isClobberedByBlock)
+                            continue;
                         
-                        if (found) {
+                        // Check if we can immediately eliminate this candidate. If the block has a clobber
+                        // for this arguments allocation, and we'd have to examine every node in the block,
+                        // then we can just eliminate the candidate.
+                        if (nodeIndex == block->size() && candidate->owner != block) {
                             if (DFGArgumentsEliminationPhaseInternal::verbose)
-                                dataLog("eliminating candidate: ", candidate, " because it is clobbered by ", block->at(nodeIndex), "\n");
+                                dataLog("eliminating candidate: ", candidate, " because it is clobbered by: ", block->at(nodeIndex), "\n");
                             transitivelyRemoveCandidate(candidate);
                             return;
+                        }
+
+                        // This loop considers all nodes up to the nodeIndex, excluding the nodeIndex.
+                        //
+                        // Note: nodeIndex here has a double meaning. Before entering this
+                        // while loop, it refers to the remaining number of nodes that have
+                        // yet to be processed. Inside the look, it refers to the index
+                        // of the current node to process (after we decrement it).
+                        //
+                        // If the remaining number of nodes is 0, we should not decrement nodeIndex.
+                        // Hence, we must only decrement nodeIndex inside the while loop instead of
+                        // in its condition statement. Note that this while loop is embedded in an
+                        // outer for loop. If we decrement nodeIndex in the condition statement, a
+                        // nodeIndex of 0 will become UINT_MAX, and the outer loop will wrongly
+                        // treat this as there being UINT_MAX remaining nodes to process.
+                        while (nodeIndex) {
+                            --nodeIndex;
+                            Node* node = block->at(nodeIndex);
+                            if (node == candidate)
+                                break;
+
+                            bool found = false;
+                            clobberize(
+                                m_graph, node, NoOpClobberize(),
+                                [&] (AbstractHeap heap) {
+                                    if (heap.kind() == Stack && !heap.payload().isTop()) {
+                                        if (argumentsInvolveStackSlot(inlineCallFrame, VirtualRegister(heap.payload().value32())))
+                                            found = true;
+                                        return;
+                                    }
+                                    if (heap.overlaps(Stack))
+                                        found = true;
+                                },
+                                NoOpClobberize());
+
+                            if (found) {
+                                if (DFGArgumentsEliminationPhaseInternal::verbose)
+                                    dataLog("eliminating candidate: ", candidate, " because it is clobbered by ", block->at(nodeIndex), "\n");
+                                transitivelyRemoveCandidate(candidate);
+                                return;
+                            }
                         }
                     }
                 });
@@ -619,9 +666,12 @@ private:
     
     void transform()
     {
-        InsertionSet insertionSet(m_graph);
+        bool modifiedCFG = false;
         
+        InsertionSet insertionSet(m_graph);
+
         for (BasicBlock* block : m_graph.blocksInPreOrder()) {
+            Node* pseudoTerminal = nullptr;
             for (unsigned nodeIndex = 0; nodeIndex < block->size(); ++nodeIndex) {
                 Node* node = block->at(nodeIndex);
                 
@@ -652,6 +702,12 @@ private:
                 case CreateRest:
                     if (!m_candidates.contains(node))
                         break;
+
+                    ASSERT(node->origin.exitOK);
+                    ASSERT(node->child1().useKind() == Int32Use);
+                    insertionSet.insertNode(
+                        nodeIndex, SpecNone, Check, node->origin,
+                        node->child1()); 
 
                     node->setOpAndDefaultFlags(PhantomCreateRest);
                     // We don't need this parameter for OSR exit, we can find out all the information
@@ -708,11 +764,7 @@ private:
                     if (!isEliminatedAllocation(candidate))
                         break;
 
-                    // FIXME: This should be an assert:
-                    // https://bugs.webkit.org/show_bug.cgi?id=182982
-                    if (node->child2()->op() != PhantomClonedArguments)
-                        break;
-
+                    ASSERT(candidate->op() == PhantomClonedArguments);
                     ASSERT(node->storageAccessData().offset == clonedArgumentsLengthPropertyOffset);
 
                     // Meh, this is kind of hackish - we use an Identity so that we can reuse the
@@ -730,20 +782,6 @@ private:
                     break;
                 }
 
-                case GetArrayMask: {
-                    Node* candidate = node->child1().node();
-                    if (!isEliminatedAllocation(candidate))
-                        break;
-                    
-                    // NOTE: This is valid because the only user of this node at the moment is GetByVal.
-                    // If the candidate is eliminated, it must also be eliminated for all GetByVal users.
-                    // Therefore, we'll transform those GetByVal nodes to no longer use us. If we introduce
-                    // other users of this node, we'll need to change this code. That would be easy: just
-                    // introduce a ComputeArrayMask node, and transform this into ComputeArrayMask(getArrayLength(candidate)).
-                    node->convertToConstant(m_graph.freeze(jsNumber(0)));
-                    break;
-                }
-                    
                 case GetByVal: {
                     // FIXME: For ClonedArguments, we would have already done a separate bounds check.
                     // This code will cause us to have two bounds checks - the original one that we
@@ -763,14 +801,14 @@ private:
                     Node* result = nullptr;
                     if (m_graph.varArgChild(node, 1)->isInt32Constant()) {
                         unsigned index = m_graph.varArgChild(node, 1)->asUInt32();
-                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                         index += numberOfArgumentsToSkip;
                         
-                        bool safeToGetStack;
+                        bool safeToGetStack = index >= numberOfArgumentsToSkip;
                         if (inlineCallFrame)
-                            safeToGetStack = index < inlineCallFrame->argumentCountIncludingThis - 1;
+                            safeToGetStack &= index < inlineCallFrame->argumentCountIncludingThis - 1;
                         else {
-                            safeToGetStack =
+                            safeToGetStack &=
                                 index < static_cast<unsigned>(codeBlock()->numParameters()) - 1;
                         }
                         if (safeToGetStack) {
@@ -780,14 +818,15 @@ private:
                                 arg += inlineCallFrame->stackOffset;
                             data = m_graph.m_stackAccessData.add(arg, FlushedJSValue);
                             
+                            Node* check = nullptr;
                             if (!inlineCallFrame || inlineCallFrame->isVarargs()) {
-                                insertionSet.insertNode(
+                                check = insertionSet.insertNode(
                                     nodeIndex, SpecNone, CheckInBounds, node->origin,
                                     m_graph.varArgChild(node, 1), Edge(getArrayLength(candidate), Int32Use));
                             }
                             
                             result = insertionSet.insertNode(
-                                nodeIndex, node->prediction(), GetStack, node->origin, OpInfo(data));
+                                nodeIndex, node->prediction(), GetStack, node->origin, OpInfo(data), Edge(check, UntypedUse));
                         }
                     }
                     
@@ -822,6 +861,9 @@ private:
                             nodeIndex, node->origin.withExitOK(canExit),
                             jsNumber(argumentCountIncludingThis));
                         insertionSet.insertNode(
+                            nodeIndex, SpecNone, KillStack, node->origin.takeValidExit(canExit),
+                            OpInfo(varargsData->count.offset()));
+                        insertionSet.insertNode(
                             nodeIndex, SpecNone, MovHint, node->origin.takeValidExit(canExit),
                             OpInfo(varargsData->count.offset()), Edge(argumentCountIncludingThisNode));
                         insertionSet.insertNode(
@@ -835,6 +877,8 @@ private:
                         StackAccessData* data =
                             m_graph.m_stackAccessData.add(reg, FlushedJSValue);
                         
+                        insertionSet.insertNode(
+                            nodeIndex, SpecNone, KillStack, node->origin.takeValidExit(canExit), OpInfo(reg.offset()));
                         insertionSet.insertNode(
                             nodeIndex, SpecNone, MovHint, node->origin.takeValidExit(canExit),
                             OpInfo(reg.offset()), Edge(value));
@@ -864,7 +908,7 @@ private:
                                 return true;
 
                             ASSERT(candidate->op() == PhantomCreateRest);
-                            InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                            InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                             return inlineCallFrame && !inlineCallFrame->isVarargs();
                         });
 
@@ -886,11 +930,11 @@ private:
                                 }
 
                                 if (candidate->op() == PhantomNewArrayBuffer)
-                                    return candidate->castOperand<JSFixedArray*>()->length();
+                                    return candidate->castOperand<JSImmutableButterfly*>()->length();
 
                                 ASSERT(candidate->op() == PhantomCreateRest);
                                 unsigned numberOfArgumentsToSkip = candidate->numberOfArgumentsToSkip();
-                                InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                                InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                                 unsigned frameArgumentCount = inlineCallFrame->argumentCountIncludingThis - 1;
                                 if (frameArgumentCount >= numberOfArgumentsToSkip)
                                     return frameArgumentCount - numberOfArgumentsToSkip;
@@ -923,8 +967,7 @@ private:
                                     }
 
                                     if (candidate->op() == PhantomNewArrayBuffer) {
-                                        bool canExit = true;
-                                        auto* array = candidate->castOperand<JSFixedArray*>();
+                                        auto* array = candidate->castOperand<JSImmutableButterfly*>();
                                         for (unsigned index = 0; index < array->length(); ++index) {
                                             JSValue constant;
                                             if (candidate->indexingType() == ArrayWithDouble)
@@ -939,7 +982,7 @@ private:
 
                                     ASSERT(candidate->op() == PhantomCreateRest);
                                     unsigned numberOfArgumentsToSkip = candidate->numberOfArgumentsToSkip();
-                                    InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                                    InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                                     unsigned frameArgumentCount = inlineCallFrame->argumentCountIncludingThis - 1;
                                     for (unsigned loadIndex = numberOfArgumentsToSkip; loadIndex < frameArgumentCount; ++loadIndex) {
                                         VirtualRegister reg = virtualRegisterForArgument(loadIndex + 1) + inlineCallFrame->stackOffset;
@@ -974,7 +1017,7 @@ private:
                             numberOfArgumentsToSkip = candidate->numberOfArgumentsToSkip();
                         varargsData->offset += numberOfArgumentsToSkip;
 
-                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
 
                         if (inlineCallFrame
                             && !inlineCallFrame->isVarargs()) {
@@ -1115,7 +1158,7 @@ private:
                                 return true;
 
                             ASSERT(candidate->op() == PhantomCreateRest);
-                            InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                            InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                             return inlineCallFrame && !inlineCallFrame->isVarargs();
                         });
 
@@ -1141,7 +1184,7 @@ private:
 
                                 if (candidate->op() == PhantomNewArrayBuffer) {
                                     bool canExit = true;
-                                    auto* array = candidate->castOperand<JSFixedArray*>();
+                                    auto* array = candidate->castOperand<JSImmutableButterfly*>();
                                     for (unsigned index = 0; index < array->length(); ++index) {
                                         JSValue constant;
                                         if (candidate->indexingType() == ArrayWithDouble)
@@ -1154,7 +1197,7 @@ private:
                                 }
 
                                 ASSERT(candidate->op() == PhantomCreateRest);
-                                InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                                InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                                 unsigned numberOfArgumentsToSkip = candidate->numberOfArgumentsToSkip();
                                 for (unsigned i = 1 + numberOfArgumentsToSkip; i < inlineCallFrame->argumentCountIncludingThis; ++i) {
                                     StackAccessData* data = m_graph.m_stackAccessData.add(
@@ -1179,7 +1222,7 @@ private:
                         CallVarargsData* varargsData = node->callVarargsData();
                         varargsData->firstVarArgOffset += numberOfArgumentsToSkip;
 
-                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame;
+                        InlineCallFrame* inlineCallFrame = candidate->origin.semantic.inlineCallFrame();
                         if (inlineCallFrame && !inlineCallFrame->isVarargs()) {
                             Vector<Node*> arguments;
                             for (unsigned i = 1 + varargsData->firstVarArgOffset; i < inlineCallFrame->argumentCountIncludingThis; ++i) {
@@ -1202,7 +1245,11 @@ private:
                 }
                     
                 case CheckArray:
-                case GetButterfly: {
+                case GetButterfly:
+                case FilterGetByIdStatus:
+                case FilterPutByIdStatus:
+                case FilterCallLinkStatus:
+                case FilterInByIdStatus: {
                     if (!isEliminatedAllocation(node->child1().node()))
                         break;
                     node->remove(m_graph);
@@ -1220,11 +1267,32 @@ private:
                 default:
                     break;
                 }
-                if (node->isPseudoTerminal())
+
+                if (node->isPseudoTerminal()) {
+                    pseudoTerminal = node;
                     break;
+                }
             }
-            
+
             insertionSet.execute(block);
+
+            if (pseudoTerminal) {
+                for (unsigned i = 0; i < block->size(); ++i) {
+                    Node* node = block->at(i);
+                    if (node != pseudoTerminal)
+                        continue;
+                    block->resize(i + 1);
+                    block->append(m_graph.addNode(SpecNone, Unreachable, node->origin));
+                    modifiedCFG = true;
+                    break;
+                }
+            }
+        }
+
+        if (modifiedCFG) {
+            m_graph.invalidateCFG();
+            m_graph.resetReachability();
+            m_graph.killUnreachableBlocks();
         }
     }
     

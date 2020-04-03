@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,7 +34,6 @@
 #include "MarkedBlockInlines.h"
 #include "PreventCollectionScope.h"
 #include "SubspaceInlines.h"
-#include "ThreadLocalCacheInlines.h"
 
 namespace JSC {
 
@@ -58,16 +57,6 @@ void* CompleteSubspace::allocate(VM& vm, size_t size, GCDeferralContext* deferra
     return allocateNonVirtual(vm, size, deferralContext, failureMode);
 }
 
-void* CompleteSubspace::allocateNonVirtual(VM& vm, size_t size, GCDeferralContext* deferralContext, AllocationFailureMode failureMode)
-{
-    Allocator allocator = allocatorForNonVirtual(size, AllocatorForMode::AllocatorIfExists);
-    return allocator.tryAllocate(
-        vm, deferralContext, failureMode,
-        [&] () {
-            return allocateSlow(vm, size, deferralContext, failureMode);
-        });
-}
-
 Allocator CompleteSubspace::allocatorForSlow(size_t size)
 {
     size_t index = MarkedSpace::sizeClassToIndex(size);
@@ -88,28 +77,39 @@ Allocator CompleteSubspace::allocatorForSlow(size_t size)
         return allocator;
 
     if (false)
-        dataLog("Creating marked allocator for ", m_name, ", ", m_attributes, ", ", sizeClass, ".\n");
+        dataLog("Creating BlockDirectory/LocalAllocator for ", m_name, ", ", attributes(), ", ", sizeClass, ".\n");
+    
     std::unique_ptr<BlockDirectory> uniqueDirectory =
         std::make_unique<BlockDirectory>(m_space.heap(), sizeClass);
     BlockDirectory* directory = uniqueDirectory.get();
     m_directories.append(WTFMove(uniqueDirectory));
+    
     directory->setSubspace(this);
     m_space.addBlockDirectory(locker, directory);
+    
+    std::unique_ptr<LocalAllocator> uniqueLocalAllocator =
+        std::make_unique<LocalAllocator>(directory);
+    LocalAllocator* localAllocator = uniqueLocalAllocator.get();
+    m_localAllocators.append(WTFMove(uniqueLocalAllocator));
+    
+    Allocator allocator(localAllocator);
+    
     index = MarkedSpace::sizeClassToIndex(sizeClass);
     for (;;) {
         if (MarkedSpace::s_sizeClassForSizeStep[index] != sizeClass)
             break;
 
-        m_allocatorForSizeStep[index] = directory->allocator();
+        m_allocatorForSizeStep[index] = allocator;
         
         if (!index--)
             break;
     }
+    
     directory->setNextDirectoryInSubspace(m_firstDirectory);
     m_alignedMemoryAllocator->registerDirectory(directory);
     WTF::storeStoreFence();
     m_firstDirectory = directory;
-    return directory->allocator();
+    return allocator;
 }
 
 void* CompleteSubspace::allocateSlow(VM& vm, size_t size, GCDeferralContext* deferralContext, AllocationFailureMode failureMode)
@@ -122,10 +122,13 @@ void* CompleteSubspace::allocateSlow(VM& vm, size_t size, GCDeferralContext* def
 
 void* CompleteSubspace::tryAllocateSlow(VM& vm, size_t size, GCDeferralContext* deferralContext)
 {
+    if (validateDFGDoesGC)
+        RELEASE_ASSERT(vm.heap.expectDoesGC());
+
     sanitizeStackForVM(&vm);
     
     if (Allocator allocator = allocatorFor(size, AllocatorForMode::EnsureAllocator))
-        return allocator.allocate(vm, deferralContext, AllocationFailureMode::ReturnNull);
+        return allocator.allocate(deferralContext, AllocationFailureMode::ReturnNull);
     
     if (size <= Options::largeAllocationCutoff()
         && size <= MarkedSpace::largeCutoff) {
@@ -137,16 +140,66 @@ void* CompleteSubspace::tryAllocateSlow(VM& vm, size_t size, GCDeferralContext* 
     vm.heap.collectIfNecessaryOrDefer(deferralContext);
     
     size = WTF::roundUpToMultipleOf<MarkedSpace::sizeStep>(size);
-    LargeAllocation* allocation = LargeAllocation::tryCreate(vm.heap, size, this);
+    LargeAllocation* allocation = LargeAllocation::tryCreate(vm.heap, size, this, m_space.m_largeAllocations.size());
     if (!allocation)
         return nullptr;
     
     m_space.m_largeAllocations.append(allocation);
+    ASSERT(allocation->indexInSpace() == m_space.m_largeAllocations.size() - 1);
     vm.heap.didAllocate(size);
     m_space.m_capacity += size;
     
     m_largeAllocations.append(allocation);
         
+    return allocation->cell();
+}
+
+void* CompleteSubspace::reallocateLargeAllocationNonVirtual(VM& vm, HeapCell* oldCell, size_t size, GCDeferralContext* deferralContext, AllocationFailureMode failureMode)
+{
+    if (validateDFGDoesGC)
+        RELEASE_ASSERT(vm.heap.expectDoesGC());
+
+    // The following conditions are met in Butterfly for example.
+    ASSERT(oldCell->isLargeAllocation());
+
+    LargeAllocation* oldAllocation = &oldCell->largeAllocation();
+    ASSERT(oldAllocation->cellSize() <= size);
+    ASSERT(oldAllocation->weakSet().isTriviallyDestructible());
+    ASSERT(oldAllocation->attributes().destruction == DoesNotNeedDestruction);
+    ASSERT(oldAllocation->attributes().cellKind == HeapCell::Auxiliary);
+    ASSERT(size > MarkedSpace::largeCutoff);
+
+    sanitizeStackForVM(&vm);
+
+    if (size <= Options::largeAllocationCutoff()
+        && size <= MarkedSpace::largeCutoff) {
+        dataLog("FATAL: attampting to allocate small object using large allocation.\n");
+        dataLog("Requested allocation size: ", size, "\n");
+        RELEASE_ASSERT_NOT_REACHED();
+    }
+
+    vm.heap.collectIfNecessaryOrDefer(deferralContext);
+
+    size = WTF::roundUpToMultipleOf<MarkedSpace::sizeStep>(size);
+    size_t difference = size - oldAllocation->cellSize();
+    unsigned oldIndexInSpace = oldAllocation->indexInSpace();
+    if (oldAllocation->isOnList())
+        oldAllocation->remove();
+
+    LargeAllocation* allocation = oldAllocation->tryReallocate(size, this);
+    if (!allocation) {
+        RELEASE_ASSERT(failureMode != AllocationFailureMode::Assert);
+        m_largeAllocations.append(oldAllocation);
+        return nullptr;
+    }
+    ASSERT(oldIndexInSpace == allocation->indexInSpace());
+
+    m_space.m_largeAllocations[oldIndexInSpace] = allocation;
+    vm.heap.didAllocate(difference);
+    m_space.m_capacity += difference;
+
+    m_largeAllocations.append(allocation);
+
     return allocation->cell();
 }
 

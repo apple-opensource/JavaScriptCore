@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +37,7 @@
 #include "JSObject.h"
 #include "JSString.h"
 #include "JSCInlines.h"
+#include "MarkedBlockInlines.h"
 #include "MarkingConstraintSolver.h"
 #include "SlotVisitorInlines.h"
 #include "StopIfNecessaryTimer.h"
@@ -44,6 +45,7 @@
 #include "VM.h"
 #include <wtf/ListDump.h>
 #include <wtf/Lock.h>
+#include <wtf/StdLibExtras.h>
 
 namespace JSC {
 
@@ -99,8 +101,17 @@ SlotVisitor::~SlotVisitor()
 
 void SlotVisitor::didStartMarking()
 {
-    if (heap()->collectionScope() == CollectionScope::Eden)
-        reset();
+    auto scope = heap()->collectionScope();
+    if (scope) {
+        switch (*scope) {
+        case CollectionScope::Eden:
+            reset();
+            break;
+        case CollectionScope::Full:
+            m_extraMemorySize = 0;
+            break;
+        }
+    }
 
     if (HeapProfiler* heapProfiler = vm().heapProfiler())
         m_heapSnapshotBuilder = heapProfiler->activeSnapshotBuilder();
@@ -125,7 +136,7 @@ void SlotVisitor::clearMarkStacks()
         });
 }
 
-void SlotVisitor::append(ConservativeRoots& conservativeRoots)
+void SlotVisitor::append(const ConservativeRoots& conservativeRoots)
 {
     HeapCell** roots = conservativeRoots.roots();
     size_t size = conservativeRoots.size();
@@ -189,21 +200,22 @@ void SlotVisitor::appendJSCellOrAuxiliary(HeapCell* heapCell)
         
 #if USE(JSVALUE64)
         // This detects the worst of the badness.
-        if (structureID >= heap()->structureIDTable().size())
-            die("GC scan found corrupt object: structureID is out of bounds!\n");
+        if (!heap()->structureIDTable().isValid(structureID))
+            die("GC scan found corrupt object: structureID is invalid!\n");
 #endif
     };
     
     // In debug mode, we validate before marking since this makes it clearer what the problem
     // was. It's also slower, so we don't do it normally.
-    if (!ASSERT_DISABLED && heapCell->cellKind() == HeapCell::JSCell)
+    if (!ASSERT_DISABLED && isJSCellKind(heapCell->cellKind()))
         validateCell(static_cast<JSCell*>(heapCell));
     
     if (Heap::testAndSetMarked(m_markingVersion, heapCell))
         return;
     
     switch (heapCell->cellKind()) {
-    case HeapCell::JSCell: {
+    case HeapCell::JSCell:
+    case HeapCell::JSCellWithInteriorPointers: {
         // We have ample budget to perform validation here.
     
         JSCell* jsCell = static_cast<JSCell*>(heapCell);
@@ -224,7 +236,7 @@ void SlotVisitor::appendJSCellOrAuxiliary(HeapCell* heapCell)
 void SlotVisitor::appendSlow(JSCell* cell, Dependency dependency)
 {
     if (UNLIKELY(m_heapSnapshotBuilder))
-        m_heapSnapshotBuilder->appendEdge(m_currentCell, cell);
+        m_heapSnapshotBuilder->appendEdge(m_currentCell, cell, m_rootMarkReason);
     
     appendHiddenSlowImpl(cell, dependency);
 }
@@ -275,9 +287,15 @@ void SlotVisitor::appendToMarkStack(JSCell* cell)
 template<typename ContainerType>
 ALWAYS_INLINE void SlotVisitor::appendToMarkStack(ContainerType& container, JSCell* cell)
 {
-    ASSERT(Heap::isMarked(cell));
+    ASSERT(m_heap.isMarked(cell));
+#if CPU(X86_64)
+    if (Options::dumpZappedCellCrashData()) {
+        if (UNLIKELY(cell->isZapped()))
+            reportZappedCellAndCrash(cell);
+    }
+#endif
     ASSERT(!cell->isZapped());
-    
+
     container.noteMarked();
     
     m_visitCount++;
@@ -344,7 +362,7 @@ private:
 
 ALWAYS_INLINE void SlotVisitor::visitChildren(const JSCell* cell)
 {
-    ASSERT(Heap::isMarked(cell));
+    ASSERT(m_heap.isMarked(cell));
     
     SetCurrentCellScope currentCellScope(*this, cell);
     
@@ -380,6 +398,17 @@ ALWAYS_INLINE void SlotVisitor::visitChildren(const JSCell* cell)
     default:
         // FIXME: This could be so much better.
         // https://bugs.webkit.org/show_bug.cgi?id=162462
+#if CPU(X86_64)
+        if (Options::dumpZappedCellCrashData()) {
+            Structure* structure = cell->structure(vm());
+            if (LIKELY(structure)) {
+                const MethodTable* methodTable = &structure->classInfo()->methodTable;
+                methodTable->visitChildren(const_cast<JSCell*>(cell), *this);
+                break;
+            }
+            reportZappedCellAndCrash(const_cast<JSCell*>(cell));
+        }
+#endif
         cell->methodTable(vm())->visitChildren(const_cast<JSCell*>(cell), *this);
         break;
     }
@@ -394,6 +423,17 @@ void SlotVisitor::visitAsConstraint(const JSCell* cell)
 {
     m_isFirstVisit = false;
     visitChildren(cell);
+}
+
+inline void SlotVisitor::propagateExternalMemoryVisitedIfNecessary()
+{
+    if (m_isFirstVisit) {
+        if (m_extraMemorySize.hasOverflowed())
+            heap()->reportExtraMemoryVisited(std::numeric_limits<size_t>::max());
+        else if (m_extraMemorySize)
+            heap()->reportExtraMemoryVisited(m_extraMemorySize.unsafeGet());
+        m_extraMemorySize = 0;
+    }
 }
 
 void SlotVisitor::donateKnownParallel(MarkStackArray& from, MarkStackArray& to)
@@ -482,6 +522,7 @@ NEVER_INLINE void SlotVisitor::drain(MonotonicTime timeout)
                     visitChildren(stack.removeLast());
                 return IterationStatus::Done;
             });
+        propagateExternalMemoryVisitedIfNecessary();
         if (status == IterationStatus::Continue)
             break;
         
@@ -538,6 +579,7 @@ size_t SlotVisitor::performIncrementOfDraining(size_t bytesRequested)
                     }
                     return IterationStatus::Done;
                 });
+            propagateExternalMemoryVisitedIfNecessary();
             if (status == IterationStatus::Continue)
                 break;
             m_rightToRun.safepoint();
@@ -753,16 +795,6 @@ void SlotVisitor::donateAndDrain(MonotonicTime timeout)
     drain(timeout);
 }
 
-void SlotVisitor::addWeakReferenceHarvester(WeakReferenceHarvester* weakReferenceHarvester)
-{
-    m_heap.m_weakReferenceHarvesters.addThreadSafe(weakReferenceHarvester);
-}
-
-void SlotVisitor::addUnconditionalFinalizer(UnconditionalFinalizer* unconditionalFinalizer)
-{
-    m_heap.m_unconditionalFinalizers.addThreadSafe(unconditionalFinalizer);
-}
-
 void SlotVisitor::didRace(const VisitRaceKey& race)
 {
     if (Options::verboseVisitRace())
@@ -795,5 +827,47 @@ void SlotVisitor::addParallelConstraintTask(RefPtr<SharedTask<void(SlotVisitor&)
     
     m_currentSolver->addParallelTask(task, *m_currentConstraint);
 }
+
+#if CPU(X86_64)
+NEVER_INLINE NO_RETURN_DUE_TO_CRASH NOT_TAIL_CALLED void SlotVisitor::reportZappedCellAndCrash(JSCell* cell)
+{
+    MarkedBlock::Handle* foundBlockHandle = nullptr;
+    uint64_t* cellWords = reinterpret_cast_ptr<uint64_t*>(cell);
+
+    uintptr_t cellAddress = bitwise_cast<uintptr_t>(cell);
+    uint64_t headerWord = cellWords[0];
+    uint64_t zapReasonAndMore = cellWords[1];
+    unsigned subspaceHash = 0;
+    size_t cellSize = 0;
+
+    m_heap.objectSpace().forEachBlock([&] (MarkedBlock::Handle* blockHandle) {
+        if (blockHandle->contains(cell)) {
+            foundBlockHandle = blockHandle;
+            return IterationStatus::Done;
+        }
+        return IterationStatus::Continue;
+    });
+
+    uint64_t variousState = 0;
+    MarkedBlock* foundBlock = nullptr;
+    if (foundBlockHandle) {
+        foundBlock = &foundBlockHandle->block();
+        subspaceHash = StringHasher::computeHash(foundBlockHandle->subspace()->name());
+        cellSize = foundBlockHandle->cellSize();
+
+        variousState |= static_cast<uint64_t>(foundBlockHandle->isFreeListed()) << 0;
+        variousState |= static_cast<uint64_t>(foundBlockHandle->isAllocated()) << 1;
+        variousState |= static_cast<uint64_t>(foundBlockHandle->isEmpty()) << 2;
+        variousState |= static_cast<uint64_t>(foundBlockHandle->needsDestruction()) << 3;
+        variousState |= static_cast<uint64_t>(foundBlock->isNewlyAllocated(cell)) << 4;
+
+        ptrdiff_t cellOffset = cellAddress - reinterpret_cast<uint64_t>(foundBlockHandle->start());
+        bool cellIsProperlyAligned = !(cellOffset % cellSize);
+        variousState |= static_cast<uint64_t>(cellIsProperlyAligned) << 5;
+    }
+
+    CRASH_WITH_INFO(cellAddress, headerWord, zapReasonAndMore, subspaceHash, cellSize, reinterpret_cast<uint64_t>(foundBlock), variousState);
+}
+#endif // PLATFORM(MAC)
 
 } // namespace JSC

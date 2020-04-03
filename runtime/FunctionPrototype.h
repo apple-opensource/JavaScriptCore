@@ -24,7 +24,7 @@
 
 namespace JSC {
 
-class FunctionPrototype : public InternalFunction {
+class FunctionPrototype final : public InternalFunction {
 public:
     typedef InternalFunction Base;
 
@@ -35,9 +35,9 @@ public:
         return prototype;
     }
 
-    void addFunctionProperties(ExecState*, JSGlobalObject*, JSFunction** callFunction, JSFunction** applyFunction, JSFunction** hasInstanceSymbolFunction);
+    void addFunctionProperties(VM&, JSGlobalObject*, JSFunction** callFunction, JSFunction** applyFunction, JSFunction** hasInstanceSymbolFunction);
 
-    void initRestrictedProperties(ExecState*, JSGlobalObject*);
+    void initRestrictedProperties(VM&, JSGlobalObject*);
 
     static Structure* createStructure(VM& vm, JSGlobalObject* globalObject, JSValue proto)
     {

@@ -27,7 +27,7 @@
 
 #include "ConcurrentJSLock.h"
 #include "IsoSubspace.h"
-#include "JSCell.h"
+#include "JSCast.h"
 #include "VM.h"
 
 namespace JSC {
@@ -35,12 +35,12 @@ namespace JSC {
 class CodeBlock;
 class LLIntOffsetsExtractor;
 
-class ExecutableToCodeBlockEdge : public JSCell {
+class ExecutableToCodeBlockEdge final : public JSCell {
 public:
     typedef JSCell Base;
     static const unsigned StructureFlags = Base::StructureFlags | StructureIsImmortal;
 
-    template<typename CellType>
+    template<typename CellType, SubspaceAccess>
     static IsoSubspace* subspaceFor(VM& vm)
     {
         return &vm.executableToCodeBlockEdgeSpace;
@@ -57,9 +57,6 @@ public:
     static void visitChildren(JSCell*, SlotVisitor&);
     static void visitOutputConstraints(JSCell*, SlotVisitor&);
     void finalizeUnconditionally(VM&);
-    
-    void activate();
-    void deactivate();
     
     static CodeBlock* unwrap(ExecutableToCodeBlockEdge* edge)
     {
@@ -78,11 +75,16 @@ private:
     friend class LLIntOffsetsExtractor;
 
     ExecutableToCodeBlockEdge(VM&, CodeBlock*);
+
+    void finishCreation(VM&);
+
+    void activate();
+    void deactivate();
+    bool isActive() const;
     
     void runConstraint(const ConcurrentJSLocker&, VM&, SlotVisitor&);
     
     WriteBarrier<CodeBlock> m_codeBlock;
-    bool m_isActive { false };
 };
 
 } // namespace JSC

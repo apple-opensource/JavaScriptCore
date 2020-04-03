@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2009-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,20 +26,20 @@
 #pragma once
 
 #include "ExecutableToCodeBlockEdge.h"
-#include "ScriptExecutable.h"
+#include "GlobalExecutable.h"
 
 namespace JSC {
 
-class ModuleProgramExecutable final : public ScriptExecutable {
+class ModuleProgramExecutable final : public GlobalExecutable {
     friend class LLIntOffsetsExtractor;
 public:
-    typedef ScriptExecutable Base;
+    using Base = GlobalExecutable;
     static const unsigned StructureFlags = Base::StructureFlags | StructureIsImmortal;
 
-    template<typename CellType>
+    template<typename CellType, SubspaceAccess mode>
     static IsoSubspace* subspaceFor(VM& vm)
     {
-        return &vm.moduleProgramExecutableSpace;
+        return vm.moduleProgramExecutableSpace<mode>();
     }
 
     static ModuleProgramExecutable* create(ExecState*, const SourceCode&);
@@ -69,6 +69,8 @@ public:
 
     SymbolTable* moduleEnvironmentSymbolTable() { return m_moduleEnvironmentSymbolTable.get(); }
 
+    TemplateObjectMap& ensureTemplateObjectMap(VM&);
+
 private:
     friend class ExecutableBase;
     friend class ScriptExecutable;
@@ -80,6 +82,7 @@ private:
     WriteBarrier<UnlinkedModuleProgramCodeBlock> m_unlinkedModuleProgramCodeBlock;
     WriteBarrier<SymbolTable> m_moduleEnvironmentSymbolTable;
     WriteBarrier<ExecutableToCodeBlockEdge> m_moduleProgramCodeBlock;
+    std::unique_ptr<TemplateObjectMap> m_templateObjectMap;
 };
 
 } // namespace JSC

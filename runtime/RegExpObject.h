@@ -27,10 +27,12 @@
 
 namespace JSC {
     
-class RegExpObject : public JSNonFinalObject {
+class RegExpObject final : public JSNonFinalObject {
 public:
-    typedef JSNonFinalObject Base;
+    using Base = JSNonFinalObject;
     static const unsigned StructureFlags = Base::StructureFlags | OverridesGetOwnPropertySlot | OverridesGetPropertyNames;
+
+    static constexpr uintptr_t lastIndexIsNotWritableFlag = 1;
 
     static RegExpObject* create(VM& vm, Structure* structure, RegExp* regExp)
     {
@@ -39,19 +41,35 @@ public:
         return object;
     }
 
-    void setRegExp(VM& vm, RegExp* r) { m_regExp.set(vm, this, r); }
-    RegExp* regExp() const { return m_regExp.get(); }
+    static RegExpObject* create(VM& vm, Structure* structure, RegExp* regExp, JSValue lastIndex)
+    {
+        auto* object = create(vm, structure, regExp);
+        object->m_lastIndex.set(vm, object, lastIndex);
+        return object;
+    }
+
+    void setRegExp(VM& vm, RegExp* regExp)
+    {
+        uintptr_t result = (m_regExpAndLastIndexIsNotWritableFlag & lastIndexIsNotWritableFlag) | bitwise_cast<uintptr_t>(regExp);
+        m_regExpAndLastIndexIsNotWritableFlag = result;
+        vm.heap.writeBarrier(this, regExp);
+    }
+
+    RegExp* regExp() const
+    {
+        return bitwise_cast<RegExp*>(m_regExpAndLastIndexIsNotWritableFlag & (~lastIndexIsNotWritableFlag));
+    }
 
     bool setLastIndex(ExecState* exec, size_t lastIndex)
     {
         VM& vm = exec->vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
 
-        if (LIKELY(m_lastIndexIsWritable)) {
+        if (LIKELY(lastIndexIsWritable())) {
             m_lastIndex.setWithoutWriteBarrier(jsNumber(lastIndex));
             return true;
         }
-        throwTypeError(exec, scope, ASCIILiteral(ReadonlyPropertyWriteError));
+        throwTypeError(exec, scope, ReadonlyPropertyWriteError);
         return false;
     }
     bool setLastIndex(ExecState* exec, JSValue lastIndex, bool shouldThrow)
@@ -59,12 +77,11 @@ public:
         VM& vm = exec->vm();
         auto scope = DECLARE_THROW_SCOPE(vm);
 
-        if (LIKELY(m_lastIndexIsWritable)) {
+        if (LIKELY(lastIndexIsWritable())) {
             m_lastIndex.set(vm, this, lastIndex);
             return true;
         }
-
-        return typeError(exec, scope, shouldThrow, ASCIILiteral(ReadonlyPropertyWriteError));
+        return typeError(exec, scope, shouldThrow, ReadonlyPropertyWriteError);
     }
     JSValue getLastIndex() const
     {
@@ -88,19 +105,14 @@ public:
         return Structure::create(vm, globalObject, prototype, TypeInfo(RegExpObjectType, StructureFlags), info());
     }
 
-    static ptrdiff_t offsetOfRegExp()
+    static ptrdiff_t offsetOfRegExpAndLastIndexIsNotWritableFlag()
     {
-        return OBJECT_OFFSETOF(RegExpObject, m_regExp);
+        return OBJECT_OFFSETOF(RegExpObject, m_regExpAndLastIndexIsNotWritableFlag);
     }
 
     static ptrdiff_t offsetOfLastIndex()
     {
         return OBJECT_OFFSETOF(RegExpObject, m_lastIndex);
-    }
-
-    static ptrdiff_t offsetOfLastIndexIsWritable()
-    {
-        return OBJECT_OFFSETOF(RegExpObject, m_lastIndexIsWritable);
     }
 
     static size_t allocationSize(Checked<size_t> inlineCapacity)
@@ -109,13 +121,21 @@ public:
         return sizeof(RegExpObject);
     }
 
-    static unsigned advanceStringUnicode(String, unsigned length, unsigned currentIndex);
-
 protected:
     JS_EXPORT_PRIVATE RegExpObject(VM&, Structure*, RegExp*);
     JS_EXPORT_PRIVATE void finishCreation(VM&);
 
     static void visitChildren(JSCell*, SlotVisitor&);
+
+    bool lastIndexIsWritable() const
+    {
+        return !(m_regExpAndLastIndexIsNotWritableFlag & lastIndexIsNotWritableFlag);
+    }
+
+    void setLastIndexIsNotWritable()
+    {
+        m_regExpAndLastIndexIsNotWritableFlag = (m_regExpAndLastIndexIsNotWritableFlag | lastIndexIsNotWritableFlag);
+    }
 
     JS_EXPORT_PRIVATE static bool deleteProperty(JSCell*, ExecState*, PropertyName);
     JS_EXPORT_PRIVATE static void getOwnNonIndexPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
@@ -126,17 +146,8 @@ protected:
 private:
     MatchResult matchInline(ExecState*, JSGlobalObject*, JSString*);
 
-    WriteBarrier<RegExp> m_regExp;
+    uintptr_t m_regExpAndLastIndexIsNotWritableFlag { 0 };
     WriteBarrier<Unknown> m_lastIndex;
-    uint8_t m_lastIndexIsWritable;
 };
-
-RegExpObject* asRegExpObject(JSValue);
-
-inline RegExpObject* asRegExpObject(JSValue value)
-{
-    ASSERT(asObject(value)->inherits(*value.getObject()->vm(), RegExpObject::info()));
-    return static_cast<RegExpObject*>(asObject(value));
-}
 
 } // namespace JSC

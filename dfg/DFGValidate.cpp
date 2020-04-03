@@ -254,6 +254,11 @@ public:
                     break;
                 case MakeRope:
                 case ValueAdd:
+                case ValueSub:
+                case ValueMul:
+                case ValueDiv:
+                case ValueMod:
+                case ValuePow:
                 case ArithAdd:
                 case ArithSub:
                 case ArithMul:
@@ -271,6 +276,7 @@ public:
                 case CompareBelowEq:
                 case CompareEq:
                 case CompareStrictEq:
+                case SameValue:
                 case StrCat:
                     VALIDATE((node), !!node->child1());
                     VALIDATE((node), !!node->child2());
@@ -351,6 +357,12 @@ public:
                         VALIDATE((node), inlineCallFrame->isVarargs());
                     break;
                 }
+                case NewArray:
+                    VALIDATE((node), node->vectorLengthHint() >= node->numChildren());
+                    break;
+                case NewArrayBuffer:
+                    VALIDATE((node), node->vectorLengthHint() >= node->castOperand<JSImmutableButterfly*>()->length());
+                    break;
                 default:
                     break;
                 }
@@ -370,8 +382,8 @@ public:
 
         // Validate clobbered states.
         struct DefLambdaAdaptor {
-            std::function<void(PureValue)> pureValue;
-            std::function<void(HeapLocation, LazyNode)> locationAndNode;
+            Function<void(PureValue)> pureValue;
+            Function<void(HeapLocation, LazyNode)> locationAndNode;
 
             void operator()(PureValue value) const
             {
@@ -407,6 +419,14 @@ public:
                         }
                 });
             }
+        }
+
+        for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
+            // We expect the predecessor list to be de-duplicated.
+            HashSet<BasicBlock*> predecessors;
+            for (BasicBlock* predecessor : block->predecessors)
+                predecessors.add(predecessor);
+            VALIDATE((block), predecessors.size() == block->predecessors.size());
         }
     }
     
@@ -475,8 +495,8 @@ private:
                     VALIDATE(
                         (node, edge),
                         edge->op() == SetLocal
-                        || edge->op() == SetArgument
-                        || edge->op() == Flush
+                        || edge->op() == SetArgumentDefinitely
+                        || edge->op() == SetArgumentMaybe
                         || edge->op() == Phi);
                     
                     if (phisInThisBlock.contains(edge.node()))
@@ -486,8 +506,8 @@ private:
                         VALIDATE(
                             (node, edge),
                             edge->op() == SetLocal
-                            || edge->op() == SetArgument
-                            || edge->op() == Flush);
+                            || edge->op() == SetArgumentDefinitely
+                            || edge->op() == SetArgumentMaybe);
                         
                         continue;
                     }
@@ -518,7 +538,8 @@ private:
                         VALIDATE(
                             (local, block->predecessors[k], prevNode),
                             prevNode->op() == SetLocal
-                            || prevNode->op() == SetArgument
+                            || prevNode->op() == SetArgumentDefinitely
+                            || prevNode->op() == SetArgumentMaybe
                             || prevNode->op() == Phi);
                         if (prevNode == edge.node()) {
                             found = true;
@@ -587,6 +608,7 @@ private:
                 case PhantomNewAsyncFunction:
                 case PhantomNewAsyncGeneratorFunction:
                 case PhantomCreateActivation:
+                case PhantomNewRegexp:
                 case GetMyArgumentByVal:
                 case GetMyArgumentByValOutOfBounds:
                 case PutHint:
@@ -647,6 +669,7 @@ private:
                     if (m_graph.m_form == ThreadedCPS) {
                         VALIDATE((node, block), getLocalPositions.operand(node->local()) == notSet);
                         VALIDATE((node, block), !!node->child1());
+                        VALIDATE((node, block), node->child1()->op() == SetArgumentDefinitely || node->child1()->op() == Phi);
                     }
                     getLocalPositions.operand(node->local()) = i;
                     break;
@@ -657,11 +680,25 @@ private:
                         break;
                     setLocalPositions.operand(node->local()) = i;
                     break;
-                case SetArgument:
+                case SetArgumentDefinitely:
                     // This acts like a reset. It's ok to have a second GetLocal for a local in the same
-                    // block if we had a SetArgument for that local.
+                    // block if we had a SetArgumentDefinitely for that local.
                     getLocalPositions.operand(node->local()) = notSet;
                     setLocalPositions.operand(node->local()) = notSet;
+                    break;
+                case SetArgumentMaybe:
+                    break;
+                case Flush:
+                case PhantomLocal:
+                    if (m_graph.m_form == ThreadedCPS) {
+                        VALIDATE((node, block), 
+                            node->child1()->op() == Phi
+                            || node->child1()->op() == SetLocal
+                            || node->child1()->op() == SetArgumentDefinitely
+                            || node->child1()->op() == SetArgumentMaybe);
+                        if (node->op() == PhantomLocal)
+                            VALIDATE((node, block), node->child1()->op() != SetArgumentMaybe);
+                    }
                     break;
                 default:
                     break;
@@ -678,6 +715,52 @@ private:
             for (size_t i = 0; i < block->variablesAtHead.numberOfLocals(); ++i) {
                 checkOperand(
                     block, getLocalPositions, setLocalPositions, virtualRegisterForLocal(i));
+            }
+        }
+
+        if (m_graph.m_form == ThreadedCPS) {
+            Vector<Node*> worklist;
+            HashSet<Node*> seen;
+            for (BasicBlock* block : m_graph.blocksInNaturalOrder()) {
+                for (Node* node : *block) {
+                    if (node->op() == GetLocal || node->op() == PhantomLocal) {
+                        worklist.append(node);
+                        auto addResult = seen.add(node);
+                        VALIDATE((node, block), addResult.isNewEntry);
+                    }
+                }
+            }
+
+            while (worklist.size()) {
+                Node* node = worklist.takeLast();
+                switch (node->op()) {
+                case PhantomLocal:
+                case GetLocal: {
+                    Node* child = node->child1().node();
+                    if (seen.add(child).isNewEntry)
+                        worklist.append(child);
+                    break;
+                }
+                case Phi: {
+                    for (unsigned i = 0; i < m_graph.numChildren(node); ++i) {
+                        Edge edge = m_graph.child(node, i);
+                        if (!edge)
+                            continue;
+                        if (seen.add(edge.node()).isNewEntry)
+                            worklist.append(edge.node());
+                    }
+                    break;
+                }
+                case SetLocal:
+                case SetArgumentDefinitely:
+                    break;
+                case SetArgumentMaybe:
+                    VALIDATE((node), !"Should not reach SetArgumentMaybe. GetLocal that has data flow that reaches a SetArgumentMaybe is invalid IR.");
+                    break;
+                default:
+                    VALIDATE((node), !"Unexecpted node type.");
+                    break;
+                }
             }
         }
     }
@@ -720,7 +803,8 @@ private:
                     
                 case GetLocal:
                 case SetLocal:
-                case SetArgument:
+                case SetArgumentDefinitely:
+                case SetArgumentMaybe:
                 case Phantom:
                     VALIDATE((node), !"bad node type for SSA");
                     break;
@@ -743,6 +827,7 @@ private:
                 case PhantomDirectArguments:
                 case PhantomCreateRest:
                 case PhantomClonedArguments:
+                case PhantomNewRegexp:
                 case MovHint:
                 case Upsilon:
                 case ForwardVarargs:
@@ -785,6 +870,7 @@ private:
 
                 case PhantomNewArrayBuffer:
                     VALIDATE((node), m_graph.m_form == SSA);
+                    VALIDATE((node), node->vectorLengthHint() >= node->castOperand<JSImmutableButterfly*>()->length());
                     break;
 
                 case NewArrayWithSpread: {

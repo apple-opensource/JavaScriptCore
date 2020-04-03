@@ -30,16 +30,17 @@
 
 namespace JSC {
 
-class ProxyObject : public JSNonFinalObject {
+class ProxyObject final : public JSNonFinalObject {
 public:
     typedef JSNonFinalObject Base;
 
-    const static unsigned StructureFlags = Base::StructureFlags | OverridesGetOwnPropertySlot | TypeOfShouldCallGetCallData | InterceptsGetOwnPropertySlotByIndexEvenWhenLengthIsNotZero | OverridesGetPropertyNames | ProhibitsPropertyCaching;
+    const static unsigned StructureFlags = Base::StructureFlags | OverridesGetOwnPropertySlot | OverridesGetCallData | InterceptsGetOwnPropertySlotByIndexEvenWhenLengthIsNotZero | OverridesGetPropertyNames | ProhibitsPropertyCaching;
 
     static ProxyObject* create(ExecState* exec, JSGlobalObject* globalObject, JSValue target, JSValue handler)
     {
         VM& vm = exec->vm();
-        ProxyObject* proxy = new (NotNull, allocateCell<ProxyObject>(vm.heap)) ProxyObject(vm, ProxyObject::structureForTarget(globalObject, target));
+        Structure* structure = ProxyObject::structureForTarget(globalObject, target);
+        ProxyObject* proxy = new (NotNull, allocateCell<ProxyObject>(vm.heap)) ProxyObject(vm, structure);
         proxy->finishCreation(vm, exec, target, handler);
         return proxy;
     }
@@ -99,7 +100,7 @@ private:
     template <typename DefaultDeleteFunction>
     bool performDelete(ExecState*, PropertyName, DefaultDeleteFunction);
     template <typename PerformDefaultPutFunction>
-    bool performPut(ExecState*, JSValue putValue, JSValue thisValue, PropertyName, PerformDefaultPutFunction);
+    bool performPut(ExecState*, JSValue putValue, JSValue thisValue, PropertyName, PerformDefaultPutFunction, bool shouldThrow);
     bool performPreventExtensions(ExecState*);
     bool performIsExtensible(ExecState*);
     bool performDefineOwnProperty(ExecState*, PropertyName, const PropertyDescriptor&, bool shouldThrow);

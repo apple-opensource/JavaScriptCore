@@ -26,9 +26,9 @@
 #pragma once
 
 #include "Debugger.h"
+#include "InspectorAgentBase.h"
 #include "InspectorBackendDispatchers.h"
 #include "InspectorFrontendDispatchers.h"
-#include "inspector/InspectorAgentBase.h"
 #include <wtf/Noncopyable.h>
 
 namespace JSC {
@@ -50,19 +50,16 @@ public:
     void willDestroyFrontendAndBackend(DisconnectReason) override;
 
     // ScriptProfilerBackendDispatcherHandler
-    void startTracking(ErrorString&, const bool* const includeSamples) override;
+    void startTracking(ErrorString&, const bool* includeSamples) override;
     void stopTracking(ErrorString&) override;
-
-    void programmaticCaptureStarted();
-    void programmaticCaptureStopped();
 
     // Debugger::ProfilingClient
     bool isAlreadyProfiling() const override;
-    double willEvaluateScript() override;
-    void didEvaluateScript(double, JSC::ProfilingReason) override;
+    Seconds willEvaluateScript() override;
+    void didEvaluateScript(Seconds, JSC::ProfilingReason) override;
 
 private:
-    void addEvent(double startTime, double endTime, JSC::ProfilingReason);
+    void addEvent(Seconds startTime, Seconds endTime, JSC::ProfilingReason);
     void trackingComplete();
     void stopSamplingWhenDisconnecting();
 

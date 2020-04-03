@@ -39,13 +39,13 @@ const ClassInfo AsyncGeneratorFunctionConstructor::s_info = { "AsyncGeneratorFun
 static EncodedJSValue JSC_HOST_CALL callAsyncGeneratorFunctionConstructor(ExecState* exec)
 {
     ArgList args(exec);
-    return JSValue::encode(constructFunction(exec, asInternalFunction(exec->jsCallee())->globalObject(), args, FunctionConstructionMode::AsyncGenerator));
+    return JSValue::encode(constructFunction(exec, jsCast<InternalFunction*>(exec->jsCallee())->globalObject(exec->vm()), args, FunctionConstructionMode::AsyncGenerator));
 }
 
 static EncodedJSValue JSC_HOST_CALL constructAsyncGeneratorFunctionConstructor(ExecState* exec)
 {
     ArgList args(exec);
-    return JSValue::encode(constructFunction(exec, asInternalFunction(exec->jsCallee())->globalObject(), args, FunctionConstructionMode::AsyncGenerator));
+    return JSValue::encode(constructFunction(exec, jsCast<InternalFunction*>(exec->jsCallee())->globalObject(exec->vm()), args, FunctionConstructionMode::AsyncGenerator));
 }
 
 AsyncGeneratorFunctionConstructor::AsyncGeneratorFunctionConstructor(VM& vm, Structure* structure)
@@ -55,7 +55,7 @@ AsyncGeneratorFunctionConstructor::AsyncGeneratorFunctionConstructor(VM& vm, Str
 
 void AsyncGeneratorFunctionConstructor::finishCreation(VM& vm, AsyncGeneratorFunctionPrototype* prototype)
 {
-    Base::finishCreation(vm, "AsyncGeneratorFunction");
+    Base::finishCreation(vm, "AsyncGeneratorFunction"_s, NameVisibility::Visible, NameAdditionMode::WithoutStructureTransition);
     putDirectWithoutTransition(vm, vm.propertyNames->prototype, prototype, PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
 
     // Number of arguments for constructor

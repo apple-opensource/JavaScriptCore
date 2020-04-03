@@ -41,14 +41,14 @@ function mapIteratorNext(bucket, kind)
         else if (kind === @iterationKindKey)
             value = key;
     }
-    return { done, value };
+    return { value, done };
 }
 
 function next()
 {
     "use strict";
 
-    if (this == null)
+    if (@isUndefinedOrNull(this))
         @throwTypeError("%MapIteratorPrototype%.next requires that |this| not be null or undefined");
 
     var bucket = @getByIdDirectPrivate(this, "mapBucket");

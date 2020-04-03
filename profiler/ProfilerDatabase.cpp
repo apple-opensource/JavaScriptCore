@@ -31,14 +31,13 @@
 #include "JSONObject.h"
 #include "ObjectConstructor.h"
 #include "JSCInlines.h"
-#include <wtf/CurrentTime.h>
 #include <wtf/FilePrintStream.h>
 
 namespace JSC { namespace Profiler {
 
 static std::atomic<int> databaseCounter;
 
-static StaticLock registrationLock;
+static Lock registrationLock;
 static std::atomic<int> didRegisterAtExit;
 static Database* firstDatabase;
 
@@ -144,8 +143,7 @@ String Database::toJSON() const
 
     auto value = toJS(globalObject->globalExec());
     RETURN_IF_EXCEPTION(scope, String());
-    scope.release();
-    return JSONStringify(globalObject->globalExec(), value, 0);
+    RELEASE_AND_RETURN(scope, JSONStringify(globalObject->globalExec(), value, 0));
 }
 
 bool Database::save(const char* filename) const
@@ -181,7 +179,7 @@ void Database::logEvent(CodeBlock* codeBlock, const char* summary, const CString
     
     Bytecodes* bytecodes = ensureBytecodesFor(locker, codeBlock);
     Compilation* compilation = m_compilationMap.get(codeBlock);
-    m_events.append(Event(currentTime(), bytecodes, compilation, summary, detail));
+    m_events.append(Event(WallTime::now(), bytecodes, compilation, summary, detail));
 }
 
 void Database::addDatabaseToAtExit()

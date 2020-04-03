@@ -28,6 +28,7 @@
 
 #if JSC_OBJC_API_ENABLED
 #import "APICast.h"
+#import "APIUtils.h"
 #import "JSAPIWrapperObject.h"
 #import "JSCInlines.h"
 #import "JSCallbackObject.h"
@@ -39,7 +40,6 @@
 #import "WeakGCMap.h"
 #import "WeakGCMapInlines.h"
 #import <wtf/Vector.h>
-#import <wtf/spi/cocoa/NSMapTableSPI.h>
 #import <wtf/spi/darwin/dyldSPI.h>
 
 #include <mach-o/dyld.h>
@@ -47,7 +47,7 @@
 #if PLATFORM(APPLETV)
 #else
 static const int32_t firstJavaScriptCoreVersionWithInitConstructorSupport = 0x21A0400; // 538.4.0
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 static const uint32_t firstSDKVersionWithInitConstructorSupport = DYLD_IOS_VERSION_10_0;
 #elif PLATFORM(MAC)
 static const uint32_t firstSDKVersionWithInitConstructorSupport = 0xA0A00; // OSX 10.10.0
@@ -125,7 +125,7 @@ static JSC::JSObject* makeWrapper(JSContextRef ctx, JSClassRef jsClass, id wrapp
 
     ASSERT(jsClass);
     JSC::JSCallbackObject<JSC::JSAPIWrapperObject>* object = JSC::JSCallbackObject<JSC::JSAPIWrapperObject>::create(exec, exec->lexicalGlobalObject(), exec->lexicalGlobalObject()->objcWrapperObjectStructure(), jsClass, 0);
-    object->setWrappedObject(wrappedObject);
+    object->setWrappedObject((__bridge void*)wrappedObject);
     if (JSC::JSObject* prototype = jsClass->prototype(exec))
         object->setPrototypeDirect(vm, prototype);
 
@@ -179,14 +179,31 @@ static NSMutableDictionary *createRenameMap(Protocol *protocol, BOOL isInstanceM
     return renameMap;
 }
 
-inline void putNonEnumerable(JSValue *base, NSString *propertyName, JSValue *value)
+inline void putNonEnumerable(JSContext *context, JSValue *base, NSString *propertyName, JSValue *value)
 {
-    [base defineProperty:propertyName descriptor:@{
-        JSPropertyDescriptorValueKey: value,
-        JSPropertyDescriptorWritableKey: @YES,
-        JSPropertyDescriptorEnumerableKey: @NO,
-        JSPropertyDescriptorConfigurableKey: @YES
-    }];
+    if (![base isObject])
+        return;
+    JSC::ExecState* exec = toJS([context JSGlobalContextRef]);
+    JSC::VM& vm = exec->vm();
+    JSC::JSLockHolder locker(vm);
+    auto scope = DECLARE_CATCH_SCOPE(vm);
+
+    JSC::JSObject* baseObject = JSC::asObject(toJS(exec, [base JSValueRef]));
+    auto name = OpaqueJSString::tryCreate(propertyName);
+    if (!name)
+        return;
+
+    JSC::PropertyDescriptor descriptor;
+    descriptor.setValue(toJS(exec, [value JSValueRef]));
+    descriptor.setEnumerable(false);
+    descriptor.setConfigurable(true);
+    descriptor.setWritable(true);
+    bool shouldThrow = false;
+    baseObject->methodTable(vm)->defineOwnProperty(baseObject, exec, name->identifier(&vm), descriptor, shouldThrow);
+
+    JSValueRef exception = 0;
+    if (handleExceptionIfNeeded(scope, exec, &exception) == ExceptionStatus::DidThrow)
+        [context valueFromNotifyException:exception];
 }
 
 static bool isInitFamilyMethod(NSString *name)
@@ -251,11 +268,20 @@ static void copyMethodsToObject(JSContext *context, Class objcClass, Protocol *p
             name = renameMap[name];
             if (!name)
                 name = selectorToPropertyName(nameCStr);
-            if ([object hasProperty:name])
+            auto exec = toJS([context JSGlobalContextRef]);
+            JSValue *existingMethod = object[name];
+            // ObjCCallbackFunction does a dynamic lookup for the
+            // selector before calling the method. In order to save
+            // memory we only put one callback object in any givin
+            // prototype chain. However, to handle the client trying
+            // to override normal builtins e.g. "toString" we check if
+            // the existing value on the prototype chain is an ObjC
+            // callback already.
+            if ([existingMethod isObject] && JSC::jsDynamicCast<JSC::ObjCCallbackFunction*>(exec->vm(), toJS(exec, [existingMethod JSValueRef])))
                 return;
             JSObjectRef method = objCCallbackFunctionForMethod(context, objcClass, protocol, isInstanceMethod, sel, types);
             if (method)
-                putNonEnumerable(object, name, [JSValue valueWithJSValueRef:method inContext:context]);
+                putNonEnumerable(context, object, name, [JSValue valueWithJSValueRef:method inContext:context]);
         }
     });
 
@@ -367,6 +393,7 @@ static void copyPrototypeProperties(JSContext *context, Class objcClass, Protoco
     JSClassRef m_classRef;
     JSC::Weak<JSC::JSObject> m_prototype;
     JSC::Weak<JSC::JSObject> m_constructor;
+    JSC::Weak<JSC::Structure> m_structure;
 }
 
 - (instancetype)initForClass:(Class)cls;
@@ -407,7 +434,7 @@ static JSC::JSObject* allocateConstructorForCustomClass(JSContext *context, cons
         return constructorWithCustomBrand(context, [NSString stringWithFormat:@"%sConstructor", className], cls);
 
     // For each protocol that the class implements, gather all of the init family methods into a hash table.
-    __block HashMap<String, Protocol *> initTable;
+    __block HashMap<String, CFTypeRef> initTable;
     Protocol *exportProtocol = getJSExportProtocol();
     for (Class currentClass = cls; currentClass; currentClass = class_getSuperclass(currentClass)) {
         forEachProtocolImplementingProtocol(currentClass, exportProtocol, ^(Protocol *protocol, bool&) {
@@ -415,7 +442,7 @@ static JSC::JSObject* allocateConstructorForCustomClass(JSContext *context, cons
                 const char* name = sel_getName(selector);
                 if (!isInitFamilyMethod(@(name)))
                     return;
-                initTable.set(name, protocol);
+                initTable.set(name, (__bridge CFTypeRef)protocol);
             });
         });
     }
@@ -435,7 +462,7 @@ static JSC::JSObject* allocateConstructorForCustomClass(JSContext *context, cons
 
             numberOfInitsFound++;
             initMethod = selector;
-            initProtocol = iter->value;
+            initProtocol = (__bridge Protocol *)iter->value;
             types = method_getTypeEncoding(method);
         });
 
@@ -484,8 +511,9 @@ typedef std::pair<JSC::JSObject*, JSC::JSObject*> ConstructorPrototypePair;
 
         JSValue* prototype = [JSValue valueWithJSValueRef:toRef(jsPrototype) inContext:context];
         JSValue* constructor = [JSValue valueWithJSValueRef:toRef(jsConstructor) inContext:context];
-        putNonEnumerable(prototype, @"constructor", constructor);
-        putNonEnumerable(constructor, @"prototype", prototype);
+
+        putNonEnumerable(context, prototype, @"constructor", constructor);
+        putNonEnumerable(context, constructor, @"prototype", prototype);
 
         Protocol *exportProtocol = getJSExportProtocol();
         forEachProtocolImplementingProtocol(m_class, exportProtocol, ^(Protocol *protocol, bool&){
@@ -511,16 +539,20 @@ typedef std::pair<JSC::JSObject*, JSC::JSObject*> ConstructorPrototypePair;
         if (JSObjectRef method = objCCallbackFunctionForBlock(context, object)) {
             JSValue *constructor = [JSValue valueWithJSValueRef:method inContext:context];
             JSValue *prototype = [JSValue valueWithNewObjectInContext:context];
-            putNonEnumerable(constructor, @"prototype", prototype);
-            putNonEnumerable(prototype, @"constructor", constructor);
+            putNonEnumerable(context, constructor, @"prototype", prototype);
+            putNonEnumerable(context, prototype, @"constructor", constructor);
             return toJS(method);
         }
     }
 
-    JSC::JSObject* prototype = [self prototypeInContext:context];
+    JSC::Structure* structure = [self structureInContext:context];
 
-    JSC::JSObject* wrapper = makeWrapper([context JSGlobalContextRef], m_classRef, object);
-    JSObjectSetPrototype([context JSGlobalContextRef], toRef(wrapper), toRef(prototype));
+    JSC::ExecState* exec = toJS([context JSGlobalContextRef]);
+    JSC::VM& vm = exec->vm();
+    JSC::JSLockHolder locker(vm);
+
+    auto wrapper = JSC::JSCallbackObject<JSC::JSAPIWrapperObject>::create(exec, exec->lexicalGlobalObject(), structure, m_classRef, 0);
+    wrapper->setWrappedObject((__bridge void*)object);
     return wrapper;
 }
 
@@ -542,11 +574,25 @@ typedef std::pair<JSC::JSObject*, JSC::JSObject*> ConstructorPrototypePair;
     return prototype;
 }
 
+- (JSC::Structure*)structureInContext:(JSContext *)context
+{
+    JSC::Structure* structure = m_structure.get();
+    if (structure)
+        return structure;
+
+    JSC::ExecState* exec = toJS([context JSGlobalContextRef]);
+    JSC::JSGlobalObject* globalObject = toJSGlobalObject([context JSGlobalContextRef]);
+    JSC::JSObject* prototype = [self prototypeInContext:context];
+    m_structure = JSC::JSCallbackObject<JSC::JSAPIWrapperObject>::createStructure(exec->vm(), globalObject, prototype);
+
+    return m_structure.get();
+}
+
 @end
 
 @implementation JSWrapperMap {
     NSMutableDictionary *m_classMap;
-    std::unique_ptr<JSC::WeakGCMap<id, JSC::JSObject>> m_cachedJSWrappers;
+    std::unique_ptr<JSC::WeakGCMap<__unsafe_unretained id, JSC::JSObject>> m_cachedJSWrappers;
     NSMapTable *m_cachedObjCWrappers;
 }
 
@@ -560,7 +606,7 @@ typedef std::pair<JSC::JSObject*, JSC::JSObject*> ConstructorPrototypePair;
     NSPointerFunctionsOptions valueOptions = NSPointerFunctionsWeakMemory | NSPointerFunctionsObjectPersonality;
     m_cachedObjCWrappers = [[NSMapTable alloc] initWithKeyOptions:keyOptions valueOptions:valueOptions capacity:0];
 
-    m_cachedJSWrappers = std::make_unique<JSC::WeakGCMap<id, JSC::JSObject>>(toJS(context)->vm());
+    m_cachedJSWrappers = std::make_unique<JSC::WeakGCMap<__unsafe_unretained id, JSC::JSObject>>(toJS(context)->vm());
 
     ASSERT(!toJSGlobalObject(context)->wrapperMap());
     toJSGlobalObject(context)->setWrapperMap(self);
@@ -625,10 +671,10 @@ typedef std::pair<JSC::JSObject*, JSC::JSObject*> ConstructorPrototypePair;
 - (JSValue *)objcWrapperForJSValueRef:(JSValueRef)value inContext:context
 {
     ASSERT(toJSGlobalObject([context JSGlobalContextRef])->wrapperMap() == self);
-    JSValue *wrapper = static_cast<JSValue *>(NSMapGet(m_cachedObjCWrappers, value));
+    JSValue *wrapper = (__bridge JSValue *)NSMapGet(m_cachedObjCWrappers, value);
     if (!wrapper) {
         wrapper = [[[JSValue alloc] initWithValue:value inContext:context] autorelease];
-        NSMapInsert(m_cachedObjCWrappers, value, wrapper);
+        NSMapInsert(m_cachedObjCWrappers, value, (__bridge void*)wrapper);
     }
     return wrapper;
 }
@@ -644,8 +690,8 @@ id tryUnwrapObjcObject(JSGlobalContextRef context, JSValueRef value)
     ASSERT(!exception);
     JSC::JSLockHolder locker(toJS(context));
     JSC::VM& vm = toJS(context)->vm();
-    if (toJS(object)->inherits(vm, JSC::JSCallbackObject<JSC::JSAPIWrapperObject>::info()))
-        return (id)JSC::jsCast<JSC::JSAPIWrapperObject*>(toJS(object))->wrappedObject();
+    if (toJS(object)->inherits<JSC::JSCallbackObject<JSC::JSAPIWrapperObject>>(vm))
+        return (__bridge id)JSC::jsCast<JSC::JSAPIWrapperObject*>(toJS(object))->wrappedObject();
     if (id target = tryUnwrapConstructor(&vm, object))
         return target;
     return nil;

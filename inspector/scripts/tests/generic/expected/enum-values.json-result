@@ -80,8 +80,8 @@ InspectorBackend.activateDomain("EventDomain");
 #if ENABLE(INSPECTOR_ALTERNATE_DISPATCHERS)
 
 #include "TestProtocolTypes.h"
-#include <inspector/InspectorFrontendRouter.h>
 #include <JavaScriptCore/InspectorBackendDispatcher.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 
 namespace Inspector {
 
@@ -139,7 +139,7 @@ public:
 #pragma once
 
 #include "TestProtocolObjects.h"
-#include <inspector/InspectorBackendDispatcher.h>
+#include <JavaScriptCore/InspectorBackendDispatcher.h>
 #include <wtf/text/WTFString.h>
 
 namespace Inspector {
@@ -218,7 +218,7 @@ private:
 #include "config.h"
 #include "TestBackendDispatchers.h"
 
-#include <inspector/InspectorFrontendRouter.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 #include <wtf/JSONValues.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
@@ -240,7 +240,7 @@ CommandDomainBackendDispatcher::CommandDomainBackendDispatcher(BackendDispatcher
     : SupplementalBackendDispatcher(backendDispatcher)
     , m_agent(agent)
 {
-    m_backendDispatcher->registerDispatcherForDomain(ASCIILiteral("CommandDomain"), this);
+    m_backendDispatcher->registerDispatcherForDomain("CommandDomain"_s, this);
 }
 
 void CommandDomainBackendDispatcher::dispatch(long requestId, const String& method, Ref<JSON::Object>&& message)
@@ -248,12 +248,12 @@ void CommandDomainBackendDispatcher::dispatch(long requestId, const String& meth
     Ref<CommandDomainBackendDispatcher> protect(*this);
 
     RefPtr<JSON::Object> parameters;
-    message->getObject(ASCIILiteral("params"), parameters);
+    message->getObject("params"_s, parameters);
 
     if (method == "commandWithEnumReturnValue")
         commandWithEnumReturnValue(requestId, WTFMove(parameters));
     else
-        m_backendDispatcher->reportProtocolError(BackendDispatcher::MethodNotFound, makeString('\'', "CommandDomain", '.', method, "' was not found"));
+        m_backendDispatcher->reportProtocolError(BackendDispatcher::MethodNotFound, "'CommandDomain." + method + "' was not found");
 }
 
 void CommandDomainBackendDispatcher::commandWithEnumReturnValue(long requestId, RefPtr<JSON::Object>&&)
@@ -271,7 +271,7 @@ void CommandDomainBackendDispatcher::commandWithEnumReturnValue(long requestId, 
     m_agent->commandWithEnumReturnValue(error, &out_returnValue);
 
     if (!error.length())
-        result->setString(ASCIILiteral("returnValue"), Inspector::Protocol::TestHelpers::getEnumConstantValue(out_returnValue));
+        result->setString("returnValue"_s, Inspector::Protocol::TestHelpers::getEnumConstantValue(out_returnValue));
 
     if (!error.length())
         m_backendDispatcher->sendResponse(requestId, WTFMove(result), false);
@@ -325,6 +325,7 @@ namespace Inspector {
 class FrontendRouter;
 
 class EventDomainFrontendDispatcher {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     EventDomainFrontendDispatcher(FrontendRouter& frontendRouter) : m_frontendRouter(frontendRouter) { }
         // Named after parameter 'parameter' while generating command/event eventWithEnumParameter.
@@ -375,7 +376,7 @@ private:
 #include "config.h"
 #include "TestFrontendDispatchers.h"
 
-#include <inspector/InspectorFrontendRouter.h>
+#include <JavaScriptCore/InspectorFrontendRouter.h>
 #include <wtf/text/CString.h>
 
 namespace Inspector {
@@ -383,10 +384,10 @@ namespace Inspector {
 void EventDomainFrontendDispatcher::eventWithEnumParameter(Parameter parameter)
 {
     Ref<JSON::Object> jsonMessage = JSON::Object::create();
-    jsonMessage->setString(ASCIILiteral("method"), ASCIILiteral("EventDomain.eventWithEnumParameter"));
+    jsonMessage->setString("method"_s, "EventDomain.eventWithEnumParameter"_s);
     Ref<JSON::Object> paramsObject = JSON::Object::create();
-    paramsObject->setString(ASCIILiteral("parameter"), Inspector::Protocol::TestHelpers::getEnumConstantValue(parameter));
-    jsonMessage->setObject(ASCIILiteral("params"), WTFMove(paramsObject));
+    paramsObject->setString("parameter"_s, Inspector::Protocol::TestHelpers::getEnumConstantValue(parameter));
+    jsonMessage->setObject("params"_s, WTFMove(paramsObject));
 
     m_frontendRouter.sendEvent(jsonMessage->toJSONString());
 }
@@ -428,7 +429,7 @@ void EventDomainFrontendDispatcher::eventWithEnumParameter(Parameter parameter)
 
 #pragma once
 
-#include <inspector/InspectorProtocolTypes.h>
+#include <JavaScriptCore/InspectorProtocolTypes.h>
 #include <wtf/Assertions.h>
 
 namespace Inspector {
@@ -436,6 +437,8 @@ namespace Inspector {
 
 
 namespace Protocol {
+
+
 
 // Forward declarations.
 namespace TypeDomain {
@@ -472,17 +475,29 @@ enum class TypeDomainEnum {
 namespace TestHelpers {
 
 template<typename ProtocolEnumType>
-std::optional<ProtocolEnumType> parseEnumValueFromString(const String&);
+Optional<ProtocolEnumType> parseEnumValueFromString(const String&);
 
 // Enums in the 'TypeDomain' Domain
 template<>
-std::optional<Inspector::Protocol::TypeDomain::TypeDomainEnum> parseEnumValueFromString<Inspector::Protocol::TypeDomain::TypeDomainEnum>(const String&);
+Optional<Inspector::Protocol::TypeDomain::TypeDomainEnum> parseEnumValueFromString<Inspector::Protocol::TypeDomain::TypeDomainEnum>(const String&);
 
 } // namespace TestHelpers
 
 } // namespace Protocol
 
 } // namespace Inspector
+
+namespace WTF {
+
+template<typename T> struct DefaultHash;
+
+// Hash declarations in the 'TypeDomain' Domain
+template<>
+struct DefaultHash<Inspector::Protocol::TypeDomain::TypeDomainEnum> {
+    typedef IntHash<Inspector::Protocol::TypeDomain::TypeDomainEnum> Hash;
+};
+
+} // namespace WTF
 ### End File: TestProtocolObjects.h
 
 ### Begin File: TestProtocolObjects.cpp
@@ -546,7 +561,7 @@ String getEnumConstantValue(int code) {
 
 // Enums in the 'TypeDomain' Domain
 template<>
-std::optional<Inspector::Protocol::TypeDomain::TypeDomainEnum> parseEnumValueFromString<Inspector::Protocol::TypeDomain::TypeDomainEnum>(const String& protocolString)
+Optional<Inspector::Protocol::TypeDomain::TypeDomainEnum> parseEnumValueFromString<Inspector::Protocol::TypeDomain::TypeDomainEnum>(const String& protocolString)
 {
     static const size_t constantValues[] = {
         (size_t)Inspector::Protocol::TypeDomain::TypeDomainEnum::Shared,
@@ -558,7 +573,7 @@ std::optional<Inspector::Protocol::TypeDomain::TypeDomainEnum> parseEnumValueFro
         if (protocolString == enum_constant_values[constantValues[i]])
             return (Inspector::Protocol::TypeDomain::TypeDomainEnum)constantValues[i];
 
-    return std::nullopt;
+    return WTF::nullopt;
 }
 
 
@@ -672,7 +687,7 @@ void ObjCInspectorCommandDomainBackendDispatcher::commandWithEnumReturnValue(lon
 
     id successCallback = ^(TestProtocolCommandDomainCommandWithEnumReturnValueReturnValue returnValue) {
         Ref<JSON::Object> resultObject = JSON::Object::create();
-        resultObject->setString(ASCIILiteral("returnValue"), toProtocolString(returnValue));
+        resultObject->setString("returnValue"_s, toProtocolString(returnValue));
         backendDispatcher()->sendResponse(requestId, WTFMove(resultObject), false);
     };
 
@@ -801,7 +816,7 @@ using namespace Inspector;
     _commandDomainHandler = [handler retain];
 
     auto alternateDispatcher = std::make_unique<ObjCInspectorCommandDomainBackendDispatcher>(handler);
-    auto alternateAgent = std::make_unique<AlternateDispatchableAgent<CommandDomainBackendDispatcher, AlternateCommandDomainBackendDispatcher>>(ASCIILiteral("CommandDomain"), *_controller, WTFMove(alternateDispatcher));
+    auto alternateAgent = std::make_unique<AlternateDispatchableAgent<CommandDomainBackendDispatcher, AlternateCommandDomainBackendDispatcher>>("CommandDomain"_s, *_controller, WTFMove(alternateDispatcher));
     _controller->appendExtraAgent(WTFMove(alternateAgent));
 }
 
@@ -880,10 +895,10 @@ using namespace Inspector;
     const FrontendRouter& router = _controller->frontendRouter();
 
     Ref<JSON::Object> jsonMessage = JSON::Object::create();
-    jsonMessage->setString(ASCIILiteral("method"), ASCIILiteral("EventDomain.eventWithEnumParameter"));
+    jsonMessage->setString("method"_s, "EventDomain.eventWithEnumParameter"_s);
     Ref<JSON::Object> paramsObject = JSON::Object::create();
-    paramsObject->setString(ASCIILiteral("parameter"), toProtocolString(parameter));
-    jsonMessage->setObject(ASCIILiteral("params"), WTFMove(paramsObject));
+    paramsObject->setString("parameter"_s, toProtocolString(parameter));
+    jsonMessage->setObject("params"_s, WTFMove(paramsObject));
     router.sendEvent(jsonMessage->toJSONString());
 }
 
@@ -1040,24 +1055,24 @@ __attribute__((visibility ("default")))
 namespace Inspector {
 
 template<typename ObjCEnumType>
-std::optional<ObjCEnumType> fromProtocolString(const String& value);
+Optional<ObjCEnumType> fromProtocolString(const String& value);
 
 inline String toProtocolString(TestProtocolPlatform value)
 {
     switch(value) {
     case TestProtocolPlatformAll:
-        return ASCIILiteral("all");
+        return "all"_s;
     case TestProtocolPlatformGeneric:
-        return ASCIILiteral("generic");
+        return "generic"_s;
     case TestProtocolPlatformIOS:
-        return ASCIILiteral("ios");
+        return "ios"_s;
     case TestProtocolPlatformMacOS:
-        return ASCIILiteral("macos");
+        return "macos"_s;
     }
 }
 
 template<>
-inline std::optional<TestProtocolPlatform> fromProtocolString(const String& value)
+inline Optional<TestProtocolPlatform> fromProtocolString(const String& value)
 {
     if (value == "all")
         return TestProtocolPlatformAll;
@@ -1067,7 +1082,7 @@ inline std::optional<TestProtocolPlatform> fromProtocolString(const String& valu
         return TestProtocolPlatformIOS;
     if (value == "macos")
         return TestProtocolPlatformMacOS;
-    return std::nullopt;
+    return WTF::nullopt;
 }
 
 
@@ -1075,18 +1090,18 @@ inline String toProtocolString(TestProtocolTypeDomainEnum value)
 {
     switch(value) {
     case TestProtocolTypeDomainEnumShared:
-        return ASCIILiteral("shared");
+        return "shared"_s;
     case TestProtocolTypeDomainEnumRed:
-        return ASCIILiteral("red");
+        return "red"_s;
     case TestProtocolTypeDomainEnumGreen:
-        return ASCIILiteral("green");
+        return "green"_s;
     case TestProtocolTypeDomainEnumBlue:
-        return ASCIILiteral("blue");
+        return "blue"_s;
     }
 }
 
 template<>
-inline std::optional<TestProtocolTypeDomainEnum> fromProtocolString(const String& value)
+inline Optional<TestProtocolTypeDomainEnum> fromProtocolString(const String& value)
 {
     if (value == "shared")
         return TestProtocolTypeDomainEnumShared;
@@ -1096,7 +1111,7 @@ inline std::optional<TestProtocolTypeDomainEnum> fromProtocolString(const String
         return TestProtocolTypeDomainEnumGreen;
     if (value == "blue")
         return TestProtocolTypeDomainEnumBlue;
-    return std::nullopt;
+    return WTF::nullopt;
 }
 
 } // namespace Inspector
@@ -1153,7 +1168,7 @@ using namespace Inspector;
 + (void)_parseTypeDomainEnum:(NSNumber **)outValue fromPayload:(id)payload
 {
     THROW_EXCEPTION_FOR_BAD_TYPE(payload, [NSString class]);
-    std::optional<TestProtocolTypeDomainEnum> result = Inspector::fromProtocolString<TestProtocolTypeDomainEnum>(payload);
+    Optional<TestProtocolTypeDomainEnum> result = Inspector::fromProtocolString<TestProtocolTypeDomainEnum>(payload);
     THROW_EXCEPTION_FOR_BAD_ENUM_VALUE(result, @"TypeDomainEnum");
     *outValue = @(result.value());
 }

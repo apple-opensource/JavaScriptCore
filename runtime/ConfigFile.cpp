@@ -465,9 +465,8 @@ void ConfigFile::parse()
             WTF::setDataFile(logPathname);
 
         if (!jscOptionsBuilder.isEmpty()) {
-            const char* optionsStr = jscOptionsBuilder.toString().utf8().data();
             Options::enableRestrictedOptions(true);
-            Options::setOptions(optionsStr);
+            Options::setOptions(jscOptionsBuilder.toString().utf8().data());
         }
     } else
         WTF::dataLogF("Error in JSC Config file on or near line %u, parsing '%s'\n", scanner.lineNumber(), scanner.currentBuffer());
@@ -488,8 +487,18 @@ void ConfigFile::canonicalizePaths()
             bool shouldAddPathSeparator = filenameBuffer[pathnameLength - 1] != '/';
             if (sizeof(filenameBuffer) - 1  >= pathnameLength + shouldAddPathSeparator) {
                 if (shouldAddPathSeparator)
-                    strncat(filenameBuffer, "/", 1);
+                    strncat(filenameBuffer, "/", 2); // Room for '/' plus NUL
+#if COMPILER(GCC)
+#if GCC_VERSION_AT_LEAST(8, 0, 0)
+                IGNORE_WARNINGS_BEGIN("stringop-truncation")
+#endif
+#endif
                 strncat(filenameBuffer, m_filename, sizeof(filenameBuffer) - strlen(filenameBuffer) - 1);
+#if COMPILER(GCC)
+#if GCC_VERSION_AT_LEAST(8, 0, 0)
+                IGNORE_WARNINGS_END
+#endif
+#endif
                 strncpy(m_filename, filenameBuffer, s_maxPathLength);
                 m_filename[s_maxPathLength] = '\0';
             }

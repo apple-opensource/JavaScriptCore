@@ -59,7 +59,6 @@ void SetPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
 {
     Base::finishCreation(vm);
     ASSERT(inherits(vm, info()));
-    didBecomePrototype();
 
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->add, setProtoFuncAdd, static_cast<unsigned>(PropertyAttribute::DontEnum), 1, JSSetAddIntrinsic);
     JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->clear, setProtoFuncClear, static_cast<unsigned>(PropertyAttribute::DontEnum), 0);
@@ -68,13 +67,13 @@ void SetPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->builtinNames().hasPrivateName(), setProtoFuncHas, static_cast<unsigned>(PropertyAttribute::DontEnum), 1, JSSetHasIntrinsic);
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->builtinNames().addPrivateName(), setProtoFuncAdd, static_cast<unsigned>(PropertyAttribute::DontEnum), 1, JSSetAddIntrinsic);
 
-    JSFunction* values = JSFunction::create(vm, setPrototypeValuesCodeGenerator(vm).value(), globalObject);
+    JSFunction* values = JSFunction::create(vm, setPrototypeValuesCodeGenerator(vm), globalObject);
     putDirectWithoutTransition(vm, vm.propertyNames->builtinNames().valuesPublicName(), values, static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirectWithoutTransition(vm, vm.propertyNames->builtinNames().keysPublicName(), values, static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirectWithoutTransition(vm, vm.propertyNames->iteratorSymbol, values, static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirectWithoutTransition(vm, vm.propertyNames->toStringTagSymbol, jsString(&vm, "Set"), PropertyAttribute::DontEnum | PropertyAttribute::ReadOnly);
 
-    JSC_NATIVE_GETTER(vm.propertyNames->size, setProtoFuncSize, PropertyAttribute::DontEnum | PropertyAttribute::Accessor);
+    JSC_NATIVE_GETTER_WITHOUT_TRANSITION(vm.propertyNames->size, setProtoFuncSize, PropertyAttribute::DontEnum | PropertyAttribute::Accessor);
 }
 
 ALWAYS_INLINE static JSSet* getSet(CallFrame* callFrame, JSValue thisValue)
@@ -86,9 +85,10 @@ ALWAYS_INLINE static JSSet* getSet(CallFrame* callFrame, JSValue thisValue)
         throwVMError(callFrame, scope, createNotAnObjectError(callFrame, thisValue));
         return nullptr;
     }
-    if (LIKELY(thisValue.asCell()->type() == JSSetType))
-        return jsCast<JSSet*>(thisValue);
-    throwTypeError(callFrame, scope, ASCIILiteral("Set operation called on non-Set object"));
+    auto* set = jsDynamicCast<JSSet*>(vm, thisValue.asCell());
+    if (LIKELY(set))
+        return set;
+    throwTypeError(callFrame, scope, "Set operation called on non-Set object"_s);
     return nullptr;
 }
 

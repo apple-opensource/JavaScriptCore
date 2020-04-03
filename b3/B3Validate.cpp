@@ -465,8 +465,6 @@ public:
                 case WasmBoundsCheckValue::Type::Maximum:
                     break;
                 }
-                if (value->as<WasmBoundsCheckValue>()->pinnedIndexingMask() != InvalidGPRReg)
-                    VALIDATE(m_procedure.code().isPinned(value->as<WasmBoundsCheckValue>()->pinnedIndexingMask()), ("At ", *value));
                 VALIDATE(m_procedure.code().wasmBoundsCheckGenerator(), ("At ", *value));
                 break;
             case Upsilon:
@@ -538,6 +536,14 @@ public:
 
         for (Variable* variable : m_procedure.variables())
             VALIDATE(variable->type() != Void, ("At ", *variable));
+
+        for (BasicBlock* block : m_procedure) {
+            // We expect the predecessor list to be de-duplicated.
+            HashSet<BasicBlock*> predecessors;
+            for (BasicBlock* predecessor : block->predecessors())
+                predecessors.add(predecessor);
+            VALIDATE(block->numPredecessors() == predecessors.size(), ("At ", *block));
+        }
     }
 
 private:
@@ -574,6 +580,7 @@ private:
             break;
         case ValueRep::Register:
         case ValueRep::LateRegister:
+        case ValueRep::SomeLateRegister:
             if (value.rep().kind() == ValueRep::LateRegister)
                 VALIDATE(role == ConstraintRole::Use, ("At ", *context, ": ", value));
             if (value.rep().reg().isGPR())
@@ -608,10 +615,7 @@ private:
         if (!slotBase)
             return;
 
-        StackSlot* stack = slotBase->slot();
-
         VALIDATE(memory->offset() >= 0, ("At ", *value));
-        VALIDATE(memory->offset() + memory->accessByteSize() <= stack->byteSize(), ("At ", *value));
     }
     
     NO_RETURN_DUE_TO_CRASH void fail(

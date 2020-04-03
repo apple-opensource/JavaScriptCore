@@ -31,21 +31,19 @@
 #include "GPRInfo.h"
 #include "JSExportMacros.h"
 #include "Options.h"
-#include <wtf/Optional.h>
 
 namespace JSC { namespace B3 {
 
-enum B3ComplitationMode {
+enum B3CompilationMode {
     B3Mode,
     AirMode
 };
 
-JS_EXPORT_PRIVATE bool shouldDumpIR(B3ComplitationMode);
-bool shouldDumpIRAtEachPhase(B3ComplitationMode);
+JS_EXPORT_PRIVATE bool shouldDumpIR(B3CompilationMode);
+bool shouldDumpIRAtEachPhase(B3CompilationMode);
 bool shouldValidateIR();
 bool shouldValidateIRAtEachPhase();
 bool shouldSaveIRBeforePhase();
-bool shouldMeasurePhaseTiming();
 
 template<typename BitsType, typename InputType>
 inline bool isIdentical(InputType left, InputType right)
@@ -183,7 +181,7 @@ inline unsigned defaultOptLevel()
     return Options::defaultB3OptLevel();
 }
 
-std::optional<GPRReg> pinnedExtendedOffsetAddrRegister();
+Optional<GPRReg> pinnedExtendedOffsetAddrRegister();
 
 } } // namespace JSC::B3
 

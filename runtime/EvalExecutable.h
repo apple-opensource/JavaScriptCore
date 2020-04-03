@@ -26,15 +26,15 @@
 #pragma once
 
 #include "ExecutableToCodeBlockEdge.h"
-#include "ScriptExecutable.h"
+#include "GlobalExecutable.h"
 #include "UnlinkedEvalCodeBlock.h"
 
 namespace JSC {
 
-class EvalExecutable : public ScriptExecutable {
+class EvalExecutable : public GlobalExecutable {
     friend class LLIntOffsetsExtractor;
 public:
-    typedef ScriptExecutable Base;
+    using Base = GlobalExecutable;
     static const unsigned StructureFlags = Base::StructureFlags | StructureIsImmortal;
 
     static void destroy(JSCell*);
@@ -54,6 +54,12 @@ public:
         return Structure::create(vm, globalObject, proto, TypeInfo(EvalExecutableType, StructureFlags), info());
     }
 
+    template<typename CellType, SubspaceAccess mode>
+    static IsoSubspace* subspaceFor(VM& vm)
+    {
+        return vm.evalExecutableSpace<mode>();
+    }
+
     DECLARE_INFO;
 
     ExecutableInfo executableInfo() const { return ExecutableInfo(usesEval(), isStrictMode(), false, false, ConstructorKind::None, JSParserScriptMode::Classic, SuperBinding::NotNeeded, SourceParseMode::ProgramMode, derivedContextType(), isArrowFunctionContext(), false, evalContextType()); }
@@ -61,6 +67,9 @@ public:
     unsigned numVariables() { return m_unlinkedEvalCodeBlock->numVariables(); }
     unsigned numFunctionHoistingCandidates() { return m_unlinkedEvalCodeBlock->numFunctionHoistingCandidates(); }
     unsigned numTopLevelFunctionDecls() { return m_unlinkedEvalCodeBlock->numberOfFunctionDecls(); }
+    bool allowDirectEvalCache() const { return m_unlinkedEvalCodeBlock->allowDirectEvalCache(); }
+
+    TemplateObjectMap& ensureTemplateObjectMap(VM&);
 
 protected:
     friend class ExecutableBase;
@@ -73,6 +82,7 @@ protected:
 
     WriteBarrier<ExecutableToCodeBlockEdge> m_evalCodeBlock;
     WriteBarrier<UnlinkedEvalCodeBlock> m_unlinkedEvalCodeBlock;
+    std::unique_ptr<TemplateObjectMap> m_templateObjectMap;
 };
 
 } // namespace JSC

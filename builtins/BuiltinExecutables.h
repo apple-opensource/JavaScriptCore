@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2014-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,11 +26,10 @@
 #pragma once
 
 #include "JSCBuiltins.h"
-#include "Parser.h"
+#include "ParserModes.h"
 #include "SourceCode.h"
 #include "Weak.h"
 #include "WeakHandleOwner.h"
-#include <wtf/Expected.h>
 
 namespace JSC {
 
@@ -38,36 +37,39 @@ class UnlinkedFunctionExecutable;
 class Identifier;
 class VM;
 
-using ExpectedUnlinkedFunctionExecutable = Expected<UnlinkedFunctionExecutable*, ParserError>;
+#define BUILTIN_NAME_ONLY(name, functionName, overriddenName, length) name,
+enum class BuiltinCodeIndex {
+    JSC_FOREACH_BUILTIN_CODE(BUILTIN_NAME_ONLY)
+    NumberOfBuiltinCodes
+};
+#undef BUILTIN_NAME_ONLY
 
-class BuiltinExecutables final: private WeakHandleOwner {
+class BuiltinExecutables {
     WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit BuiltinExecutables(VM&);
 
 #define EXPOSE_BUILTIN_EXECUTABLES(name, functionName, overriddenName, length) \
-ExpectedUnlinkedFunctionExecutable name##Executable(); \
-const SourceCode& name##Source() { return m_##name##Source; }
+UnlinkedFunctionExecutable* name##Executable(); \
+SourceCode name##Source();
     
     JSC_FOREACH_BUILTIN_CODE(EXPOSE_BUILTIN_EXECUTABLES)
-#undef EXPOSE_BUILTIN_SOURCES
+#undef EXPOSE_BUILTIN_EXECUTABLES
 
+    static SourceCode defaultConstructorSourceCode(ConstructorKind);
     UnlinkedFunctionExecutable* createDefaultConstructor(ConstructorKind, const Identifier& name);
 
-    static ExpectedUnlinkedFunctionExecutable createExecutable(VM&, const SourceCode&, const Identifier&, ConstructorKind, ConstructAbility);
-    static UnlinkedFunctionExecutable* createExecutableOrCrash(VM&, const SourceCode&, const Identifier&, ConstructorKind, ConstructAbility);
-private:
-    void finalize(Handle<Unknown>, void* context) override;
+    static UnlinkedFunctionExecutable* createExecutable(VM&, const SourceCode&, const Identifier&, ConstructorKind, ConstructAbility);
 
+    void finalizeUnconditionally();
+
+private:
     VM& m_vm;
 
-    ExpectedUnlinkedFunctionExecutable createBuiltinExecutable(const SourceCode&, const Identifier&, ConstructAbility);
+    UnlinkedFunctionExecutable* createBuiltinExecutable(const SourceCode&, const Identifier&, ConstructAbility);
 
-#define DECLARE_BUILTIN_SOURCE_MEMBERS(name, functionName, overriddenName, length)\
-    SourceCode m_##name##Source; \
-    Weak<UnlinkedFunctionExecutable> m_##name##Executable;
-    JSC_FOREACH_BUILTIN_CODE(DECLARE_BUILTIN_SOURCE_MEMBERS)
-#undef DECLARE_BUILTIN_SOURCE_MEMBERS
+    Ref<StringSourceProvider> m_combinedSourceProvider;
+    UnlinkedFunctionExecutable* m_unlinkedExecutables[static_cast<unsigned>(BuiltinCodeIndex::NumberOfBuiltinCodes)] { };
 };
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,9 +42,10 @@ namespace Wasm {
 
 class Instance;
 
-Expected<MacroAssemblerCodeRef, BindingFailure> wasmToJS(VM*, Bag<CallLinkInfo>& callLinkInfos, SignatureIndex, unsigned importIndex);
+Expected<MacroAssemblerCodeRef<WasmEntryPtrTag>, BindingFailure> wasmToJS(VM*, Bag<CallLinkInfo>& callLinkInfos, SignatureIndex, unsigned importIndex);
 
 void* wasmToJSException(ExecState*, Wasm::ExceptionType, Instance*);
+void emitThrowWasmToJSException(CCallHelpers&, GPRReg wasmInstance, Wasm::ExceptionType);
 
 } } // namespace JSC::Wasm
 

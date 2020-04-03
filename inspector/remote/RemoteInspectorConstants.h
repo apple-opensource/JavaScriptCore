@@ -37,7 +37,8 @@
 #define WIRServiceEnabledNotification           "com.apple.webinspectord.enabled"
 #define WIRServiceDisabledNotification          "com.apple.webinspectord.disabled"
 #define WIRAutomaticInspectionEnabledState      "com.apple.webinspectord.automatic_inspection_enabled"
-
+#define WIRRemoteAutomationEnabledNotification  "com.apple.webinspectord.remote_automation_enabled"
+#define WIRRemoteAutomationDisabledNotification "com.apple.webinspectord.remote_automation_disabled"
 
 #define WIRApplicationIdentifierKey             @"WIRApplicationIdentifierKey"
 #define WIRApplicationBundleIdentifierKey       @"WIRApplicationBundleIdentifierKey"
@@ -68,6 +69,7 @@
 #define WIRListingMessage                       @"WIRListingMessage"
 #define WIRListingKey                           @"WIRListingKey"
 #define WIRRemoteAutomationEnabledKey           @"WIRRemoteAutomationEnabledKey"
+#define WIRAutomationAvailabilityKey            @"WIRAutomationAvailabilityKey"
 #define WIRDestinationKey                       @"WIRDestinationKey"
 #define WIRConnectionDiedMessage                @"WIRConnectionDiedMessage"
 #define WIRTypeKey                              @"WIRTypeKey"
@@ -77,6 +79,11 @@
 #define WIRTypeAutomation                       @"WIRTypeAutomation"
 #define WIRAutomaticallyPause                   @"WIRAutomaticallyPause"
 
+// Allowed values for WIRAutomationAvailabilityKey.
+#define WIRAutomationAvailabilityNotAvailable     @"WIRAutomationAvailabilityNotAvailable"
+#define WIRAutomationAvailabilityAvailable        @"WIRAutomationAvailabilityAvailable"
+#define WIRAutomationAvailabilityUnknown          @"WIRAutomationAvailabilityUnknown"
+
 #define WIRAutomaticInspectionEnabledKey           @"WIRAutomaticInspectionEnabledKey"
 #define WIRAutomaticInspectionSessionIdentifierKey @"WIRAutomaticInspectionSessionIdentifierKey"
 #define WIRAutomaticInspectionConfigurationMessage @"WIRAutomaticInspectionConfigurationMessage"
@@ -84,11 +91,12 @@
 #define WIRAutomaticInspectionCandidateMessage     @"WIRAutomaticInspectionCandidateMessage"
 
 #define WIRAutomationTargetIsPairedKey             @"WIRAutomationTargetIsPairedKey"
+#define WIRAutomationTargetNameKey                 @"WIRAutomationTargetNameKey"
+#define WIRAutomationTargetVersionKey              @"WIRAutomationTargetVersionKey"
 #define WIRSessionIdentifierKey                    @"WIRSessionIdentifierKey"
 #define WIRSessionCapabilitiesKey                  @"WIRSessionCapabilitiesKey"
 #define WIRAutomationSessionRequestMessage         @"WIRAutomationSessionRequestMessage"
 
-// These definitions are shared between WebDriver.framework and WebKit.
 // The value for WIRSessionCapabilitiesKey is a dictionary that holds these capability key-value pairs.
 
 #define WIRAllowInsecureMediaCaptureCapabilityKey      @"org.webkit.webdriver.webrtc.allow-insecure-media-capture"

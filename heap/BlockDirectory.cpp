@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,10 +32,9 @@
 #include "IncrementalSweeper.h"
 #include "JSCInlines.h"
 #include "MarkedBlockInlines.h"
+#include "SubspaceInlines.h"
 #include "SuperSampler.h"
-#include "ThreadLocalCacheInlines.h"
 #include "VM.h"
-#include <wtf/CurrentTime.h>
 
 namespace JSC {
 
@@ -43,11 +42,13 @@ BlockDirectory::BlockDirectory(Heap* heap, size_t cellSize)
     : m_cellSize(static_cast<unsigned>(cellSize))
     , m_heap(heap)
 {
-    heap->threadLocalCacheLayout().allocateOffset(this);
 }
 
 BlockDirectory::~BlockDirectory()
 {
+    auto locker = holdLock(m_localAllocatorsLock);
+    while (!m_localAllocators.isEmpty())
+        m_localAllocators.begin()->remove();
 }
 
 void BlockDirectory::setSubspace(Subspace* subspace)
@@ -56,15 +57,15 @@ void BlockDirectory::setSubspace(Subspace* subspace)
     m_subspace = subspace;
 }
 
-bool BlockDirectory::isPagedOut(double deadline)
+bool BlockDirectory::isPagedOut(MonotonicTime deadline)
 {
     unsigned itersSinceLastTimeCheck = 0;
     for (auto* block : m_blocks) {
         if (block)
-            holdLock(block->block().lock());
+            block->block().populatePage();
         ++itersSinceLastTimeCheck;
         if (itersSinceLastTimeCheck >= Heap::s_timeCheckResolution) {
-            double currentTime = WTF::monotonicallyIncreasingTime();
+            MonotonicTime currentTime = MonotonicTime::now();
             if (currentTime > deadline)
                 return true;
             itersSinceLastTimeCheck = 0;
@@ -90,10 +91,8 @@ MarkedBlock::Handle* BlockDirectory::findBlockForAllocation(LocalAllocator& allo
         
         size_t blockIndex = allocator.m_allocationCursor++;
         MarkedBlock::Handle* result = m_blocks[blockIndex];
-        if (result->securityOriginToken() == allocator.tlc()->securityOriginToken()) {
-            setIsCanAllocateButNotEmpty(NoLockingNecessary, blockIndex, false);
-            return result;
-        }
+        setIsCanAllocateButNotEmpty(NoLockingNecessary, blockIndex, false);
+        return result;
     }
 }
 
@@ -250,14 +249,9 @@ void BlockDirectory::endMarking()
     // know what kind of collection it is. That knowledge is already encoded in the m_markingXYZ
     // vectors.
     
-    if (!Options::tradeDestructorBlocks() && needsDestruction()) {
-        ASSERT(m_empty.isEmpty());
-        m_canAllocateButNotEmpty = m_live & ~m_markingRetired;
-    } else {
-        m_empty = m_live & ~m_markingNotEmpty;
-        m_canAllocateButNotEmpty = m_live & m_markingNotEmpty & ~m_markingRetired;
-    }
-    
+    m_empty = m_live & ~m_markingNotEmpty;
+    m_canAllocateButNotEmpty = m_live & m_markingNotEmpty & ~m_markingRetired;
+
     if (needsDestruction()) {
         // There are some blocks that we didn't allocate out of in the last cycle, but we swept them. This
         // will forget that we did that and we will end up sweeping them again and attempting to call their

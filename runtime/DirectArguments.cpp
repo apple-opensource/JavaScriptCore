@@ -61,7 +61,7 @@ DirectArguments* DirectArguments::create(VM& vm, Structure* structure, unsigned 
     DirectArguments* result = createUninitialized(vm, structure, length, capacity);
     
     for (unsigned i = capacity; i--;)
-        result->storage()[i].clear();
+        result->storage()[i].setUndefined();
     
     return result;
 }
@@ -78,17 +78,17 @@ DirectArguments* DirectArguments::createByCopying(ExecState* exec)
     for (unsigned i = capacity; i--;)
         result->storage()[i].set(vm, result, exec->getArgumentUnsafe(i));
     
-    result->callee().set(vm, result, jsCast<JSFunction*>(exec->jsCallee()));
+    result->setCallee(vm, jsCast<JSFunction*>(exec->jsCallee()));
     
     return result;
 }
 
-size_t DirectArguments::estimatedSize(JSCell* cell)
+size_t DirectArguments::estimatedSize(JSCell* cell, VM& vm)
 {
     DirectArguments* thisObject = jsCast<DirectArguments*>(cell);
     size_t mappedArgumentsSize = thisObject->m_mappedArguments ? thisObject->mappedArgumentsSize() * sizeof(bool) : 0;
     size_t modifiedArgumentsSize = thisObject->m_modifiedArgumentsDescriptor ? thisObject->m_length * sizeof(bool) : 0;
-    return Base::estimatedSize(cell) + mappedArgumentsSize + modifiedArgumentsSize;
+    return Base::estimatedSize(cell, vm) + mappedArgumentsSize + modifiedArgumentsSize;
 }
 
 void DirectArguments::visitChildren(JSCell* thisCell, SlotVisitor& visitor)
@@ -101,7 +101,7 @@ void DirectArguments::visitChildren(JSCell* thisCell, SlotVisitor& visitor)
     visitor.append(thisObject->m_callee);
 
     if (thisObject->m_mappedArguments)
-        visitor.markAuxiliary(thisObject->m_mappedArguments.get());
+        visitor.markAuxiliary(thisObject->m_mappedArguments.get(thisObject->internalLength()));
     GenericArguments<DirectArguments>::visitChildren(thisCell, visitor);
 }
 
@@ -116,12 +116,12 @@ void DirectArguments::overrideThings(VM& vm)
     
     putDirect(vm, vm.propertyNames->length, jsNumber(m_length), static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirect(vm, vm.propertyNames->callee, m_callee.get(), static_cast<unsigned>(PropertyAttribute::DontEnum));
-    putDirect(vm, vm.propertyNames->iteratorSymbol, globalObject()->arrayProtoValuesFunction(), static_cast<unsigned>(PropertyAttribute::DontEnum));
+    putDirect(vm, vm.propertyNames->iteratorSymbol, globalObject(vm)->arrayProtoValuesFunction(), static_cast<unsigned>(PropertyAttribute::DontEnum));
     
     void* backingStore = vm.gigacageAuxiliarySpace(m_mappedArguments.kind).allocateNonVirtual(vm, mappedArgumentsSize(), nullptr, AllocationFailureMode::Assert);
     bool* overrides = static_cast<bool*>(backingStore);
-    m_mappedArguments.set(vm, this, overrides);
-    for (unsigned i = m_length; i--;)
+    m_mappedArguments.set(vm, this, overrides, internalLength());
+    for (unsigned i = internalLength(); i--;)
         overrides[i] = false;
 }
 
@@ -134,7 +134,7 @@ void DirectArguments::overrideThingsIfNecessary(VM& vm)
 void DirectArguments::unmapArgument(VM& vm, unsigned index)
 {
     overrideThingsIfNecessary(vm);
-    m_mappedArguments[index] = true;
+    m_mappedArguments.at(index, internalLength()) = true;
 }
 
 void DirectArguments::copyToArguments(ExecState* exec, VirtualRegister firstElementDest, unsigned offset, unsigned length)

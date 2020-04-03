@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,19 +37,27 @@ class Subspace;
 class VM;
 struct CellAttributes;
 
-static constexpr unsigned minimumDistanceBetweenCellsFromDifferentOrigins = sizeof(void*) == 8 ? 304 : 288;
-
 class HeapCell {
 public:
     enum Kind : int8_t {
         JSCell,
+        JSCellWithInteriorPointers,
         Auxiliary
     };
     
     HeapCell() { }
     
-    void zap() { *reinterpret_cast_ptr<uintptr_t**>(this) = 0; }
-    bool isZapped() const { return !*reinterpret_cast_ptr<uintptr_t* const*>(this); }
+    // We're intentionally only zapping the bits for the structureID and leaving
+    // the rest of the cell header bits intact for crash analysis uses.
+    enum ZapReason : int8_t { Unspecified, Destruction, StopAllocating };
+    void zap(ZapReason reason)
+    {
+        uint32_t* cellWords = bitwise_cast<uint32_t*>(this);
+        cellWords[0] = 0;
+        // Leaving cellWords[1] alone for crash analysis if needed.
+        cellWords[2] = reason;
+    }
+    bool isZapped() const { return !*bitwise_cast<const uint32_t*>(this); }
 
     bool isLive();
 
@@ -76,7 +84,7 @@ public:
     // Call use() after the last point where you need `this` pointer to be kept alive. You usually don't
     // need to use this, but it might be necessary if you're otherwise referring to an object's innards
     // but not the object itself.
-#if COMPILER(GCC_OR_CLANG)
+#if COMPILER(GCC_COMPATIBLE)
     void use() const
     {
         asm volatile ("" : : "r"(this) : "memory");
@@ -85,6 +93,16 @@ public:
     void use() const;
 #endif
 };
+
+inline bool isJSCellKind(HeapCell::Kind kind)
+{
+    return kind == HeapCell::JSCell || kind == HeapCell::JSCellWithInteriorPointers;
+}
+
+inline bool hasInteriorPointers(HeapCell::Kind kind)
+{
+    return kind == HeapCell::Auxiliary || kind == HeapCell::JSCellWithInteriorPointers;
+}
 
 } // namespace JSC
 

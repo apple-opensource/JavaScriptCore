@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,11 +26,15 @@
 #include "config.h"
 
 #import "APICast.h"
+#import "Completion.h"
+#import "JSBaseInternal.h"
 #import "JSCInlines.h"
 #import "JSContextInternal.h"
 #import "JSContextPrivate.h"
 #import "JSContextRefInternal.h"
 #import "JSGlobalObject.h"
+#import "JSInternalPromise.h"
+#import "JSModuleLoader.h"
 #import "JSValueInternal.h"
 #import "JSVirtualMachineInternal.h"
 #import "JSWrapperMap.h"
@@ -38,12 +42,15 @@
 #import "ObjcRuntimeExtras.h"
 #import "StrongInlines.h"
 
+#import <wtf/WeakObjCPtr.h>
+
 #if JSC_OBJC_API_ENABLED
 
 @implementation JSContext {
     JSVirtualMachine *m_virtualMachine;
     JSGlobalContextRef m_context;
     JSC::Strong<JSC::JSObject> m_exception;
+    WeakObjCPtr<id <JSModuleLoaderDelegate>> m_moduleLoaderDelegate;
 }
 
 - (JSGlobalContextRef)JSGlobalContextRef
@@ -100,17 +107,69 @@
 - (JSValue *)evaluateScript:(NSString *)script withSourceURL:(NSURL *)sourceURL
 {
     JSValueRef exceptionValue = nullptr;
-    JSStringRef scriptJS = JSStringCreateWithCFString((CFStringRef)script);
-    JSStringRef sourceURLJS = sourceURL ? JSStringCreateWithCFString((CFStringRef)[sourceURL absoluteString]) : nullptr;
-    JSValueRef result = JSEvaluateScript(m_context, scriptJS, nullptr, sourceURLJS, 0, &exceptionValue);
-    if (sourceURLJS)
-        JSStringRelease(sourceURLJS);
-    JSStringRelease(scriptJS);
+    auto scriptJS = OpaqueJSString::tryCreate(script);
+    auto sourceURLJS = OpaqueJSString::tryCreate([sourceURL absoluteString]);
+    JSValueRef result = JSEvaluateScript(m_context, scriptJS.get(), nullptr, sourceURLJS.get(), 0, &exceptionValue);
 
     if (exceptionValue)
         return [self valueFromNotifyException:exceptionValue];
-
     return [JSValue valueWithJSValueRef:result inContext:self];
+}
+
+- (JSValue *)evaluateJSScript:(JSScript *)script
+{
+    JSC::ExecState* exec = toJS(m_context);
+    JSC::VM& vm = exec->vm();
+    JSC::JSLockHolder locker(vm);
+
+    if (script.type == kJSScriptTypeProgram) {
+        JSValueRef exceptionValue = nullptr;
+        JSC::SourceCode sourceCode = [script sourceCode];
+        JSValueRef result = JSEvaluateScriptInternal(locker, exec, m_context, nullptr, sourceCode, &exceptionValue);
+
+        if (exceptionValue)
+            return [self valueFromNotifyException:exceptionValue];
+        return [JSValue valueWithJSValueRef:result inContext:self];
+    }
+
+    auto* globalObject = JSC::jsDynamicCast<JSC::JSAPIGlobalObject*>(vm, exec->lexicalGlobalObject());
+    if (!globalObject)
+        return [JSValue valueWithNewPromiseRejectedWithReason:[JSValue valueWithNewErrorFromMessage:@"Context does not support module loading" inContext:self] inContext:self];
+
+    auto scope = DECLARE_CATCH_SCOPE(vm);
+    JSC::JSValue result = globalObject->loadAndEvaluateJSScriptModule(locker, script);
+    if (scope.exception()) {
+        JSValueRef exceptionValue = toRef(exec, scope.exception()->value());
+        scope.clearException();
+        return [JSValue valueWithNewPromiseRejectedWithReason:[JSValue valueWithJSValueRef:exceptionValue inContext:self] inContext:self];
+    }
+    return [JSValue valueWithJSValueRef:toRef(vm, result) inContext:self];
+}
+
+- (JSValue *)dependencyIdentifiersForModuleJSScript:(JSScript *)script
+{
+    JSC::ExecState* exec = toJS(m_context);
+    JSC::VM& vm = exec->vm();
+    JSC::JSLockHolder locker(vm);
+
+    if (script.type != kJSScriptTypeModule) {
+        self.exceptionHandler(self, [JSValue valueWithNewErrorFromMessage:@"script is not a module" inContext:self]);
+        return [JSValue valueWithUndefinedInContext:self];
+    }
+
+    auto scope = DECLARE_CATCH_SCOPE(vm);
+    JSC::JSArray* result = exec->lexicalGlobalObject()->moduleLoader()->dependencyKeysIfEvaluated(exec, JSC::jsString(&vm, [[script sourceURL] absoluteString]));
+    if (scope.exception()) {
+        JSValueRef exceptionValue = toRef(exec, scope.exception()->value());
+        scope.clearException();
+        return [self valueFromNotifyException:exceptionValue];
+    }
+
+    if (!result) {
+        self.exceptionHandler(self, [JSValue valueWithNewErrorFromMessage:@"script has not run in context or was not evaluated successfully" inContext:self]);
+        return [JSValue valueWithUndefinedInContext:self];
+    }
+    return [JSValue valueWithJSValueRef:toRef(vm, result) inContext:self];
 }
 
 - (void)setException:(JSValue *)value
@@ -129,11 +188,6 @@
     if (!m_exception)
         return nil;
     return [JSValue valueWithJSValueRef:toRef(m_exception.get()) inContext:self];
-}
-
-- (JSWrapperMap *)wrapperMap
-{
-    return toJS(m_context)->lexicalGlobalObject()->wrapperMap();
 }
 
 - (JSValue *)globalObject
@@ -161,7 +215,8 @@
 {
     Thread& thread = Thread::current();
     CallbackData *entry = (CallbackData *)thread.m_apiData;
-    if (!entry)
+    // calleeValue may be null if we are initializing a promise.
+    if (!entry || !entry->calleeValue)
         return nil;
     return [JSValue valueWithJSValueRef:entry->calleeValue inContext:[JSContext currentContext]];
 }
@@ -197,15 +252,12 @@
     if (!name)
         return nil;
 
-    return (NSString *)adoptCF(JSStringCopyCFString(kCFAllocatorDefault, name)).autorelease();
+    return CFBridgingRelease(JSStringCopyCFString(kCFAllocatorDefault, name));
 }
 
 - (void)setName:(NSString *)name
 {
-    JSStringRef nameJS = name ? JSStringCreateWithCFString((CFStringRef)[[name copy] autorelease]) : nullptr;
-    JSGlobalContextSetName(m_context, nameJS);
-    if (nameJS)
-        JSStringRelease(nameJS);
+    JSGlobalContextSetName(m_context, OpaqueJSString::tryCreate(name).get());
 }
 
 - (BOOL)_remoteInspectionEnabled
@@ -236,6 +288,16 @@
 - (void)_setDebuggerRunLoop:(CFRunLoopRef)runLoop
 {
     JSGlobalContextSetDebuggerRunLoop(m_context, runLoop);
+}
+
+- (id<JSModuleLoaderDelegate>)moduleLoaderDelegate
+{
+    return m_moduleLoaderDelegate.getAutoreleased();
+}
+
+- (void)setModuleLoaderDelegate:(id<JSModuleLoaderDelegate>)moduleLoaderDelegate
+{
+    m_moduleLoaderDelegate = moduleLoaderDelegate;
 }
 
 @end
@@ -320,6 +382,11 @@
     return [[self wrapperMap] jsWrapperForObject:object inContext:self];
 }
 
+- (JSWrapperMap *)wrapperMap
+{
+    return toJS(m_context)->lexicalGlobalObject()->wrapperMap();
+}
+
 - (JSValue *)wrapperForJSObject:(JSValueRef)value
 {
     JSC::JSLockHolder locker(toJS(m_context));
@@ -336,25 +403,5 @@
 }
 
 @end
-
-WeakContextRef::WeakContextRef(JSContext *context)
-{
-    objc_initWeak(&m_weakContext, context);
-}
-
-WeakContextRef::~WeakContextRef()
-{
-    objc_destroyWeak(&m_weakContext);
-}
-
-JSContext * WeakContextRef::get()
-{
-    return objc_loadWeak(&m_weakContext);
-}
-
-void WeakContextRef::set(JSContext *context)
-{
-    objc_storeWeak(&m_weakContext, context);
-}
 
 #endif

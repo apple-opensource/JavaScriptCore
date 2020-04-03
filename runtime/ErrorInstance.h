@@ -65,6 +65,9 @@ public:
     void setOutOfMemoryError() { m_outOfMemoryError = true; }
     bool isOutOfMemoryError() const { return m_outOfMemoryError; }
 
+    void setNativeGetterTypeError() { m_nativeGetterTypeError = true; }
+    bool isNativeGetterTypeError() const { return m_nativeGetterTypeError; }
+
     JS_EXPORT_PRIVATE String sanitizedToString(ExecState*);
     
     Vector<StackFrame>* stackTrace() { return m_stackTrace.get(); }
@@ -72,13 +75,19 @@ public:
     bool materializeErrorInfoIfNeeded(VM&);
     bool materializeErrorInfoIfNeeded(VM&, PropertyName);
 
+    template<typename CellType, SubspaceAccess mode>
+    static IsoSubspace* subspaceFor(VM& vm)
+    {
+        return vm.errorInstanceSpace<mode>();
+    }
+
+    void finalizeUnconditionally(VM&);
+
 protected:
     explicit ErrorInstance(VM&, Structure*);
 
     void finishCreation(ExecState*, VM&, const String&, bool useCurrentFrame = true);
     static void destroy(JSCell*);
-
-    static void visitChildren(JSCell*, SlotVisitor&);
 
     static bool getOwnPropertySlot(JSObject*, ExecState*, PropertyName, PropertySlot&);
     static void getOwnNonIndexPropertyNames(JSObject*, ExecState*, PropertyNameArray&, EnumerationMode);
@@ -86,13 +95,20 @@ protected:
     static bool defineOwnProperty(JSObject*, ExecState*, PropertyName, const PropertyDescriptor&, bool shouldThrow);
     static bool put(JSCell*, ExecState*, PropertyName, JSValue, PutPropertySlot&);
     static bool deleteProperty(JSCell*, ExecState*, PropertyName);
-    
+
+    void computeErrorInfo(VM&);
+
     SourceAppender m_sourceAppender { nullptr };
+    std::unique_ptr<Vector<StackFrame>> m_stackTrace;
+    unsigned m_line;
+    unsigned m_column;
+    String m_sourceURL;
+    String m_stackString;
     RuntimeType m_runtimeTypeForCause { TypeNothing };
     bool m_stackOverflowError { false };
     bool m_outOfMemoryError { false };
     bool m_errorInfoMaterialized { false };
-    std::unique_ptr<Vector<StackFrame>> m_stackTrace;
+    bool m_nativeGetterTypeError { false };
 };
 
 } // namespace JSC

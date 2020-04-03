@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2009-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,12 +29,15 @@
 #include "GCIncomingRefCounted.h"
 #include "Weak.h"
 #include <wtf/CagedPtr.h>
+#include <wtf/CheckedArithmetic.h>
 #include <wtf/Function.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/text/WTFString.h>
 
 namespace JSC {
+
+#define MAX_ARRAY_BUFFER_SIZE 0x7fffffffu
 
 class VM;
 class ArrayBuffer;
@@ -45,20 +48,23 @@ typedef Function<void(void*)> ArrayBufferDestructorFunction;
 
 class SharedArrayBufferContents : public ThreadSafeRefCounted<SharedArrayBufferContents> {
 public:
-    SharedArrayBufferContents(void* data, ArrayBufferDestructorFunction&&);
+    SharedArrayBufferContents(void* data, unsigned size, ArrayBufferDestructorFunction&&);
     ~SharedArrayBufferContents();
     
-    void* data() const { return m_data.getMayBeNull(); }
+    void* data() const { return m_data.getMayBeNull(m_sizeInBytes); }
     
 private:
-    CagedPtr<Gigacage::Primitive, void> m_data;
+    using DataType = CagedPtr<Gigacage::Primitive, void, tagCagedPtr>;
+    DataType m_data;
     ArrayBufferDestructorFunction m_destructor;
+    unsigned m_sizeInBytes;
 };
 
 class ArrayBufferContents {
     WTF_MAKE_NONCOPYABLE(ArrayBufferContents);
 public:
     JS_EXPORT_PRIVATE ArrayBufferContents();
+    JS_EXPORT_PRIVATE ArrayBufferContents(void* data, unsigned sizeInBytes, ArrayBufferDestructorFunction&&);
     
     JS_EXPORT_PRIVATE ArrayBufferContents(ArrayBufferContents&&);
     JS_EXPORT_PRIVATE ArrayBufferContents& operator=(ArrayBufferContents&&);
@@ -69,14 +75,12 @@ public:
     
     explicit operator bool() { return !!m_data; }
     
-    void* data() const { return m_data.getMayBeNull(); }
+    void* data() const { return m_data.getMayBeNull(sizeInBytes()); }
     unsigned sizeInBytes() const { return m_sizeInBytes; }
     
     bool isShared() const { return m_shared; }
-
-private:
-    ArrayBufferContents(void* data, unsigned sizeInBytes, ArrayBufferDestructorFunction&&);
     
+private:
     void destroy();
     void reset();
 
@@ -96,7 +100,8 @@ private:
 
     ArrayBufferDestructorFunction m_destructor;
     RefPtr<SharedArrayBufferContents> m_shared;
-    CagedPtr<Gigacage::Primitive, void> m_data;
+    using DataType = CagedPtr<Gigacage::Primitive, void, tagCagedPtr>;
+    DataType m_data;
     unsigned m_sizeInBytes;
 };
 
@@ -112,7 +117,7 @@ public:
     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(ArrayBuffer&);
     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreate(const void* source, unsigned byteLength);
 
-    // Only for use by Uint8ClampedArray::createUninitialized and SharedBuffer::tryCreateArrayBuffer.
+    // Only for use by Uint8ClampedArray::tryCreateUninitialized and SharedBuffer::tryCreateArrayBuffer.
     JS_EXPORT_PRIVATE static Ref<ArrayBuffer> createUninitialized(unsigned numElements, unsigned elementByteSize);
     JS_EXPORT_PRIVATE static RefPtr<ArrayBuffer> tryCreateUninitialized(unsigned numElements, unsigned elementByteSize);
 
@@ -127,8 +132,8 @@ public:
 
     inline size_t gcSizeEstimateInBytes() const;
 
-    JS_EXPORT_PRIVATE RefPtr<ArrayBuffer> slice(int begin, int end) const;
-    JS_EXPORT_PRIVATE RefPtr<ArrayBuffer> slice(int begin) const;
+    JS_EXPORT_PRIVATE Ref<ArrayBuffer> slice(double begin, double end) const;
+    JS_EXPORT_PRIVATE Ref<ArrayBuffer> slice(double begin) const;
     
     inline void pin();
     inline void unpin();
@@ -153,46 +158,36 @@ private:
     static Ref<ArrayBuffer> createInternal(ArrayBufferContents&&, const void*, unsigned);
     static RefPtr<ArrayBuffer> tryCreate(unsigned numElements, unsigned elementByteSize, ArrayBufferContents::InitializationPolicy);
     ArrayBuffer(ArrayBufferContents&&);
-    RefPtr<ArrayBuffer> sliceImpl(unsigned begin, unsigned end) const;
-    inline unsigned clampIndex(int index) const;
-    static inline int clampValue(int x, int left, int right);
+    Ref<ArrayBuffer> sliceImpl(unsigned begin, unsigned end) const;
+    inline unsigned clampIndex(double index) const;
+    static inline unsigned clampValue(double x, unsigned left, unsigned right);
 
     void notifyIncommingReferencesOfTransfer(VM&);
 
     ArrayBufferContents m_contents;
-    unsigned m_pinCount : 30;
-    bool m_isWasmMemory : 1;
+    Checked<unsigned> m_pinCount;
+    bool m_isWasmMemory;
     // m_locked == true means that some API user fetched m_contents directly from a TypedArray object,
     // the buffer is backed by a WebAssembly.Memory, or is a SharedArrayBuffer.
-    bool m_locked : 1;
+    bool m_locked;
 
 public:
     Weak<JSArrayBuffer> m_wrapper;
 };
 
-int ArrayBuffer::clampValue(int x, int left, int right)
-{
-    ASSERT(left <= right);
-    if (x < left)
-        x = left;
-    if (right < x)
-        x = right;
-    return x;
-}
-
 void* ArrayBuffer::data()
 {
-    return m_contents.m_data.getMayBeNull();
+    return m_contents.data();
 }
 
 const void* ArrayBuffer::data() const
 {
-    return m_contents.m_data.getMayBeNull();
+    return m_contents.data();
 }
 
 unsigned ArrayBuffer::byteLength() const
 {
-    return m_contents.m_sizeInBytes;
+    return m_contents.sizeInBytes();
 }
 
 bool ArrayBuffer::isShared() const
@@ -204,14 +199,6 @@ size_t ArrayBuffer::gcSizeEstimateInBytes() const
 {
     // FIXME: We probably want to scale this by the shared ref count or something.
     return sizeof(ArrayBuffer) + static_cast<size_t>(byteLength());
-}
-
-unsigned ArrayBuffer::clampIndex(int index) const
-{
-    unsigned currentLength = byteLength();
-    if (index < 0)
-        index = currentLength + index;
-    return clampValue(index, 0, currentLength);
 }
 
 void ArrayBuffer::pin()

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -61,15 +61,15 @@ public:
     
     bool run()
     {
-        RELEASE_ASSERT(m_graph.m_plan.mode == DFGMode);
-        
+        RELEASE_ASSERT(m_graph.m_plan.mode() == DFGMode);
+
         if (!Options::useFTLJIT())
             return false;
         
         if (m_graph.m_profiledBlock->m_didFailFTLCompilation)
             return false;
 
-        if (!Options::bytecodeRangeToFTLCompile().isInRange(m_graph.m_profiledBlock->instructionCount()))
+        if (!Options::bytecodeRangeToFTLCompile().isInRange(m_graph.m_profiledBlock->instructionsSize()))
             return false;
 
         if (!ensureGlobalFTLWhitelist().contains(m_graph.m_profiledBlock))
@@ -108,9 +108,9 @@ public:
                     tierUpType = CheckTierUpInLoop;
                 insertionSet.insertNode(nodeIndex + 1, SpecNone, tierUpType, origin);
 
-                unsigned bytecodeIndex = origin.semantic.bytecodeIndex;
+                unsigned bytecodeIndex = origin.semantic.bytecodeIndex();
                 if (canOSREnter)
-                    m_graph.m_plan.tierUpAndOSREnterBytecodes.append(bytecodeIndex);
+                    m_graph.m_plan.tierUpAndOSREnterBytecodes().append(bytecodeIndex);
 
                 if (const NaturalLoop* loop = naturalLoops.innerMostLoopOf(block)) {
                     LoopHintDescriptor descriptor;
@@ -122,8 +122,7 @@ public:
                         if (it != naturalLoopToLoopHint.end())
                             descriptor.osrEntryCandidates.append(it->value);
                     }
-                    if (!descriptor.osrEntryCandidates.isEmpty())
-                        tierUpHierarchy.add(bytecodeIndex, WTFMove(descriptor));
+                    tierUpHierarchy.add(bytecodeIndex, WTFMove(descriptor));
                 }
                 break;
             }
@@ -148,9 +147,9 @@ public:
             }
 
             if (!tierUpCandidates.isEmpty())
-                m_graph.m_plan.tierUpInLoopHierarchy.add(entry.key, WTFMove(tierUpCandidates));
+                m_graph.m_plan.tierUpInLoopHierarchy().add(entry.key, WTFMove(tierUpCandidates));
         }
-        m_graph.m_plan.willTryToTierUp = true;
+        m_graph.m_plan.setWillTryToTierUp(true);
         return true;
 #else // ENABLE(FTL_JIT)
         RELEASE_ASSERT_NOT_REACHED();
@@ -171,7 +170,7 @@ private:
         ASSERT(node->op() == LoopHint);
 
         NodeOrigin origin = node->origin;
-        if (level != FTL::CanCompileAndOSREnter || origin.semantic.inlineCallFrame)
+        if (level != FTL::CanCompileAndOSREnter || origin.semantic.inlineCallFrame())
             return false;
 
         // We only put OSR checks for the first LoopHint in the block. Note that
@@ -195,7 +194,7 @@ private:
                     continue;
 
                 if (const NaturalLoop* loop = naturalLoops.innerMostLoopOf(block)) {
-                    unsigned bytecodeIndex = node->origin.semantic.bytecodeIndex;
+                    unsigned bytecodeIndex = node->origin.semantic.bytecodeIndex();
                     naturalLoopsToLoopHint.add(loop, bytecodeIndex);
                 }
                 break;

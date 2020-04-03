@@ -27,7 +27,7 @@
 
 namespace JSC {
 
-enum Intrinsic {
+enum Intrinsic : uint8_t {
     // Call intrinsics.
     NoIntrinsic,
     AbsIntrinsic,
@@ -68,7 +68,11 @@ enum Intrinsic {
     RegExpExecIntrinsic,
     RegExpTestIntrinsic,
     RegExpTestFastIntrinsic,
+    RegExpMatchFastIntrinsic,
+    ObjectCreateIntrinsic,
     ObjectGetPrototypeOfIntrinsic,
+    ObjectIsIntrinsic,
+    ObjectKeysIntrinsic,
     ReflectGetPrototypeOfIntrinsic,
     StringPrototypeValueOfIntrinsic,
     StringPrototypeReplaceIntrinsic,
@@ -76,6 +80,7 @@ enum Intrinsic {
     StringPrototypeSliceIntrinsic,
     StringPrototypeToLowerCaseIntrinsic,
     NumberPrototypeToStringIntrinsic,
+    NumberIsIntegerIntrinsic,
     IMulIntrinsic,
     RandomIntrinsic,
     FRoundIntrinsic,
@@ -96,7 +101,9 @@ enum Intrinsic {
     JSSetBucketKeyIntrinsic,
     JSWeakMapGetIntrinsic,
     JSWeakMapHasIntrinsic,
+    JSWeakMapSetIntrinsic,
     JSWeakSetHasIntrinsic,
+    JSWeakSetAddIntrinsic,
     HasOwnPropertyIntrinsic,
     AtomicsAddIntrinsic,
     AtomicsAndIntrinsic,
@@ -121,6 +128,7 @@ enum Intrinsic {
     // Debugging intrinsics. These are meant to be used as testing hacks within
     // jsc.cpp and should never be exposed to users.
     DFGTrueIntrinsic,
+    FTLTrueIntrinsic,
     OSRExitIntrinsic,
     IsFinalTierIntrinsic,
     SetInt32HeapPredictionIntrinsic,
@@ -132,6 +140,23 @@ enum Intrinsic {
     CPURdtscIntrinsic,
     CPUCpuidIntrinsic,
     CPUPauseIntrinsic,
+
+    DataViewGetInt8,
+    DataViewGetUint8,
+    DataViewGetInt16,
+    DataViewGetUint16,
+    DataViewGetInt32,
+    DataViewGetUint32,
+    DataViewGetFloat32,
+    DataViewGetFloat64,
+    DataViewSetInt8,
+    DataViewSetUint8,
+    DataViewSetInt16,
+    DataViewSetUint16,
+    DataViewSetInt32,
+    DataViewSetUint32,
+    DataViewSetFloat32,
+    DataViewSetFloat64,
 };
 
 const char* intrinsicName(Intrinsic);

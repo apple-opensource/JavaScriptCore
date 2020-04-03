@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -59,6 +59,7 @@ struct Node;
 // may need be performed should a speculation check fail.
 enum SpeculationRecoveryType : uint8_t {
     SpeculativeAdd,
+    SpeculativeAddSelf,
     SpeculativeAddImmediate,
     BooleanSpeculationCheck
 };
@@ -74,7 +75,7 @@ public:
         , m_dest(dest)
         , m_type(type)
     {
-        ASSERT(m_type == SpeculativeAdd || m_type == BooleanSpeculationCheck);
+        ASSERT(m_type == SpeculativeAdd || m_type == SpeculativeAddSelf || m_type == BooleanSpeculationCheck);
     }
 
     SpeculationRecovery(SpeculationRecoveryType type, GPRReg dest, int32_t immediate)
@@ -145,9 +146,8 @@ struct OSRExit : public OSRExitBase {
     static void JIT_OPERATION compileOSRExit(ExecState*) WTF_INTERNAL;
     static void executeOSRExit(Probe::Context&);
 
-    unsigned m_patchableCodeOffset { 0 };
-    
-    MacroAssemblerCodeRef m_code;
+    CodeLocationLabel<JSInternalPtrTag> m_patchableJumpLocation;
+    MacroAssemblerCodeRef<OSRExitPtrTag> m_code;
 
     RefPtr<OSRExitState> exitState;
     
@@ -156,10 +156,7 @@ struct OSRExit : public OSRExitBase {
     
     unsigned m_recoveryIndex;
 
-    void setPatchableCodeOffset(MacroAssembler::PatchableJump);
-    MacroAssembler::Jump getPatchableCodeOffsetAsJump() const;
-    CodeLocationJump codeLocationForRepatch(CodeBlock*) const;
-    void correctJump(LinkBuffer&);
+    CodeLocationJump<JSInternalPtrTag> codeLocationForRepatch() const;
 
     unsigned m_streamIndex;
     void considerAddingAsFrequentExitSite(CodeBlock* profiledCodeBlock)

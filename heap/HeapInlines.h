@@ -29,8 +29,7 @@
 #include "Heap.h"
 #include "HeapCellInlines.h"
 #include "IndexingHeader.h"
-#include "JSCallee.h"
-#include "JSCell.h"
+#include "JSCast.h"
 #include "Structure.h"
 #include <type_traits>
 #include <wtf/Assertions.h>
@@ -68,15 +67,13 @@ inline bool Heap::worldIsStopped() const
     return m_worldIsStopped;
 }
 
-// FIXME: This should be an instance method, so that it can get the markingVersion() quickly.
-// https://bugs.webkit.org/show_bug.cgi?id=179988
 ALWAYS_INLINE bool Heap::isMarked(const void* rawCell)
 {
     HeapCell* cell = bitwise_cast<HeapCell*>(rawCell);
     if (cell->isLargeAllocation())
         return cell->largeAllocation().isMarked();
     MarkedBlock& block = cell->markedBlock();
-    return block.isMarked(block.vm()->heap.objectSpace().markingVersion(), cell);
+    return block.isMarked(m_objectSpace.markingVersion(), cell);
 }
 
 ALWAYS_INLINE bool Heap::testAndSetMarked(HeapVersion markingVersion, const void* rawCell)
@@ -167,21 +164,28 @@ inline void Heap::releaseSoon(RetainPtr<T>&& object)
 }
 #endif
 
+#ifdef JSC_GLIB_API_ENABLED
+inline void Heap::releaseSoon(std::unique_ptr<JSCGLibWrapperObject>&& object)
+{
+    m_delayedReleaseObjects.append(WTFMove(object));
+}
+#endif
+
 inline void Heap::incrementDeferralDepth()
 {
-    ASSERT(!mayBeGCThread() || m_worldIsStopped);
+    ASSERT(!Thread::mayBeGCThread() || m_worldIsStopped);
     m_deferralDepth++;
 }
 
 inline void Heap::decrementDeferralDepth()
 {
-    ASSERT(!mayBeGCThread() || m_worldIsStopped);
+    ASSERT(!Thread::mayBeGCThread() || m_worldIsStopped);
     m_deferralDepth--;
 }
 
 inline void Heap::decrementDeferralDepthAndGCIfNeeded()
 {
-    ASSERT(!mayBeGCThread() || m_worldIsStopped);
+    ASSERT(!Thread::mayBeGCThread() || m_worldIsStopped);
     m_deferralDepth--;
     
     if (UNLIKELY(m_didDeferGCWork)) {
@@ -231,6 +235,9 @@ inline void Heap::deprecatedReportExtraMemory(size_t size)
 
 inline void Heap::acquireAccess()
 {
+    if (validateDFGDoesGC)
+        RELEASE_ASSERT(expectDoesGC());
+
     if (m_worldState.compareExchangeWeak(0, hasAccessBit))
         return;
     acquireAccessSlow();
@@ -255,6 +262,9 @@ inline bool Heap::mayNeedToStop()
 
 inline void Heap::stopIfNecessary()
 {
+    if (validateDFGDoesGC)
+        RELEASE_ASSERT(expectDoesGC());
+
     if (mayNeedToStop())
         stopIfNecessarySlow();
 }
@@ -262,17 +272,10 @@ inline void Heap::stopIfNecessary()
 template<typename Func>
 void Heap::forEachSlotVisitor(const Func& func)
 {
-    auto locker = holdLock(m_parallelSlotVisitorLock);
     func(*m_collectorSlotVisitor);
     func(*m_mutatorSlotVisitor);
     for (auto& slotVisitor : m_parallelSlotVisitors)
         func(*slotVisitor);
-}
-
-inline unsigned Heap::numberOfSlotVisitors()
-{
-    auto locker = holdLock(m_parallelSlotVisitorLock);
-    return m_parallelSlotVisitors.size() + 2; // m_collectorSlotVisitor and m_mutatorSlotVisitor
 }
 
 } // namespace JSC
