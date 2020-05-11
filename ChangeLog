@@ -1,16 +1,1596 @@
-2019-08-11  Babak Shafiei  <bshafiei@apple.com>
+2019-12-03  Alan Coon  <alancoon@apple.com>
 
-        Apply patch. rdar://problem/54171879
+        Cherry-pick r252674. rdar://problem/57609333
 
-    2019-08-11  Maciej Stachowiak  <mjs@apple.com>
+    [JSC] MetadataTable::sizeInBytes should not touch m_rawBuffer in UnlinkedMetadataTable unless MetadataTable is linked to that UnlinkedMetadataTable
+    https://bugs.webkit.org/show_bug.cgi?id=204390
+    
+    Reviewed by Mark Lam.
+    
+    We have a race issue here. When calling MetadataTable::sizeInBytes, we call UnlinkedMetadataTable::sizeInBytes since we change the result based on
+    whether this MetadataTable is linked to this UnlinkedMetadataTable or not. The problem is that we are calling `UnlinkedMetadataTable::totalSize`
+    unconditionally in UnlinkedMetadataTable::sizeInBytes, and this is touching m_rawBuffer unconditionally. This is not correct since it is possible
+    that this m_rawBuffer is realloced while we are calling MetadataTable::sizeInBytes in GC thread.
+    
+        1. The GC thread is calling MetadataTable::sizeInBytes for MetadataTable "A".
+        2. The main thread is destroying MetadataTable "B".
+        3. MetadataTable "B" is linked to UnlinkedMetadataTable "C".
+        4. MetadataTable "A" is pointing to UnlinkedMetadataTable "C".
+        5. "A" is touching UnlinkedMetadataTable::m_rawBuffer in "C", called from MetadataTable::sizeInBytes.
+        6. (2) destroys MetadataTable "B", and realloc UnlinkedMetadataTable::m_rawBuffer in "C".
+        7. (5) can touch already freed buffer.
+    
+    This patch fixes UnlinkedMetadataTable::sizeInBytes: not touching m_rawBuffer unless it is owned by the caller's MetadataTable. We need to call
+    UnlinkedMetadataTable::sizeInBytes anyway since we need to adjust the result based on whether the caller MetadataTable is linked to this UnlinkedMetadataTable.
+    
+    * bytecode/UnlinkedMetadataTableInlines.h:
+    (JSC::UnlinkedMetadataTable::sizeInBytes):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@252674 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-11-19  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] MetadataTable::sizeInBytes should not touch m_rawBuffer in UnlinkedMetadataTable unless MetadataTable is linked to that UnlinkedMetadataTable
+            https://bugs.webkit.org/show_bug.cgi?id=204390
+
+            Reviewed by Mark Lam.
+
+            We have a race issue here. When calling MetadataTable::sizeInBytes, we call UnlinkedMetadataTable::sizeInBytes since we change the result based on
+            whether this MetadataTable is linked to this UnlinkedMetadataTable or not. The problem is that we are calling `UnlinkedMetadataTable::totalSize`
+            unconditionally in UnlinkedMetadataTable::sizeInBytes, and this is touching m_rawBuffer unconditionally. This is not correct since it is possible
+            that this m_rawBuffer is realloced while we are calling MetadataTable::sizeInBytes in GC thread.
+
+                1. The GC thread is calling MetadataTable::sizeInBytes for MetadataTable "A".
+                2. The main thread is destroying MetadataTable "B".
+                3. MetadataTable "B" is linked to UnlinkedMetadataTable "C".
+                4. MetadataTable "A" is pointing to UnlinkedMetadataTable "C".
+                5. "A" is touching UnlinkedMetadataTable::m_rawBuffer in "C", called from MetadataTable::sizeInBytes.
+                6. (2) destroys MetadataTable "B", and realloc UnlinkedMetadataTable::m_rawBuffer in "C".
+                7. (5) can touch already freed buffer.
+
+            This patch fixes UnlinkedMetadataTable::sizeInBytes: not touching m_rawBuffer unless it is owned by the caller's MetadataTable. We need to call
+            UnlinkedMetadataTable::sizeInBytes anyway since we need to adjust the result based on whether the caller MetadataTable is linked to this UnlinkedMetadataTable.
+
+            * bytecode/UnlinkedMetadataTableInlines.h:
+            (JSC::UnlinkedMetadataTable::sizeInBytes):
+
+2019-11-04  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r248552. rdar://problem/56868427
+
+    Replace multiparameter overloads of append() in StringBuilder as a first step toward standardizinging on the flexibleAppend() implementation
+    https://bugs.webkit.org/show_bug.cgi?id=200614
+    
+    Reviewed by Darin Adler.
+    
+    Renames StringBuilder::append(const LChar*, unsigned), StringBuilder::append(const UChar*, unsigned) and 
+    StringBuilder::append(const char*, unsigned) to StringBuilder::appendCharacters(...).
+            
+    Renames StringBuilder::append(const String& string, unsigned offset, unsigned length) to 
+    StringBuilder::appendSubstring(...).
+    
+    Source/JavaScriptCore:
+    
+    * dfg/DFGStrengthReductionPhase.cpp:
+    (JSC::DFG::StrengthReductionPhase::handleNode):
+    * runtime/ConfigFile.cpp:
+    (JSC::ConfigFile::parse):
+    * runtime/LiteralParser.cpp:
+    (JSC::LiteralParser<CharType>::Lexer::lexStringSlow):
+    * tools/FunctionOverrides.cpp:
+    (JSC::parseClause):
+    Update for renames.
+    
+    Source/WebCore:
+    
+    * dom/Range.cpp:
+    (WebCore::Range::toString const):
+    * editing/Editing.cpp:
+    (WebCore::stringWithRebalancedWhitespace):
+    * editing/MarkupAccumulator.cpp:
+    (WebCore::appendCharactersReplacingEntitiesInternal):
+    * editing/TextIterator.cpp:
+    (WebCore::TextIteratorCopyableText::appendToStringBuilder const):
+    * html/HTMLTextFormControlElement.cpp:
+    (WebCore::HTMLTextFormControlElement::valueWithHardLineBreaks const):
+    * html/parser/HTMLTokenizer.cpp:
+    (WebCore::HTMLTokenizer::bufferedCharacters const):
+    * platform/graphics/avfoundation/InbandTextTrackPrivateAVF.cpp:
+    (WebCore::InbandTextTrackPrivateAVF::processNativeSamples):
+    * platform/text/SegmentedString.cpp:
+    (WebCore::SegmentedString::Substring::appendTo const):
+    * platform/text/TextCodecICU.cpp:
+    (WebCore::TextCodecICU::decode):
+    * xml/XSLTProcessorLibxslt.cpp:
+    (WebCore::writeToStringBuilder):
+    Update for renames.
+    
+    Source/WebKit:
+    
+    * Shared/mac/AuxiliaryProcessMac.mm:
+    (WebKit::setAndSerializeSandboxParameters):
+    * UIProcess/WebProcessPool.cpp:
+    (WebKit::WebProcessPool::didReceiveInvalidMessage):
+    Update for renames.
+    
+    Source/WTF:
+    
+    * wtf/HexNumber.h:
+    (WTF::appendUnsignedAsHexFixedSize):
+    Add overload that explicitly takes a StringBuilder to work around rename from append to appendCharacters.
+    
+    * wtf/text/StringBuilder.cpp:
+    (WTF::StringBuilder::appendCharacters):
+    (WTF::StringBuilder::append):
+    * wtf/text/StringBuilder.h:
+    (WTF::StringBuilder::appendCharacters):
+    (WTF::StringBuilder::append):
+    (WTF::StringBuilder::appendSubstring):
+    (WTF::StringBuilder::appendLiteral):
+    (WTF::IntegerToStringConversionTrait<StringBuilder>::flush):
+    Update for renames.
+    
+    Tools:
+    
+    * TestWebKitAPI/Tests/WTF/StringBuilder.cpp:
+    (TestWebKitAPI::TEST):
+    Update for renames.
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248552 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-12  Sam Weinig  <weinig@apple.com>
+
+            Replace multiparameter overloads of append() in StringBuilder as a first step toward standardizinging on the flexibleAppend() implementation
+            https://bugs.webkit.org/show_bug.cgi?id=200614
+
+            Reviewed by Darin Adler.
+
+            Renames StringBuilder::append(const LChar*, unsigned), StringBuilder::append(const UChar*, unsigned) and
+            StringBuilder::append(const char*, unsigned) to StringBuilder::appendCharacters(...).
+
+            Renames StringBuilder::append(const String& string, unsigned offset, unsigned length) to
+            StringBuilder::appendSubstring(...).
+
+            * dfg/DFGStrengthReductionPhase.cpp:
+            (JSC::DFG::StrengthReductionPhase::handleNode):
+            * runtime/ConfigFile.cpp:
+            (JSC::ConfigFile::parse):
+            * runtime/LiteralParser.cpp:
+            (JSC::LiteralParser<CharType>::Lexer::lexStringSlow):
+            * tools/FunctionOverrides.cpp:
+            (JSC::parseClause):
+            Update for renames.
+
+2019-10-20  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r249538. rdar://problem/56426429
+
+    LazyClassStructure::setConstructor should not store the constructor to the global object
+    https://bugs.webkit.org/show_bug.cgi?id=201484
+    <rdar://problem/50400451>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/web-assembly-constructors-should-not-override-global-object-property.js: Added.
+    
+    Source/JavaScriptCore:
+    
+    LazyClassStructure::setConstructor sets the constructor as a property of the global object.
+    This became a problem when it started being used for WebAssembly constructors, such as Module
+    and Instance, since they are properties of the WebAssembly object, not the global object. That
+    resulted in properties of the global object replaced whenever a lazy WebAssembly constructor
+    was first accessed. e.g.
+    
+    globalThis.Module = x;
+    WebAssembly.Module;
+    globalThis.Module === WebAssembly.Module;
+    
+    * runtime/LazyClassStructure.cpp:
+    (JSC::LazyClassStructure::Initializer::setConstructor):
+    * runtime/LazyClassStructure.h:
+    * runtime/Lookup.h:
+    (JSC::reifyStaticProperty):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@249538 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-05  Tadeu Zagallo  <tzagallo@apple.com>
+
+            LazyClassStructure::setConstructor should not store the constructor to the global object
+            https://bugs.webkit.org/show_bug.cgi?id=201484
+            <rdar://problem/50400451>
+
+            Reviewed by Yusuke Suzuki.
+
+            LazyClassStructure::setConstructor sets the constructor as a property of the global object.
+            This became a problem when it started being used for WebAssembly constructors, such as Module
+            and Instance, since they are properties of the WebAssembly object, not the global object. That
+            resulted in properties of the global object replaced whenever a lazy WebAssembly constructor
+            was first accessed. e.g.
+
+            globalThis.Module = x;
+            WebAssembly.Module;
+            globalThis.Module === WebAssembly.Module;
+
+            * runtime/LazyClassStructure.cpp:
+            (JSC::LazyClassStructure::Initializer::setConstructor):
+            * runtime/LazyClassStructure.h:
+            * runtime/Lookup.h:
+            (JSC::reifyStaticProperty):
+
+2019-10-15  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r250629. rdar://problem/56280996
+
+    FTL OSR exit shouldn't bother updating get_by_id array profiles that have changed modes
+    https://bugs.webkit.org/show_bug.cgi?id=202493
+    
+    Reviewed by Saam Barati.
+    
+    I added this optimization for DFG but forgot to do it for the FTL
+    at the same time. This patch rectifies that.
+    
+    * ftl/FTLOSRExitCompiler.cpp:
+    (JSC::FTL::compileStub):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@250629 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-10-02  Keith Miller  <keith_miller@apple.com>
+
+            FTL OSR exit shouldn't bother updating get_by_id array profiles that have changed modes
+            https://bugs.webkit.org/show_bug.cgi?id=202493
+
+            Reviewed by Saam Barati.
+
+            I added this optimization for DFG but forgot to do it for the FTL
+            at the same time. This patch rectifies that.
+
+            * ftl/FTLOSRExitCompiler.cpp:
+            (JSC::FTL::compileStub):
+
+2019-10-15  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r250585. rdar://problem/56280995
+
+    ObjectAllocationSinkingPhase shouldn't insert hints for allocations which are no longer valid
+    https://bugs.webkit.org/show_bug.cgi?id=199361
+    <rdar://problem/52454940>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/allocation-sinking-hints-are-valid-ssa-2.js: Added.
+    (main.fn):
+    (main.executor):
+    (main):
+    * stress/allocation-sinking-hints-are-valid-ssa.js: Added.
+    (main.fn):
+    (main.executor):
+    (main):
+    
+    Source/JavaScriptCore:
+    
+    In a prior fix to the object allocation sinking phase, I added code where we
+    made sure to insert PutHints over Phis for fields of an object at control flow
+    merge points. However, that code didn't consider that the base of the PutHint
+    may no longer be a valid heap location. This could cause us to emit invalid
+    SSA code by referring to a node which does not dominate the PutHint location.
+    This patch fixes the bug to only emit the PutHints when valid.
+    
+    This patch also makes it so that DFGValidate actually validates that the graph
+    is in valid SSA form. E.g, any use of a node N must be dominated by N.
+    
+    * dfg/DFGObjectAllocationSinkingPhase.cpp:
+    * dfg/DFGValidate.cpp:
+    
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@250585 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-10-01  Saam Barati  <sbarati@apple.com>
+
+            ObjectAllocationSinkingPhase shouldn't insert hints for allocations which are no longer valid
+            https://bugs.webkit.org/show_bug.cgi?id=199361
+            <rdar://problem/52454940>
+
+            Reviewed by Yusuke Suzuki.
+
+            In a prior fix to the object allocation sinking phase, I added code where we
+            made sure to insert PutHints over Phis for fields of an object at control flow
+            merge points. However, that code didn't consider that the base of the PutHint
+            may no longer be a valid heap location. This could cause us to emit invalid
+            SSA code by referring to a node which does not dominate the PutHint location.
+            This patch fixes the bug to only emit the PutHints when valid.
+
+            This patch also makes it so that DFGValidate actually validates that the graph
+            is in valid SSA form. E.g, any use of a node N must be dominated by N.
+
+            * dfg/DFGObjectAllocationSinkingPhase.cpp:
+            * dfg/DFGValidate.cpp:
+
+2019-10-15  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r249959. rdar://problem/56280989
+
+    CheckArray on DirectArguments/ScopedArguments does not filter out slow put array storage
+    https://bugs.webkit.org/show_bug.cgi?id=201853
+    <rdar://problem/53805461>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/direct-arguments-check-array-filter-type.js: Added.
+    (foo):
+    
+    Source/JavaScriptCore:
+    
+    We were claiming CheckArray for ScopedArguments/DirectArguments was filtering
+    out SlowPutArrayStorage. It does no such thing. We just check that the object
+    is either ScopedArguments/DirectArguments.
+    
+    * dfg/DFGArrayMode.h:
+    (JSC::DFG::ArrayMode::arrayModesThatPassFiltering const):
+    (JSC::DFG::ArrayMode::arrayModesWithIndexingShapes const):
+    (JSC::DFG::ArrayMode::arrayModesWithIndexingShape const): Deleted.
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@249959 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-17  Saam Barati  <sbarati@apple.com>
+
+            CheckArray on DirectArguments/ScopedArguments does not filter out slow put array storage
+            https://bugs.webkit.org/show_bug.cgi?id=201853
+            <rdar://problem/53805461>
+
+            Reviewed by Yusuke Suzuki.
+
+            We were claiming CheckArray for ScopedArguments/DirectArguments was filtering
+            out SlowPutArrayStorage. It does no such thing. We just check that the object
+            is either ScopedArguments/DirectArguments.
+
+            * dfg/DFGArrayMode.h:
+            (JSC::DFG::ArrayMode::arrayModesThatPassFiltering const):
+            (JSC::DFG::ArrayMode::arrayModesWithIndexingShapes const):
+            (JSC::DFG::ArrayMode::arrayModesWithIndexingShape const): Deleted.
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r250058. rdar://problem/55826329
+
+    Phantom insertion phase may disagree with arguments forwarding about live ranges
+    https://bugs.webkit.org/show_bug.cgi?id=200715
+    <rdar://problem/54301717>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/phantom-insertion-live-range-should-agree-with-arguments-forwarding.js: Added.
+    (main.v23):
+    (main.try.v43):
+    (main.):
+    (main):
+    
+    Source/JavaScriptCore:
+    
+    The issue is that Phantom insertion phase was disagreeing about live ranges
+    from the arguments forwarding phase. The effect is that Phantom insertion
+    would insert a Phantom creating a longer live range than what arguments
+    forwarding was analyzing. Arguments forwarding will look for the last DFG
+    use or the last bytecode use of a variable it wants to eliminate. It then
+    does an interference analysis to ensure that nothing clobbers other variables
+    it needs to recover the sunken allocation during OSR exit.
+            
+    Phantom insertion works by ordering the program into OSR exit epochs. If a value was used
+    in the current epoch, there is no need to insert a phantom for it. We
+    determine where we might need a Phantom by looking at bytecode kills. In this
+    analysis, we have a mapping from bytecode local to DFG node. However, we
+    sometimes forgot to remove the entry when a local is killed. So, if the first
+    kill of a variable is in the same OSR exit epoch, we won't insert a Phantom by design.
+    However, if the variable gets killed again, we might errantly insert a Phantom
+    for the prior variable which should've already been killed. The solution is to
+    clear the entry in our mapping when a variable is killed.
+            
+    The program in question was like this:
+            
+    1: DirectArguments
+    ...
+    2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+    ...
+    clobber things needed for recovery
+    ...
+            
+    Arguments elimination would transform the program since between @1 and
+    @2, nothing clobbers values needed for exit and nothing escapes @1. The
+    program becomes:
+            
+    1: PhantomDirectArguments
+    ...
+    2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+    ...
+    clobber things needed for recovery of @1
+    ...
+            
+            
+    Phantom insertion would then transform the program into:
+            
+    1: PhantomDirectArguments
+    ...
+    2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+    ...
+    clobber things needed for recovery of @1
+    ...
+    3: Phantom(@1)
+    ...
+            
+    This is wrong because Phantom insertion and arguments forwarding must agree on live
+    ranges, otherwise the interference analysis performed by arguments forwarding will
+    not correctly analyze up until where the value might be recovered.
+    
+    * dfg/DFGPhantomInsertionPhase.cpp:
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@250058 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-18  Saam Barati  <sbarati@apple.com>
+
+            Phantom insertion phase may disagree with arguments forwarding about live ranges
+            https://bugs.webkit.org/show_bug.cgi?id=200715
+            <rdar://problem/54301717>
+
+            Reviewed by Yusuke Suzuki.
+
+            The issue is that Phantom insertion phase was disagreeing about live ranges
+            from the arguments forwarding phase. The effect is that Phantom insertion
+            would insert a Phantom creating a longer live range than what arguments
+            forwarding was analyzing. Arguments forwarding will look for the last DFG
+            use or the last bytecode use of a variable it wants to eliminate. It then
+            does an interference analysis to ensure that nothing clobbers other variables
+            it needs to recover the sunken allocation during OSR exit.
+
+            Phantom insertion works by ordering the program into OSR exit epochs. If a value was used
+            in the current epoch, there is no need to insert a phantom for it. We
+            determine where we might need a Phantom by looking at bytecode kills. In this
+            analysis, we have a mapping from bytecode local to DFG node. However, we
+            sometimes forgot to remove the entry when a local is killed. So, if the first
+            kill of a variable is in the same OSR exit epoch, we won't insert a Phantom by design.
+            However, if the variable gets killed again, we might errantly insert a Phantom
+            for the prior variable which should've already been killed. The solution is to
+            clear the entry in our mapping when a variable is killed.
+
+            The program in question was like this:
+
+            1: DirectArguments
+            ...
+            2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+            ...
+            clobber things needed for recovery
+            ...
+
+            Arguments elimination would transform the program since between @1 and
+            @2, nothing clobbers values needed for exit and nothing escapes @1. The
+            program becomes:
+
+            1: PhantomDirectArguments
+            ...
+            2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+            ...
+            clobber things needed for recovery of @1
+            ...
+
+
+            Phantom insertion would then transform the program into:
+
+            1: PhantomDirectArguments
+            ...
+            2: MovHint(@1, loc1) // arguments forwarding treats this as the final kill for @1
+            ...
+            clobber things needed for recovery of @1
+            ...
+            3: Phantom(@1)
+            ...
+
+            This is wrong because Phantom insertion and arguments forwarding must agree on live
+            ranges, otherwise the interference analysis performed by arguments forwarding will
+            not correctly analyze up until where the value might be recovered.
+
+            * dfg/DFGPhantomInsertionPhase.cpp:
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r249926. rdar://problem/55826870
+
+    [JSC] Perform check again when we found non-BMP characters
+    https://bugs.webkit.org/show_bug.cgi?id=201647
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/regexp-unicode-surrogate-pair-increment-should-involve-length-check.js: Added.
+    * stress/regexp-unicode-within-string.js: Updated test to eliminate the bogus print().
+    (testRegExpInbounds):
+    
+    Source/JavaScriptCore:
+    
+    We need to check for end of input for non-BMP characters when matching a character class that contains
+    both BMP and non-BMP characters.  In advanceIndexAfterCharacterClassTermMatch() we were checking for
+    end of input for both BMP and non-BMP characters.  For BMP characters, this check is redundant.
+    After moving the check to after the "is BMP check", we need to decrement index after reaching the failure
+    label to back out the index++ for the first surrogate of the non-BMP character.
+    
+    Added the same kind of check in generateCharacterClassOnce().  In that case, we have pre-checked the
+    first character (surrogate) for a non-BMP codepoint, so we just need to check for end of input before
+    we increment for the second surrogate.
+    
+    While writing tests, I found an off by one error in backtrackCharacterClassGreedy() and changed the
+    loop to check the count at loop top instead of loop bottom.
+    
+    * yarr/YarrJIT.cpp:
+    (JSC::Yarr::YarrGenerator::advanceIndexAfterCharacterClassTermMatch):
+    (JSC::Yarr::YarrGenerator::generateCharacterClassOnce):
+    (JSC::Yarr::YarrGenerator::generateCharacterClassGreedy):
+    (JSC::Yarr::YarrGenerator::backtrackCharacterClassGreedy):
+    (JSC::Yarr::YarrGenerator::backtrackCharacterClassNonGreedy):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@249926 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-16  Michael Saboff  <msaboff@apple.com>
+
+            [JSC] Perform check again when we found non-BMP characters
+            https://bugs.webkit.org/show_bug.cgi?id=201647
+
+            Reviewed by Yusuke Suzuki.
+
+            We need to check for end of input for non-BMP characters when matching a character class that contains
+            both BMP and non-BMP characters.  In advanceIndexAfterCharacterClassTermMatch() we were checking for
+            end of input for both BMP and non-BMP characters.  For BMP characters, this check is redundant.
+            After moving the check to after the "is BMP check", we need to decrement index after reaching the failure
+            label to back out the index++ for the first surrogate of the non-BMP character.
+
+            Added the same kind of check in generateCharacterClassOnce().  In that case, we have pre-checked the
+            first character (surrogate) for a non-BMP codepoint, so we just need to check for end of input before
+            we increment for the second surrogate.
+
+            While writing tests, I found an off by one error in backtrackCharacterClassGreedy() and changed the
+            loop to check the count at loop top instead of loop bottom.
+
+            * yarr/YarrJIT.cpp:
+            (JSC::Yarr::YarrGenerator::advanceIndexAfterCharacterClassTermMatch):
+            (JSC::Yarr::YarrGenerator::generateCharacterClassOnce):
+            (JSC::Yarr::YarrGenerator::generateCharacterClassGreedy):
+            (JSC::Yarr::YarrGenerator::backtrackCharacterClassGreedy):
+            (JSC::Yarr::YarrGenerator::backtrackCharacterClassNonGreedy):
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r249777. rdar://problem/55826876
+
+    JSC crashes due to stack overflow while building RegExp
+    https://bugs.webkit.org/show_bug.cgi?id=201649
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    New regression test.
+    
+    * stress/regexp-bol-optimize-out-of-stack.js: Added.
+    (test):
+    (catch):
+    
+    Source/JavaScriptCore:
+    
+    Check for running out of stack when we are optimizing RegExp containing BOL terms or
+    other deep copying of disjunctions.
+    
+    * yarr/YarrPattern.cpp:
+    (JSC::Yarr::YarrPatternConstructor::copyDisjunction):
+    (JSC::Yarr::YarrPatternConstructor::copyTerm):
+    (JSC::Yarr::YarrPatternConstructor::error):
+    (JSC::Yarr::YarrPattern::compile):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@249777 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-11  Michael Saboff  <msaboff@apple.com>
+
+            JSC crashes due to stack overflow while building RegExp
+            https://bugs.webkit.org/show_bug.cgi?id=201649
+
+            Reviewed by Yusuke Suzuki.
+
+            Check for running out of stack when we are optimizing RegExp containing BOL terms or
+            other deep copying of disjunctions.
+
+            * yarr/YarrPattern.cpp:
+            (JSC::Yarr::YarrPatternConstructor::copyDisjunction):
+            (JSC::Yarr::YarrPatternConstructor::copyTerm):
+            (JSC::Yarr::YarrPatternConstructor::error):
+            (JSC::Yarr::YarrPattern::compile):
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r248951. rdar://problem/55826863
+
+    [JSC] incorrent JIT lead to StackOverflow
+    https://bugs.webkit.org/show_bug.cgi?id=197823
+    
+    Reviewed by Tadeu Zagallo.
+    
+    JSTests:
+    
+    New test.
+    
+    * stress/bound-function-stack-overflow.js: Added.
+    (foo):
+    (catch):
+    
+    Source/JavaScriptCore:
+    
+    Added stack overflow check to the bound function thunk generator.  Added a new C++ operation
+    throwStackOverflowErrorFromThunk() to throw the error.
+            
+    * jit/JITOperations.cpp:
+    * jit/JITOperations.h:
+    * jit/ThunkGenerators.cpp:
+    (JSC::boundThisNoArgsFunctionCallGenerator):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248951 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-21  Michael Saboff  <msaboff@apple.com>
+
+            [JSC] incorrent JIT lead to StackOverflow
+            https://bugs.webkit.org/show_bug.cgi?id=197823
+
+            Reviewed by Tadeu Zagallo.
+
+            Added stack overflow check to the bound function thunk generator.  Added a new C++ operation
+            throwStackOverflowErrorFromThunk() to throw the error.
+
+            * jit/JITOperations.cpp:
+            * jit/JITOperations.h:
+            * jit/ThunkGenerators.cpp:
+            (JSC::boundThisNoArgsFunctionCallGenerator):
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r248796. rdar://problem/55826874
+
+    [Re-land] ProxyObject should not be allow to access its target's private properties.
+    https://bugs.webkit.org/show_bug.cgi?id=200739
+    <rdar://problem/53972768>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/proxy-should-not-be-allowed-to-access-private-properties-of-target.js: Copied from JSTests/stress/proxy-should-not-be-allowed-to-access-private-properties-of-target.js.
+    * stress/proxy-with-private-symbols.js:
+    
+    Source/JavaScriptCore:
+    
+    Re-landing this after r200829 which resolves the test262 failure uncovered by this patch.
+    
+    * runtime/ProxyObject.cpp:
+    (JSC::performProxyGet):
+    (JSC::ProxyObject::performInternalMethodGetOwnProperty):
+    (JSC::ProxyObject::performHasProperty):
+    (JSC::ProxyObject::performPut):
+    (JSC::ProxyObject::performDelete):
+    (JSC::ProxyObject::performDefineOwnProperty):
+    
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248796 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-16  Mark Lam  <mark.lam@apple.com>
+
+            [Re-land] ProxyObject should not be allow to access its target's private properties.
+            https://bugs.webkit.org/show_bug.cgi?id=200739
+            <rdar://problem/53972768>
+
+            Reviewed by Yusuke Suzuki.
+
+            Re-landing this after r200829 which resolves the test262 failure uncovered by this patch.
+
+            * runtime/ProxyObject.cpp:
+            (JSC::performProxyGet):
+            (JSC::ProxyObject::performInternalMethodGetOwnProperty):
+            (JSC::ProxyObject::performHasProperty):
+            (JSC::ProxyObject::performPut):
+            (JSC::ProxyObject::performDelete):
+            (JSC::ProxyObject::performDefineOwnProperty):
+
+2019-09-30  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r247799. rdar://problem/55826880
+
+    performJITMemcpy should be PACed with a non-zero diversifier when passed and called via a pointer.
+    https://bugs.webkit.org/show_bug.cgi?id=200100
+    <rdar://problem/53474939>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    * assembler/ARM64Assembler.h:
+    (JSC::ARM64Assembler::CopyFunction::CopyFunction):
+    (JSC::ARM64Assembler::CopyFunction::operator()):
+    - I choose to use ptrauth_auth_function() here instead of retagCodePtr() because
+      retagCodePtr() would auth, assert, and re-pac the pointer.  This is needed in
+      general because retagCodePtr() doesn't know that you will consume the pointer
+      immediately (and therefore crash imminently if a failed auth is encountered).
+      Since we know here that we will call with the auth'ed pointer immediately, we
+      can skip the assert.
+    
+      This also has the benefit of letting Clang do a peephole optimization to emit
+      a blrab instruction with the intended diversifier, instead of emitting multiple
+      instructions to auth the pointer into a C function, and then using a blraaz to
+      do a C function call.
+    
+    (JSC::ARM64Assembler::linkJumpOrCall):
+    (JSC::ARM64Assembler::linkCompareAndBranch):
+    (JSC::ARM64Assembler::linkConditionalBranch):
+    (JSC::ARM64Assembler::linkTestAndBranch):
+    * assembler/LinkBuffer.cpp:
+    (JSC::LinkBuffer::copyCompactAndLinkCode):
+    * runtime/JSCPtrTag.h:
+    
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@247799 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-07-24  Mark Lam  <mark.lam@apple.com>
+
+            performJITMemcpy should be PACed with a non-zero diversifier when passed and called via a pointer.
+            https://bugs.webkit.org/show_bug.cgi?id=200100
+            <rdar://problem/53474939>
+
+            Reviewed by Yusuke Suzuki.
+
+            * assembler/ARM64Assembler.h:
+            (JSC::ARM64Assembler::CopyFunction::CopyFunction):
+            (JSC::ARM64Assembler::CopyFunction::operator()):
+            - I choose to use ptrauth_auth_function() here instead of retagCodePtr() because
+              retagCodePtr() would auth, assert, and re-pac the pointer.  This is needed in
+              general because retagCodePtr() doesn't know that you will consume the pointer
+              immediately (and therefore crash imminently if a failed auth is encountered).
+              Since we know here that we will call with the auth'ed pointer immediately, we
+              can skip the assert.
+
+              This also has the benefit of letting Clang do a peephole optimization to emit
+              a blrab instruction with the intended diversifier, instead of emitting multiple
+              instructions to auth the pointer into a C function, and then using a blraaz to
+              do a C function call.
+
+            (JSC::ARM64Assembler::linkJumpOrCall):
+            (JSC::ARM64Assembler::linkCompareAndBranch):
+            (JSC::ARM64Assembler::linkConditionalBranch):
+            (JSC::ARM64Assembler::linkTestAndBranch):
+            * assembler/LinkBuffer.cpp:
+            (JSC::LinkBuffer::copyCompactAndLinkCode):
+            * runtime/JSCPtrTag.h:
+
+2019-09-27  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r250440. rdar://problem/55800893
+
+    OSR exit shouldn't bother updating get_by_id array profiles that have changed modes
+    https://bugs.webkit.org/show_bug.cgi?id=202324
+    <rdar://problem/52669110>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    This is an optimization that avoids polluting the array profile.
+    
+    * dfg/DFGOSRExit.cpp:
+    (JSC::DFG::OSRExit::executeOSRExit):
+    (JSC::DFG::OSRExit::compileExit):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@250440 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-27  Keith Miller  <keith_miller@apple.com>
+
+            OSR exit shouldn't bother updating get_by_id array profiles that have changed modes
+            https://bugs.webkit.org/show_bug.cgi?id=202324
+            <rdar://problem/52669110>
+
+            Reviewed by Yusuke Suzuki.
+
+            This is an optimization that avoids polluting the array profile.
+
+            * dfg/DFGOSRExit.cpp:
+            (JSC::DFG::OSRExit::executeOSRExit):
+            (JSC::DFG::OSRExit::compileExit):
+
+2019-09-23  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r250116. rdar://problem/55608003
+
+    [JSC] DFG op_call_varargs should not assume that one-previous-local of freeReg is usable
+    https://bugs.webkit.org/show_bug.cgi?id=202014
+    
+    Reviewed by Saam Barati.
+    
+    JSTests:
+    
+    * stress/call-varargs-inlining-should-not-clobber-previous-to-free-register.js: Added.
+    (__v0):
+    
+    Source/JavaScriptCore:
+    
+    Let's look into the bytecode generated by the test.
+    
+        [   0] enter
+        [   1] get_scope          loc4
+        [   3] mov                loc5, loc4
+        [   6] check_traps
+        [   7] mov                loc6, callee
+        [  10] create_direct_arguments loc7
+        [  12] to_this            this
+        [  15] mov                loc8, loc7
+        [  18] mov                loc9, loc6
+        [  21] mov                loc12, Undefined(const0)
+        [  24] get_by_id          loc11, loc6, 0
+        [  29] jneq_ptr           loc11, ApplyFunction, 18(->47)
+        [  34] mov                loc11, loc6
+        [  37] call_varargs       loc11, loc11, this, loc8, loc13, 0
+        [  45] jmp                17(->62)
+        [  47] mov                loc16, loc6
+        [  50] mov                loc15, this
+        [  53] mov                loc14, loc8
+        [  56] call               loc11, loc11, 3, 22
+        ...
+    
+    call_varargs uses loc13 as firstFreeReg (first usable bottom register in the current stack-frame to spread variadic arguments after this).
+    This is correct. And call_varargs uses |this| as this argument for the call_varargs. This |this| argument is not in a region starting from loc13.
+    And it is not in the previous place to loc13 (|this| is not loc12).
+    
+    On the other hand, DFG::ByteCodeParser's inlining path is always assuming that the previous to firstFreeReg is usable and part of arguments.
+    But this is wrong. loc12 in the above bytecode is used for `[  56] call               loc11, loc11, 3, 22`'s argument later, and this call assumes
+    that loc12 is not clobbered by call_varargs. But DFG and FTL clobbers it.
+    
+    The test is recursively calling the same function, and we inline the same function one-level. And stack-overflow error happens when inlined
+    CallForwardVarargs (from op_call_varargs) is called. FTL recovers the frames, and at this point, outer function's loc12 is recovered to garbage since
+    LoadVarargs clobbers it. And we eventually use it and crash.
+    
+        60:<!0:-> LoadVarargs(Check:Untyped:Kill:@30, MustGen, start = loc13, count = loc15, machineStart = loc7, machineCount = loc9, offset = 0, mandatoryMinimum = 0, limit = 2, R:World, W:Stack(-16),Stack(-14),Stack(-13),Heap, Exits, ClobbersExit, bc#37, ExitValid)
+    
+    This LoadVarargs clobbers loc12, loc13, and loc15 while loc12 is used.
+    
+    In all the tiers, op_call_varargs first allocates enough region to hold varargs including |this|. And we store |this| value to a correct place.
+    DFG should not assume that the previous register to firstFreeReg is used for |this|.
+    
+    This patch fixes DFG::ByteCodeParser's stack region calculation for op_call_varargs inlining. And we rename maxNumArguments to maxArgumentCountIncludingThis to
+    represent that `maxArgumentCountIncludingThis` includes |this| count.
+    
+    * bytecode/CallLinkInfo.cpp:
+    (JSC::CallLinkInfo::setMaxArgumentCountIncludingThis):
+    (JSC::CallLinkInfo::setMaxNumArguments): Deleted.
+    * bytecode/CallLinkInfo.h:
+    (JSC::CallLinkInfo::addressOfMaxArgumentCountIncludingThis):
+    (JSC::CallLinkInfo::maxArgumentCountIncludingThis):
+    (JSC::CallLinkInfo::addressOfMaxNumArguments): Deleted.
+    (JSC::CallLinkInfo::maxNumArguments): Deleted.
+    * bytecode/CallLinkStatus.cpp:
+    (JSC::CallLinkStatus::computeFor):
+    (JSC::CallLinkStatus::dump const):
+    * bytecode/CallLinkStatus.h:
+    (JSC::CallLinkStatus::maxArgumentCountIncludingThis const):
+    (JSC::CallLinkStatus::maxNumArguments const): Deleted.
+    * dfg/DFGByteCodeParser.cpp:
+    (JSC::DFG::ByteCodeParser::handleVarargsInlining):
+    * dfg/DFGSpeculativeJIT32_64.cpp:
+    (JSC::DFG::SpeculativeJIT::emitCall):
+    * dfg/DFGSpeculativeJIT64.cpp:
+    (JSC::DFG::SpeculativeJIT::emitCall):
+    * ftl/FTLLowerDFGToB3.cpp:
+    (JSC::FTL::DFG::LowerDFGToB3::compileDirectCallOrConstruct):
+    * jit/JITCall.cpp:
+    (JSC::JIT::compileSetupFrame):
+    * jit/JITCall32_64.cpp:
+    (JSC::JIT::compileSetupFrame):
+    * jit/JITOperations.cpp:
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@250116 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-19  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] DFG op_call_varargs should not assume that one-previous-local of freeReg is usable
+            https://bugs.webkit.org/show_bug.cgi?id=202014
+
+            Reviewed by Saam Barati.
+
+            Let's look into the bytecode generated by the test.
+
+                [   0] enter
+                [   1] get_scope          loc4
+                [   3] mov                loc5, loc4
+                [   6] check_traps
+                [   7] mov                loc6, callee
+                [  10] create_direct_arguments loc7
+                [  12] to_this            this
+                [  15] mov                loc8, loc7
+                [  18] mov                loc9, loc6
+                [  21] mov                loc12, Undefined(const0)
+                [  24] get_by_id          loc11, loc6, 0
+                [  29] jneq_ptr           loc11, ApplyFunction, 18(->47)
+                [  34] mov                loc11, loc6
+                [  37] call_varargs       loc11, loc11, this, loc8, loc13, 0
+                [  45] jmp                17(->62)
+                [  47] mov                loc16, loc6
+                [  50] mov                loc15, this
+                [  53] mov                loc14, loc8
+                [  56] call               loc11, loc11, 3, 22
+                ...
+
+            call_varargs uses loc13 as firstFreeReg (first usable bottom register in the current stack-frame to spread variadic arguments after this).
+            This is correct. And call_varargs uses |this| as this argument for the call_varargs. This |this| argument is not in a region starting from loc13.
+            And it is not in the previous place to loc13 (|this| is not loc12).
+
+            On the other hand, DFG::ByteCodeParser's inlining path is always assuming that the previous to firstFreeReg is usable and part of arguments.
+            But this is wrong. loc12 in the above bytecode is used for `[  56] call               loc11, loc11, 3, 22`'s argument later, and this call assumes
+            that loc12 is not clobbered by call_varargs. But DFG and FTL clobbers it.
+
+            The test is recursively calling the same function, and we inline the same function one-level. And stack-overflow error happens when inlined
+            CallForwardVarargs (from op_call_varargs) is called. FTL recovers the frames, and at this point, outer function's loc12 is recovered to garbage since
+            LoadVarargs clobbers it. And we eventually use it and crash.
+
+                60:<!0:-> LoadVarargs(Check:Untyped:Kill:@30, MustGen, start = loc13, count = loc15, machineStart = loc7, machineCount = loc9, offset = 0, mandatoryMinimum = 0, limit = 2, R:World, W:Stack(-16),Stack(-14),Stack(-13),Heap, Exits, ClobbersExit, bc#37, ExitValid)
+
+            This LoadVarargs clobbers loc12, loc13, and loc15 while loc12 is used.
+
+            In all the tiers, op_call_varargs first allocates enough region to hold varargs including |this|. And we store |this| value to a correct place.
+            DFG should not assume that the previous register to firstFreeReg is used for |this|.
+
+            This patch fixes DFG::ByteCodeParser's stack region calculation for op_call_varargs inlining. And we rename maxNumArguments to maxArgumentCountIncludingThis to
+            represent that `maxArgumentCountIncludingThis` includes |this| count.
+
+            * bytecode/CallLinkInfo.cpp:
+            (JSC::CallLinkInfo::setMaxArgumentCountIncludingThis):
+            (JSC::CallLinkInfo::setMaxNumArguments): Deleted.
+            * bytecode/CallLinkInfo.h:
+            (JSC::CallLinkInfo::addressOfMaxArgumentCountIncludingThis):
+            (JSC::CallLinkInfo::maxArgumentCountIncludingThis):
+            (JSC::CallLinkInfo::addressOfMaxNumArguments): Deleted.
+            (JSC::CallLinkInfo::maxNumArguments): Deleted.
+            * bytecode/CallLinkStatus.cpp:
+            (JSC::CallLinkStatus::computeFor):
+            (JSC::CallLinkStatus::dump const):
+            * bytecode/CallLinkStatus.h:
+            (JSC::CallLinkStatus::maxArgumentCountIncludingThis const):
+            (JSC::CallLinkStatus::maxNumArguments const): Deleted.
+            * dfg/DFGByteCodeParser.cpp:
+            (JSC::DFG::ByteCodeParser::handleVarargsInlining):
+            * dfg/DFGSpeculativeJIT32_64.cpp:
+            (JSC::DFG::SpeculativeJIT::emitCall):
+            * dfg/DFGSpeculativeJIT64.cpp:
+            (JSC::DFG::SpeculativeJIT::emitCall):
+            * ftl/FTLLowerDFGToB3.cpp:
+            (JSC::FTL::DFG::LowerDFGToB3::compileDirectCallOrConstruct):
+            * jit/JITCall.cpp:
+            (JSC::JIT::compileSetupFrame):
+            * jit/JITCall32_64.cpp:
+            (JSC::JIT::compileSetupFrame):
+            * jit/JITOperations.cpp:
+
+2019-09-17  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r249911. rdar://problem/55461405
+
+    JSObject::putInlineSlow should not ignore "__proto__" for Proxy
+    https://bugs.webkit.org/show_bug.cgi?id=200386
+    <rdar://problem/53854946>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/proxy-__proto__-in-prototype-chain.js: Added.
+    * stress/proxy-property-replace-structure-transition.js: Added.
+    
+    Source/JavaScriptCore:
+    
+    We used to ignore '__proto__' in putInlineSlow when the object in question
+    was Proxy. There is no reason for this, and it goes against the spec. So
+    I've removed that condition. This also has the effect that it fixes an
+    assertion firing inside our inline caching code which dictates that for a
+    property replace that the base value's structure must be equal to the
+    structure when we grabbed the structure prior to the put operation.
+    The old code caused a weird edge case where we broke this invariant.
+    
+    * runtime/JSObject.cpp:
+    (JSC::JSObject::putInlineSlow):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@249911 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-09-16  Saam Barati  <sbarati@apple.com>
+
+            JSObject::putInlineSlow should not ignore "__proto__" for Proxy
+            https://bugs.webkit.org/show_bug.cgi?id=200386
+            <rdar://problem/53854946>
+
+            Reviewed by Yusuke Suzuki.
+
+            We used to ignore '__proto__' in putInlineSlow when the object in question
+            was Proxy. There is no reason for this, and it goes against the spec. So
+            I've removed that condition. This also has the effect that it fixes an
+            assertion firing inside our inline caching code which dictates that for a
+            property replace that the base value's structure must be equal to the
+            structure when we grabbed the structure prior to the put operation.
+            The old code caused a weird edge case where we broke this invariant.
+
+            * runtime/JSObject.cpp:
+            (JSC::JSObject::putInlineSlow):
+
+2019-09-04  Mark Lam  <mark.lam@apple.com>
+
+        Cherry-pick 249345. rdar://problem/55000994
+
+    2019-08-30  Mark Lam  <mark.lam@apple.com>
+
+            Fix a bug in SlotVisitor::reportZappedCellAndCrash() and also capture more information.
+            https://bugs.webkit.org/show_bug.cgi?id=201345
+
+            Reviewed by Yusuke Suzuki.
+
+            This patch fixes a bug where SlotVisitor::reportZappedCellAndCrash() was using
+            the wrong pointer for capture the cell headerWord and zapReason.  As a result,
+            we get junk for those 2 values.
+
+            Previously, we were only capturing the upper 32-bits of the cell header slot,
+            and the lower 32-bit of the next slot in the zapped cell.  We now capture the
+            full 64-bits of both slots.  If the second slot did not contain a zapReason as we
+            expect, the upper 32-bits might give us a clue as to what type of value the slot
+            contains.
+
+            This patch also adds capturing of the found MarkedBlock address for the zapped
+            cell, as well as some state bit values.
+
+            * heap/SlotVisitor.cpp:
+            (JSC::SlotVisitor::reportZappedCellAndCrash):
+
+2019-09-04  Mark Lam  <mark.lam@apple.com>
+
+        Cherry-pick 248143, 248162. rdar://problem/55000992
+
+        Also deleted an unused function.  This is needed to resolve a merge conflict for
+        this patch.
+
+        * heap/MarkedBlock.cpp:
+        (JSC::MarkedBlock::Handle::zap): Deleted.
+        * heap/MarkedBlock.h:
+        (JSC::MarkedBlock::Handle::zap): Deleted.
+
+    2019-08-02  Mark Lam  <mark.lam@apple.com>
+
+            Gardening: build fix.
+            https://bugs.webkit.org/show_bug.cgi?id=200149
+            <rdar://problem/53570112>
+
+            Not reviewed.
+
+            * assembler/CPU.cpp:
+            (JSC::hwPhysicalCPUMax):
+
+    2019-08-01  Mark Lam  <mark.lam@apple.com>
+
+            Add crash diagnostics for debugging unexpected zapped cells.
+            https://bugs.webkit.org/show_bug.cgi?id=200149
+            <rdar://problem/53570112>
+
+            Reviewed by Yusuke Suzuki.
+
+            Add a check for zapped cells in SlotVisitor::appendToMarkStack() and
+            SlotVisitor::visitChildren().  If a zapped cell is detected, we will crash with
+            some diagnostic info.
+
+            To facilitate this, we've made the following changes:
+            1. Changed FreeCell to preserve the 1st 8 bytes.  This is fine to do because all
+               cells are at least 16 bytes long.
+            2. Changed HeapCell::zap() to only zap the structureID.  Leave the rest of the
+               cell header info intact (including the cell JSType).
+            3. Changed HeapCell::zap() to record the reason for zapping the cell.  We stash
+               the reason immediately after the first 8 bytes.  This is the same location as
+               FreeCell::scrambledNext.  However, since a cell is not expected to be zapped
+               and on the free list at the same time, it is also fine to do this.
+            4. Added a few utility functions to MarkedBlock for checking if a cell points
+               into the block.
+            5. Added VMInspector and JSDollarVM utilities to dump in-use subspace hashes.
+            6. Added some comments to document the hashes of known subspaces.
+            7. Added Options::dumpZappedCellCrashData() to make this check conditional.
+               We use this option to disable this check for slower machines so that their
+               PLT5 performance is not impacted.
+
+            * assembler/CPU.cpp:
+            (JSC::hwL3CacheSize):
+            (JSC::hwPhysicalCPUMax):
+            * assembler/CPU.h:
+            (JSC::hwL3CacheSize):
+            (JSC::hwPhysicalCPUMax):
+            * heap/FreeList.h:
+            (JSC::FreeCell::offsetOfScrambledNext):
+            * heap/HeapCell.h:
+            (JSC::HeapCell::zap):
+            (JSC::HeapCell::isZapped const):
+            * heap/MarkedBlock.cpp:
+            (JSC::MarkedBlock::Handle::stopAllocating):
+            * heap/MarkedBlock.h:
+            (JSC::MarkedBlock::Handle::start const):
+            (JSC::MarkedBlock::Handle::end const):
+            (JSC::MarkedBlock::Handle::contains const):
+            * heap/MarkedBlockInlines.h:
+            (JSC::MarkedBlock::Handle::specializedSweep):
+            * heap/MarkedSpace.h:
+            (JSC::MarkedSpace::forEachSubspace):
+            * heap/SlotVisitor.cpp:
+            (JSC::SlotVisitor::appendToMarkStack):
+            (JSC::SlotVisitor::visitChildren):
+            (JSC::SlotVisitor::reportZappedCellAndCrash):
+            * heap/SlotVisitor.h:
+            * jit/AssemblyHelpers.cpp:
+            (JSC::AssemblyHelpers::emitAllocateWithNonNullAllocator):
+            * runtime/Options.cpp:
+            (JSC::Options::initialize):
+            * runtime/Options.h:
+            * runtime/VM.cpp:
+            (JSC::VM::VM):
+            * tools/JSDollarVM.cpp:
+            (JSC::functionDumpSubspaceHashes):
+            (JSC::JSDollarVM::finishCreation):
+            * tools/VMInspector.cpp:
+            (JSC::VMInspector::dumpSubspaceHashes):
+            * tools/VMInspector.h:
+
+2019-09-03  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r248824. rdar://problem/55001142
+
+    [JSC] WebAssembly BBQ should switch compile mode for size of modules
+    https://bugs.webkit.org/show_bug.cgi?id=200807
+    
+    Reviewed by Mark Lam.
+    
+    Some webpages use very large Wasm module, and it exhausts all executable memory in ARM64 devices since the size of executable memory region is 128MB.
+    The long term solution should be introducing Wasm interpreter. But as a short term solution, we introduce heuristics switching back to BBQ B3 at
+    the sacrifice of start-up time, since BBQ Air bloats such lengthy code, and thereby consumes a large amount of executable memory.
+    
+    Currently, I picked 10MB since the reported website is using 11MB wasm module.
+    
+    * runtime/Options.h:
+    * wasm/WasmAirIRGenerator.cpp:
+    (JSC::Wasm::parseAndCompileAir):
+    * wasm/WasmB3IRGenerator.cpp:
+    (JSC::Wasm::parseAndCompile):
+    * wasm/WasmBBQPlan.cpp:
+    (JSC::Wasm::BBQPlan::compileFunctions):
+    * wasm/WasmModuleInformation.h:
+    * wasm/WasmSectionParser.cpp:
+    (JSC::Wasm::SectionParser::parseCode):
+    * wasm/WasmStreamingParser.cpp:
+    (JSC::Wasm::StreamingParser::parseCodeSectionSize):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248824 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-17  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] WebAssembly BBQ should switch compile mode for size of modules
+            https://bugs.webkit.org/show_bug.cgi?id=200807
+
+            Reviewed by Mark Lam.
+
+            Some webpages use very large Wasm module, and it exhausts all executable memory in ARM64 devices since the size of executable memory region is 128MB.
+            The long term solution should be introducing Wasm interpreter. But as a short term solution, we introduce heuristics switching back to BBQ B3 at
+            the sacrifice of start-up time, since BBQ Air bloats such lengthy code, and thereby consumes a large amount of executable memory.
+
+            Currently, I picked 10MB since the reported website is using 11MB wasm module.
+
+            * runtime/Options.h:
+            * wasm/WasmAirIRGenerator.cpp:
+            (JSC::Wasm::parseAndCompileAir):
+            * wasm/WasmB3IRGenerator.cpp:
+            (JSC::Wasm::parseAndCompile):
+            * wasm/WasmBBQPlan.cpp:
+            (JSC::Wasm::BBQPlan::compileFunctions):
+            * wasm/WasmModuleInformation.h:
+            * wasm/WasmSectionParser.cpp:
+            (JSC::Wasm::SectionParser::parseCode):
+            * wasm/WasmStreamingParser.cpp:
+            (JSC::Wasm::StreamingParser::parseCodeSectionSize):
+
+2019-09-03  Kocsen Chung  <kocsen_chung@apple.com>
+
+        Cherry-pick r248793. rdar://problem/55001191
+
+    [JSC] Promise.prototype.finally should accept non-promise objects
+    https://bugs.webkit.org/show_bug.cgi?id=200829
+    
+    Reviewed by Mark Lam.
+    
+    JSTests:
+    
+    * stress/promise-finally-should-accept-non-promise-objects.js: Added.
+    (shouldBe):
+    (Thenable):
+    (Thenable.prototype.then):
+    
+    Source/JavaScriptCore:
+    
+    According to the Promise.prototype.finally spec step 2[1], we should check @isObject instead of @isPromise,
+    since Promise.prototype.finally should accept thenable objects that are defined by user libraries (like, bluebird for example).
+    This patch changes this check to the specified one.
+    
+    [1]: https://tc39.es/proposal-promise-finally/
+    
+    * builtins/PromisePrototype.js:
+    (finally):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248793 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-16  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] Promise.prototype.finally should accept non-promise objects
+            https://bugs.webkit.org/show_bug.cgi?id=200829
+
+            Reviewed by Mark Lam.
+
+            According to the Promise.prototype.finally spec step 2[1], we should check @isObject instead of @isPromise,
+            since Promise.prototype.finally should accept thenable objects that are defined by user libraries (like, bluebird for example).
+            This patch changes this check to the specified one.
+
+            [1]: https://tc39.es/proposal-promise-finally/
+
+            * builtins/PromisePrototype.js:
+            (finally):
+
+2019-08-18  Babak Shafiei  <bshafiei@apple.com>
+
+        Cherry-pick r248800. rdar://problem/54454996
+
+    CodeBlock destructor should clear all of its watchpoints.
+    https://bugs.webkit.org/show_bug.cgi?id=200792
+    <rdar://problem/53947800>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    JSTests:
+    
+    * stress/codeblock-should-clear-watchpoints-on-destruction.js: Added.
+    
+    Source/JavaScriptCore:
+    
+    We need to clear the watchpoints explicitly (just like we do in CodeBlock::jettison())
+    because the JITCode may outlive the CodeBlock for a while.  For example, the JITCode
+    is ref'd in Interpreter::execute(JSC::CallFrameClosure&) like so:
+    
+        JSValue result = closure.functionExecutable->generatedJITCodeForCall()->execute(&vm, closure.protoCallFrame);
+    
+    The call to generatedJITCodeForCall() returns a Ref<JITCode> with the underlying
+    JITCode ref'd.  Hence, while the interpreter frame is still on the stack, the
+    executing JITCode instance will have a non-zero refCount, and be kept alive even
+    though its CodeBlock may have already been destructed.
+    
+    Note: the Interpreter execute() methods aren't the only ones who would ref the JITCode:
+    ExecutableBase also holds a RefPtr<JITCode> m_jitCodeForCall and RefPtr<JITCode>
+    m_jitCodeForConstruct.  But a CodeBlock will be uninstalled before it gets destructed.
+    Hence, the uninstallation will deref the JITCode before we get to the CodeBlock
+    destructor.  That said, we should be aware that a JITCode's refCount is not always
+    1 after the JIT installs it into the CodeBlock, and it should not be assumed to be so.
+    
+    For this patch, I also audited all Watchpoint subclasses to ensure that we are
+    clearing all the relevant watchpoints in the CodeBlock destructor.  Here is the
+    list of audited Watchpoints:
+    
+        CodeBlockJettisoningWatchpoint
+        AdaptiveStructureWatchpoint
+        AdaptiveInferredPropertyValueWatchpoint
+            - these are held in the DFG::CommonData, and is tied to JITCode's life cycle.
+            - they need to be cleared eagerly in CodeBlock's destructor.
+    
+        LLIntPrototypeLoadAdaptiveStructureWatchpoint
+            - stored in m_llintGetByIdWatchpointMap in the CodeBlock.
+            - this will be automatically cleared on CodeBlock destruction.
+    
+    The following does not reference CodeBlock:
+    
+        FunctionRareData::AllocationProfileClearingWatchpoint
+            - stored in FunctionRareData and will be cleared automatically on
+              FunctionRareData destruction.
+            - only references the owner FunctionRareData.
+    
+        ObjectToStringAdaptiveStructureWatchpoint
+        ObjectToStringAdaptiveInferredPropertyValueWatchpoint
+            - stored in StructureRareData and will be cleared automatically on
+              StructureRareData destruction.
+    
+        ObjectPropertyChangeAdaptiveWatchpoint
+            - stored in JSGlobalObject, and will be cleared automatically on
+              JSGlobalObject destruction.
+            - only references the owner JSGlobalObject.
+    
+        StructureStubClearingWatchpoint
+            - stored in WatchpointsOnStructureStubInfo and will be cleared automatically
+              on WatchpointsOnStructureStubInfo destruction.
+    
+        PropertyWatchpoint
+        StructureWatchpoint
+            - embedded in AdaptiveInferredPropertyValueWatchpointBase, which is extended
+              as AdaptiveInferredPropertyValueWatchpoint, ObjectPropertyChangeAdaptiveWatchpoint,
+              and ObjectToStringAdaptiveInferredPropertyValueWatchpoint.
+            - life cycle is handled by those 3 subclasses.
+    
+    * bytecode/CodeBlock.cpp:
+    (JSC::CodeBlock::~CodeBlock):
+    
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248800 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-16  Mark Lam  <mark.lam@apple.com>
+
+            CodeBlock destructor should clear all of its watchpoints.
+            https://bugs.webkit.org/show_bug.cgi?id=200792
+            <rdar://problem/53947800>
+
+            Reviewed by Yusuke Suzuki.
+
+            We need to clear the watchpoints explicitly (just like we do in CodeBlock::jettison())
+            because the JITCode may outlive the CodeBlock for a while.  For example, the JITCode
+            is ref'd in Interpreter::execute(JSC::CallFrameClosure&) like so:
+
+                JSValue result = closure.functionExecutable->generatedJITCodeForCall()->execute(&vm, closure.protoCallFrame);
+
+            The call to generatedJITCodeForCall() returns a Ref<JITCode> with the underlying
+            JITCode ref'd.  Hence, while the interpreter frame is still on the stack, the
+            executing JITCode instance will have a non-zero refCount, and be kept alive even
+            though its CodeBlock may have already been destructed.
+
+            Note: the Interpreter execute() methods aren't the only ones who would ref the JITCode:
+            ExecutableBase also holds a RefPtr<JITCode> m_jitCodeForCall and RefPtr<JITCode>
+            m_jitCodeForConstruct.  But a CodeBlock will be uninstalled before it gets destructed.
+            Hence, the uninstallation will deref the JITCode before we get to the CodeBlock
+            destructor.  That said, we should be aware that a JITCode's refCount is not always
+            1 after the JIT installs it into the CodeBlock, and it should not be assumed to be so.
+
+            For this patch, I also audited all Watchpoint subclasses to ensure that we are
+            clearing all the relevant watchpoints in the CodeBlock destructor.  Here is the
+            list of audited Watchpoints:
+
+                CodeBlockJettisoningWatchpoint
+                AdaptiveStructureWatchpoint
+                AdaptiveInferredPropertyValueWatchpoint
+                    - these are held in the DFG::CommonData, and is tied to JITCode's life cycle.
+                    - they need to be cleared eagerly in CodeBlock's destructor.
+
+                LLIntPrototypeLoadAdaptiveStructureWatchpoint
+                    - stored in m_llintGetByIdWatchpointMap in the CodeBlock.
+                    - this will be automatically cleared on CodeBlock destruction.
+
+            The following does not reference CodeBlock:
+
+                FunctionRareData::AllocationProfileClearingWatchpoint
+                    - stored in FunctionRareData and will be cleared automatically on
+                      FunctionRareData destruction.
+                    - only references the owner FunctionRareData.
+
+                ObjectToStringAdaptiveStructureWatchpoint
+                ObjectToStringAdaptiveInferredPropertyValueWatchpoint
+                    - stored in StructureRareData and will be cleared automatically on
+                      StructureRareData destruction.
+
+                ObjectPropertyChangeAdaptiveWatchpoint
+                    - stored in JSGlobalObject, and will be cleared automatically on
+                      JSGlobalObject destruction.
+                    - only references the owner JSGlobalObject.
+
+                StructureStubClearingWatchpoint
+                    - stored in WatchpointsOnStructureStubInfo and will be cleared automatically
+                      on WatchpointsOnStructureStubInfo destruction.
+
+                PropertyWatchpoint
+                StructureWatchpoint
+                    - embedded in AdaptiveInferredPropertyValueWatchpointBase, which is extended
+                      as AdaptiveInferredPropertyValueWatchpoint, ObjectPropertyChangeAdaptiveWatchpoint,
+                      and ObjectToStringAdaptiveInferredPropertyValueWatchpoint.
+                    - life cycle is handled by those 3 subclasses.
+
+            * bytecode/CodeBlock.cpp:
+            (JSC::CodeBlock::~CodeBlock):
+
+2019-08-13  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r248271. rdar://problem/54237771
+
+    JSC: assertion failure in SpeculativeJIT::compileGetByValOnIntTypedArray
+    https://bugs.webkit.org/show_bug.cgi?id=199997
+    
+    Reviewed by Saam Barati.
+    
+    JSTests:
+    
+    New test.
+    
+    * stress/typedarray-no-alreadyChecked-assert.js: Added.
+    (checkIntArray):
+    (checkFloatArray):
+    
+    Source/JavaScriptCore:
+    
+    No need to ASSERT(node->arrayMode().alreadyChecked(...)) in SpeculativeJIT::compileGetByValOnIntTypedArray()
+    and compileGetByValOnFloatTypedArray() as the abstract interpreter is conservative and can insert a
+    CheckStructureOrEmpty which will fail the ASSERT as it checks for the SpecType of the array
+    and not for SpecEmpty.  If we added a check for the SpecEmpty in the ASSERT, there are cases where
+    it won't be set.
+    
+    * dfg/DFGSpeculativeJIT.cpp:
+    (JSC::DFG::SpeculativeJIT::compileGetByValOnIntTypedArray):
+    (JSC::DFG::SpeculativeJIT::compileGetByValOnFloatTypedArray):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248271 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-05  Michael Saboff  <msaboff@apple.com>
+
+            JSC: assertion failure in SpeculativeJIT::compileGetByValOnIntTypedArray
+            https://bugs.webkit.org/show_bug.cgi?id=199997
+
+            Reviewed by Saam Barati.
+
+            No need to ASSERT(node->arrayMode().alreadyChecked(...)) in SpeculativeJIT::compileGetByValOnIntTypedArray()
+            and compileGetByValOnFloatTypedArray() as the abstract interpreter is conservative and can insert a
+            CheckStructureOrEmpty which will fail the ASSERT as it checks for the SpecType of the array
+            and not for SpecEmpty.  If we added a check for the SpecEmpty in the ASSERT, there are cases where
+            it won't be set.
+
+            * dfg/DFGSpeculativeJIT.cpp:
+            (JSC::DFG::SpeculativeJIT::compileGetByValOnIntTypedArray):
+            (JSC::DFG::SpeculativeJIT::compileGetByValOnFloatTypedArray):
+
+2019-08-13  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r248149. rdar://problem/54237692
+
+    GetterSetter type confusion during DFG compilation
+    https://bugs.webkit.org/show_bug.cgi?id=199903
+    
+    Reviewed by Mark Lam.
+    
+    JSTests:
+    
+    * stress/cse-propagated-constant-may-not-follow-structure-restrictions.js: Added.
+    
+    Source/JavaScriptCore:
+    
+    In AI, we are strongly assuming that GetGetter's child constant value should be GetterSetter if it exists.
+    However, this can be wrong since nobody ensures that. AI assumed so because the control-flow and preceding
+    CheckStructure ensures that. But this preceding check can be eliminated if the node becomes (at runtime) unreachable.
+    
+    Let's consider the following graph.
+    
+        129:<!0:->     PutByOffset(KnownCell:@115, KnownCell:@115, Check:Untyped:@124, MustGen, id5{length}, 0, W:NamedProperties(5), ClobbersExit, bc#154, ExitValid)
+        130:<!0:->     PutStructure(KnownCell:@115, MustGen, %C8:Object -> %C3:Object, ID:7726, R:JSObject_butterfly, W:JSCell_indexingType,JSCell_structureID,JSCell_typeInfoFlags,JSCell_typeInfoType, ClobbersExit, bc#154, ExitInvalid)
+        ...
+        158:<!0:->     GetLocal(Check:Untyped:@197, JS|MustGen|UseAsOther, Final, loc7(R<Final>/FlushedCell), R:Stack(-8), bc#187, ExitValid)  predicting Final
+        210:< 1:->     DoubleRep(Check:NotCell:@158, Double|PureInt, BytecodeDouble, Exits, bc#187, ExitValid)
+        ...
+        162:<!0:->     CheckStructure(Cell:@158, MustGen, [%Ad:Object], R:JSCell_structureID, Exits, bc#192, ExitValid)
+        163:< 1:->     GetGetterSetterByOffset(KnownCell:@158, KnownCell:@158, JS|UseAsOther, OtherCell, id5{length}, 0, R:NamedProperties(5), Exits, bc#192, ExitValid)
+        164:< 1:->     GetGetter(KnownCell:@163, JS|UseAsOther, Function, R:GetterSetter_getter, Exits, bc#192, ExitValid)
+    
+    At @163 and @164, AI proves that @158's AbstractValue is None because @210's edge filters out Cells @158 is a cell. But we do not invalidate graph status as "Invalid" even if edge filters out all possible value.
+    This is because the result of edge can be None in a valid program. For example, we can put a dependency edge between a consuming node and a producing node, where the producing node is just like a check and it
+    does not produce a value actually. So, @163 and @164 are not invalidated. This is totally fine in our compiler pipeline right now.
+    
+    But after that, global CSE phase found that @115 and @158 are same and @129 dominates @158. As a result, we can replace GetGetter child's @163 with @124. Since CheckStructure is already removed (and now, at runtime,
+    @163 and @164 are never executed), we do not have any structure guarantee on @158 and the result of @163. This means that @163's CSE result can be non-GetterSetter value.
+    
+        124:< 2:->     JSConstant(JS|UseAsOther, Final, Weak:Object: 0x1199e82a0 with butterfly 0x0 (Structure %B4:Object), StructureID: 49116, bc#0, ExitValid)
+        ...
+        126:< 2:->     GetGetter(KnownCell:Kill:@124, JS|UseAsOther, Function, R:GetterSetter_getter, Exits, bc#192, ExitValid)
+    
+    AI filters out @124's non-cell values. But @126 can get non-GetterSetter cell at AI phase. But our AI code is like the following.
+    
+        JSValue base = forNode(node->child1()).m_value;
+        if (base) {
+            GetterSetter* getterSetter = jsCast<GetterSetter*>(base);
+            ...
+    
+    Then, jsCast casts the above object with GetterSetter accidentally.
+    
+    In general, DFG AI can get a proven constant value, which could not be shown at runtime. This happens if the processing node is unreachable at runtime while the graph is not invalid yet, because preceding edge
+    filters already filter out all the possible execution. DFG AI already considered about this possibility, and it attempts to fold a node into a constant only when the constant input matches against the expected one.
+    But several DFG nodes are not handling this correctly: GetGetter, GetSetter, and SkipScope.
+    
+    In this patch, we use `jsDynamicCast` to ensure that the constant input matches against the expected (foldable) one, and fold it only when the expectation is met.
+    We also remove DFG::Node::castConstant and its use. We should not rely on the constant folded value based on graph's control-flow.
+    
+    * dfg/DFGAbstractInterpreterInlines.h:
+    (JSC::DFG::AbstractInterpreter<AbstractStateType>::executeEffects):
+    * dfg/DFGNode.h:
+    (JSC::DFG::Node::castConstant): Deleted.
+    * ftl/FTLLowerDFGToB3.cpp:
+    (JSC::FTL::DFG::LowerDFGToB3::compileMaterializeCreateActivation):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248149 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-01  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            GetterSetter type confusion during DFG compilation
+            https://bugs.webkit.org/show_bug.cgi?id=199903
+
+            Reviewed by Mark Lam.
+
+            In AI, we are strongly assuming that GetGetter's child constant value should be GetterSetter if it exists.
+            However, this can be wrong since nobody ensures that. AI assumed so because the control-flow and preceding
+            CheckStructure ensures that. But this preceding check can be eliminated if the node becomes (at runtime) unreachable.
+
+            Let's consider the following graph.
+
+                129:<!0:->     PutByOffset(KnownCell:@115, KnownCell:@115, Check:Untyped:@124, MustGen, id5{length}, 0, W:NamedProperties(5), ClobbersExit, bc#154, ExitValid)
+                130:<!0:->     PutStructure(KnownCell:@115, MustGen, %C8:Object -> %C3:Object, ID:7726, R:JSObject_butterfly, W:JSCell_indexingType,JSCell_structureID,JSCell_typeInfoFlags,JSCell_typeInfoType, ClobbersExit, bc#154, ExitInvalid)
+                ...
+                158:<!0:->     GetLocal(Check:Untyped:@197, JS|MustGen|UseAsOther, Final, loc7(R<Final>/FlushedCell), R:Stack(-8), bc#187, ExitValid)  predicting Final
+                210:< 1:->     DoubleRep(Check:NotCell:@158, Double|PureInt, BytecodeDouble, Exits, bc#187, ExitValid)
+                ...
+                162:<!0:->     CheckStructure(Cell:@158, MustGen, [%Ad:Object], R:JSCell_structureID, Exits, bc#192, ExitValid)
+                163:< 1:->     GetGetterSetterByOffset(KnownCell:@158, KnownCell:@158, JS|UseAsOther, OtherCell, id5{length}, 0, R:NamedProperties(5), Exits, bc#192, ExitValid)
+                164:< 1:->     GetGetter(KnownCell:@163, JS|UseAsOther, Function, R:GetterSetter_getter, Exits, bc#192, ExitValid)
+
+            At @163 and @164, AI proves that @158's AbstractValue is None because @210's edge filters out Cells @158 is a cell. But we do not invalidate graph status as "Invalid" even if edge filters out all possible value.
+            This is because the result of edge can be None in a valid program. For example, we can put a dependency edge between a consuming node and a producing node, where the producing node is just like a check and it
+            does not produce a value actually. So, @163 and @164 are not invalidated. This is totally fine in our compiler pipeline right now.
+
+            But after that, global CSE phase found that @115 and @158 are same and @129 dominates @158. As a result, we can replace GetGetter child's @163 with @124. Since CheckStructure is already removed (and now, at runtime,
+            @163 and @164 are never executed), we do not have any structure guarantee on @158 and the result of @163. This means that @163's CSE result can be non-GetterSetter value.
+
+                124:< 2:->     JSConstant(JS|UseAsOther, Final, Weak:Object: 0x1199e82a0 with butterfly 0x0 (Structure %B4:Object), StructureID: 49116, bc#0, ExitValid)
+                ...
+                126:< 2:->     GetGetter(KnownCell:Kill:@124, JS|UseAsOther, Function, R:GetterSetter_getter, Exits, bc#192, ExitValid)
+
+            AI filters out @124's non-cell values. But @126 can get non-GetterSetter cell at AI phase. But our AI code is like the following.
+
+
+                JSValue base = forNode(node->child1()).m_value;
+                if (base) {
+                    GetterSetter* getterSetter = jsCast<GetterSetter*>(base);
+                    ...
+
+            Then, jsCast casts the above object with GetterSetter accidentally.
+
+            In general, DFG AI can get a proven constant value, which could not be shown at runtime. This happens if the processing node is unreachable at runtime while the graph is not invalid yet, because preceding edge
+            filters already filter out all the possible execution. DFG AI already considered about this possibility, and it attempts to fold a node into a constant only when the constant input matches against the expected one.
+            But several DFG nodes are not handling this correctly: GetGetter, GetSetter, and SkipScope.
+
+            In this patch, we use `jsDynamicCast` to ensure that the constant input matches against the expected (foldable) one, and fold it only when the expectation is met.
+            We also remove DFG::Node::castConstant and its use. We should not rely on the constant folded value based on graph's control-flow.
+
+            * dfg/DFGAbstractInterpreterInlines.h:
+            (JSC::DFG::AbstractInterpreter<AbstractStateType>::executeEffects):
+            * dfg/DFGNode.h:
+            (JSC::DFG::Node::castConstant): Deleted.
+            * ftl/FTLLowerDFGToB3.cpp:
+            (JSC::FTL::DFG::LowerDFGToB3::compileMaterializeCreateActivation):
+
+2019-08-12  Alan Coon  <alancoon@apple.com>
+
+        Apply patch. rdar://problem/54171876
+
+    2019-08-12  Maciej Stachowiak  <mjs@apple.com>
 
             Branch build fix for r248494
 
             * runtime/ClassInfo.h: METHOD_TABLE_ENTRY was called WTF_METHOD_TABLE_ENTRY on the branch.
 
-2019-08-10  Babak Shafiei  <bshafiei@apple.com>
+2019-08-12  Alan Coon  <alancoon@apple.com>
 
-        Cherry-pick r248494. rdar://problem/54171879
+        Cherry-pick r248494. rdar://problem/54171876
 
     Universal XSS in JSObject::putInlineSlow and JSValue::putToPrimitive
     https://bugs.webkit.org/show_bug.cgi?id=199864
@@ -150,9 +1730,401 @@
             * runtime/JSTypeInfo.h:
             (JSC::TypeInfo::hasPutPropertySecurityCheck const):
 
+2019-08-12  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r248027. rdar://problem/53836556
+
+    [JSC] Emit write barrier after storing instead of before storing
+    https://bugs.webkit.org/show_bug.cgi?id=200193
+    
+    Reviewed by Saam Barati.
+    
+    I reviewed tricky GC-related code including visitChildren and manual writeBarrier, and I found that we have several problems with write-barriers.
+    
+    1. Some write-barriers are emitted before stores happen
+    
+        Some code like LazyProperty emits write-barrier before we store the value. This is wrong since JSC has concurrent collector. Let's consider the situation like this.
+    
+            1. Cell "A" is not marked yet
+            2. Write-barrier is emitted onto "A"
+            3. Concurrent collector scans "A"
+            4. Store to "A"'s field happens
+            5. (4)'s field is not rescaned
+    
+        We should emit write-barrier after stores. This patch places write-barriers after stores happen.
+    
+    2. Should emit write-barrier after the stored fields are reachable from the owner.
+    
+        We have code that is logically the same to the following.
+    
+            ```
+            auto data = std::make_unique<XXX>();
+            data->m_field.set(vm, owner, value);
+    
+            storeStoreBarrier();
+            owner->m_data = WTFMove(data);
+            ```
+    
+        This is not correct. When write-barrier is emitted, the owner cannot reach to the field that is stored.
+        The actual example is AccessCase. We are emitting write-barriers with owner when creating AccessCase, but this is not
+        effective until this AccessCase is chained to StructureStubInfo, which is reachable from CodeBlock.
+    
+        I don't think this is actually an issue because currently AccessCase generation is guarded by CodeBlock->m_lock. And CodeBlock::visitChildren takes this lock.
+        But emitting a write-barrier at the right place is still better. This patch places write-barriers when StructureStubInfo::addAccessCase is called.
+    
+    Speculative GC fix, it was hard to reproduce the crash since we need to control concurrent collector and main thread's scheduling in an instruction-level.
+    
+    * bytecode/BytecodeList.rb:
+    * bytecode/CodeBlock.cpp:
+    (JSC::CodeBlock::finishCreation):
+    * bytecode/StructureStubInfo.cpp:
+    (JSC::StructureStubInfo::addAccessCase):
+    * bytecode/StructureStubInfo.h:
+    (JSC::StructureStubInfo::considerCaching):
+    * dfg/DFGPlan.cpp:
+    (JSC::DFG::Plan::finalizeWithoutNotifyingCallback):
+    * jit/JITOperations.cpp:
+    * llint/LLIntSlowPaths.cpp:
+    (JSC::LLInt::LLINT_SLOW_PATH_DECL):
+    (JSC::LLInt::setupGetByIdPrototypeCache):
+    * runtime/CommonSlowPaths.cpp:
+    (JSC::SLOW_PATH_DECL):
+    * runtime/LazyPropertyInlines.h:
+    (JSC::ElementType>::setMayBeNull):
+    * runtime/RegExpCachedResult.h:
+    (JSC::RegExpCachedResult::record):
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248027 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-07-30  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] Emit write barrier after storing instead of before storing
+            https://bugs.webkit.org/show_bug.cgi?id=200193
+
+            Reviewed by Saam Barati.
+
+            I reviewed tricky GC-related code including visitChildren and manual writeBarrier, and I found that we have several problems with write-barriers.
+
+            1. Some write-barriers are emitted before stores happen
+
+                Some code like LazyProperty emits write-barrier before we store the value. This is wrong since JSC has concurrent collector. Let's consider the situation like this.
+
+                    1. Cell "A" is not marked yet
+                    2. Write-barrier is emitted onto "A"
+                    3. Concurrent collector scans "A"
+                    4. Store to "A"'s field happens
+                    5. (4)'s field is not rescaned
+
+                We should emit write-barrier after stores. This patch places write-barriers after stores happen.
+
+            2. Should emit write-barrier after the stored fields are reachable from the owner.
+
+                We have code that is logically the same to the following.
+
+                    ```
+                    auto data = std::make_unique<XXX>();
+                    data->m_field.set(vm, owner, value);
+
+                    storeStoreBarrier();
+                    owner->m_data = WTFMove(data);
+                    ```
+
+                This is not correct. When write-barrier is emitted, the owner cannot reach to the field that is stored.
+                The actual example is AccessCase. We are emitting write-barriers with owner when creating AccessCase, but this is not
+                effective until this AccessCase is chained to StructureStubInfo, which is reachable from CodeBlock.
+
+                I don't think this is actually an issue because currently AccessCase generation is guarded by CodeBlock->m_lock. And CodeBlock::visitChildren takes this lock.
+                But emitting a write-barrier at the right place is still better. This patch places write-barriers when StructureStubInfo::addAccessCase is called.
+
+            Speculative GC fix, it was hard to reproduce the crash since we need to control concurrent collector and main thread's scheduling in an instruction-level.
+
+            * bytecode/BytecodeList.rb:
+            * bytecode/CodeBlock.cpp:
+            (JSC::CodeBlock::finishCreation):
+            * bytecode/StructureStubInfo.cpp:
+            (JSC::StructureStubInfo::addAccessCase):
+            * bytecode/StructureStubInfo.h:
+            (JSC::StructureStubInfo::considerCaching):
+            * dfg/DFGPlan.cpp:
+            (JSC::DFG::Plan::finalizeWithoutNotifyingCallback):
+            * jit/JITOperations.cpp:
+            * llint/LLIntSlowPaths.cpp:
+            (JSC::LLInt::LLINT_SLOW_PATH_DECL):
+            (JSC::LLInt::setupGetByIdPrototypeCache):
+            * runtime/CommonSlowPaths.cpp:
+            (JSC::SLOW_PATH_DECL):
+            * runtime/LazyPropertyInlines.h:
+            (JSC::ElementType>::setMayBeNull):
+            * runtime/RegExpCachedResult.h:
+            (JSC::RegExpCachedResult::record):
+
+2019-08-09  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r248462. rdar://problem/54144119
+
+    [Win] Fix internal build
+    https://bugs.webkit.org/show_bug.cgi?id=200519
+    
+    Reviewed by Alex Christensen.
+    
+    Source/JavaScriptCore:
+    
+    The script 'generate-js-builtins.py' cannot be found when building WebCore. Copy the JavaScriptCore Scripts
+    folder after building JSC.
+    
+    * JavaScriptCore.vcxproj/JavaScriptCore.proj:
+    
+    Source/WebKitLegacy/win:
+    
+    Switch to the String::wideCharacers method, since its return type is compatible with the Win32 api.
+    
+    * WebDownloadCFNet.cpp:
+    (WebDownload::didFinish):
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@248462 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-08-08  Per Arne Vollan  <pvollan@apple.com>
+
+            [Win] Fix internal build
+            https://bugs.webkit.org/show_bug.cgi?id=200519
+
+            Reviewed by Alex Christensen.
+
+            The script 'generate-js-builtins.py' cannot be found when building WebCore. Copy the JavaScriptCore Scripts
+            folder after building JSC.
+
+            * JavaScriptCore.vcxproj/JavaScriptCore.proj:
+
+2019-08-06  Alan Coon  <alancoon@apple.com>
+
+        Apply patch. rdar://problem/53992160
+
+    2019-08-06  Per Arne Vollan  <pvollan@apple.com>
+
+            [Win] Fix AppleWin build
+            https://bugs.webkit.org/show_bug.cgi?id=200414
+
+            Reviewed by Brent Fulgham.
+
+            * CMakeLists.txt:
+            * PlatformWin.cmake:
+            * shell/CMakeLists.txt:
+
+2019-07-29  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r247714. rdar://problem/53647616
+
+    [bmalloc] Each IsoPage gets 1MB VA because VMHeap::tryAllocateLargeChunk rounds up
+    https://bugs.webkit.org/show_bug.cgi?id=200024
+    
+    Reviewed by Saam Barati.
+    
+    Source/bmalloc:
+    
+    When we allocate IsoHeap's page, we reused VMHeap::tryAllocateLargeChunk. However, this function is originally designed
+    to be used for Large allocation in bmalloc (e.g. allocating Chunk in bmalloc). As a result, this function rounds up the
+    requested size with 1MB (bmalloc::chunkSize). As a result, all IsoHeap's 16KB page gets 1MB VA while it just uses 16KB of
+    the allocated region. This leads to VA exhaustion since IsoHeap now uses 64x VA than we expected!
+    
+    This patch fixes the above VA exhaustion issue by allocating a page by using tryVMAllocate. When allocating a page, we start
+    using a VM tag for IsoHeap. We discussed at e-mail and we decided reusing a VM tag previously assigned to CLoop Stack since
+    this is less profitable. Since this tag is not Malloc-related tag, Leaks tool can scan memory region conservatively without
+    registering allocated region into Zone, which was previously done in VMHeap and that's why we reused VMHeap for IsoHeap.
+    
+    * bmalloc/BVMTags.h:
+    * bmalloc/IsoPage.cpp:
+    (bmalloc::IsoPageBase::allocatePageMemory):
+    * bmalloc/IsoTLS.cpp:
+    (bmalloc::IsoTLS::ensureEntries):
+    * bmalloc/VMAllocate.h:
+    (bmalloc::vmAllocate):
+    
+    Source/JavaScriptCore:
+    
+    Discussed and we decided to use this VM tag for IsoHeap instead of CLoop stack.
+    
+    * interpreter/CLoopStack.cpp:
+    (JSC::CLoopStack::CLoopStack):
+    
+    Source/WebCore:
+    
+    Changed how we interpret VM tags. Add IsoHeap VM tag support, and rename WebAssembly tag
+    to Gigacage tag.
+    
+    * page/ResourceUsageData.h:
+    * page/ResourceUsageOverlay.h:
+    * page/cocoa/ResourceUsageOverlayCocoa.mm:
+    (WebCore::HistoricResourceUsageData::HistoricResourceUsageData):
+    * page/cocoa/ResourceUsageThreadCocoa.mm:
+    (WebCore::displayNameForVMTag):
+    (WebCore::categoryForVMTag):
+    
+    Source/WTF:
+    
+    Start using a VM tag for IsoHeap instead of CLoop Stack.
+    
+    * wtf/OSAllocator.h:
+    * wtf/VMTags.h:
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@247714 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-07-22  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [bmalloc] Each IsoPage gets 1MB VA because VMHeap::tryAllocateLargeChunk rounds up
+            https://bugs.webkit.org/show_bug.cgi?id=200024
+
+            Reviewed by Saam Barati.
+
+            Discussed and we decided to use this VM tag for IsoHeap instead of CLoop stack.
+
+            * interpreter/CLoopStack.cpp:
+            (JSC::CLoopStack::CLoopStack):
+
+2019-07-29  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r247713. rdar://problem/53648241
+
+    Turn off Wasm fast memory on iOS
+    https://bugs.webkit.org/show_bug.cgi?id=200016
+    <rdar://problem/53417726>
+    
+    Reviewed by Yusuke Suzuki.
+    
+    We turned them on when we disabled Gigacage on iOS. However, we re-enabled
+    Gigacage on iOS, but forgot to turn wasm fast memories back off.
+    
+    * runtime/Options.h:
+    
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@247713 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-07-22  Saam Barati  <sbarati@apple.com>
+
+            Turn off Wasm fast memory on iOS
+            https://bugs.webkit.org/show_bug.cgi?id=200016
+            <rdar://problem/53417726>
+
+            Reviewed by Yusuke Suzuki.
+
+            We turned them on when we disabled Gigacage on iOS. However, we re-enabled
+            Gigacage on iOS, but forgot to turn wasm fast memories back off.
+
+            * runtime/Options.h:
+
+2019-07-29  Alan Coon  <alancoon@apple.com>
+
+        Cherry-pick r247703. rdar://problem/53647465
+
+    [JSC] Make DFG Local CSE and AI conservative for huge basic block
+    https://bugs.webkit.org/show_bug.cgi?id=199929
+    <rdar://problem/49309924>
+    
+    Reviewed by Filip Pizlo.
+    
+    In CNN page, the main thread hangs several seconds. On less-powerful devices (like iPhone7), it hangs for ~11 seconds. This is not an acceptable behavior.
+    The reason of this is that the DFG compiler takes too long time in the compilation for a particular function. It takes 8765 ms even in powerful x64 machine!
+    DFG compiler is concurrent one. However, when GC requires all the peripheral threads to be stopped, the main thread needs to wait for the DFG compiler's stop.
+    DFG compiler stops at GC safepoints, and they are inserted between DFG phases. So, if some of DFG phases take very long time, the main thread is blocked during that.
+    As a result, the main thread is blocked due to this pathological compilation.
+    
+    By measuring the time taken in each DFG phase, we found that our AI and CSE phase have a problem having quadratic complexity for # of DFG nodes in a basic block.
+    In this patch, we add a threshold for # of DFG nodes in a basic block. If a basic block exceeds this threshold, we use conservative but O(1) algorithm for AI and Local CSE phase.
+    We did not add this threshold for Global CSE since FTL has another bytecode cost threshold which prevents us from compiling the large functions. But on the other hand,
+    DFG should compile them because DFG is intended to be a fast compiler even for a bit larger CodeBlock.
+    
+    We first attempted to reduce the threshold for DFG compilation. We are using 100000 bytecode cost for DFG compilation and it is very large. However, we found that bytecode cost
+    is not the problem in CNN page. The problematic function has 67904 cost, and it takes 8765 ms in x64 machine. However, JetStream2/octane-zlib has 61949 function and it only takes
+    ~400 ms. This difference comes from the # of DFG nodes in a basic block. The problematic function has 43297 DFG nodes in one basic block and it makes AI and Local CSE super time-consuming.
+    Rather than relying on the bytecode cost which a bit indirectly related to this pathological compile-time, we should look into # of DFG nodes in a basic block which is more directly
+    related to this problem. And we also found that 61949's Octane-zlib function is very critical for performance. This fact makes a bit hard to pick a right threshold: 67904 causes the problem,
+    and 61949 must be compiled. This is why this patch is introducing conservative analysis instead of adjusting the threshold for DFG.
+    
+    This patch has two changes.
+    
+    1. DFG AI has structure transition tracking which has quadratic complexity
+    
+    Structure transition tracking takes very long time since its complexity is O(N^2) where N is # of DFG nodes in a basic block.
+    CNN has very pathological script and it shows 43297 DFG nodes. We should reduce the complexity of this algorithm.
+    For now, we just say "structures are clobbered" if # of DFG nodes in a basic block exceeds the threshold (20000).
+    We could improve the current algorithm from O(N^2) to O(2N) without being conservative, and I'm tracking this in [1].
+    
+    2. DFG Local CSE has quadratic complexity
+    
+    Local CSE's clobbering iterates all the impure heap values to remove the clobbered one. Since # of impure heap values tend to be proportional to # of DFG nodes we visited,
+    each CSE for a basic block gets O(N^2) complexity. To avoid this, we introduce HugeMap. This has the same interface to LargeMap and SmallMap in CSE, but its clobbering
+    implementation just clears the map completely. We can further make this O(N) without introducing conservative behavior by using epochs. For now, we do not see such a huge basic block in
+    JetStream2 and Speedometer2 so I'll track it in a separate bug[2].
+    
+    This patch reduces the compilation time from ~11 seconds to ~200 ms.
+    
+    [1]: https://bugs.webkit.org/show_bug.cgi?id=199959
+    [2]: https://bugs.webkit.org/show_bug.cgi?id=200014
+    
+    * dfg/DFGAbstractInterpreterInlines.h:
+    (JSC::DFG::AbstractInterpreter<AbstractStateType>::observeTransition):
+    (JSC::DFG::AbstractInterpreter<AbstractStateType>::observeTransitions):
+    * dfg/DFGCSEPhase.cpp:
+    * runtime/Options.h:
+    
+    git-svn-id: https://svn.webkit.org/repository/webkit/trunk@247703 268f45cc-cd09-0410-ab3c-d52691b4dbfc
+
+    2019-07-20  Yusuke Suzuki  <ysuzuki@apple.com>
+
+            [JSC] Make DFG Local CSE and AI conservative for huge basic block
+            https://bugs.webkit.org/show_bug.cgi?id=199929
+            <rdar://problem/49309924>
+
+            Reviewed by Filip Pizlo.
+
+            In CNN page, the main thread hangs several seconds. On less-powerful devices (like iPhone7), it hangs for ~11 seconds. This is not an acceptable behavior.
+            The reason of this is that the DFG compiler takes too long time in the compilation for a particular function. It takes 8765 ms even in powerful x64 machine!
+            DFG compiler is concurrent one. However, when GC requires all the peripheral threads to be stopped, the main thread needs to wait for the DFG compiler's stop.
+            DFG compiler stops at GC safepoints, and they are inserted between DFG phases. So, if some of DFG phases take very long time, the main thread is blocked during that.
+            As a result, the main thread is blocked due to this pathological compilation.
+
+            By measuring the time taken in each DFG phase, we found that our AI and CSE phase have a problem having quadratic complexity for # of DFG nodes in a basic block.
+            In this patch, we add a threshold for # of DFG nodes in a basic block. If a basic block exceeds this threshold, we use conservative but O(1) algorithm for AI and Local CSE phase.
+            We did not add this threshold for Global CSE since FTL has another bytecode cost threshold which prevents us from compiling the large functions. But on the other hand,
+            DFG should compile them because DFG is intended to be a fast compiler even for a bit larger CodeBlock.
+
+            We first attempted to reduce the threshold for DFG compilation. We are using 100000 bytecode cost for DFG compilation and it is very large. However, we found that bytecode cost
+            is not the problem in CNN page. The problematic function has 67904 cost, and it takes 8765 ms in x64 machine. However, JetStream2/octane-zlib has 61949 function and it only takes
+            ~400 ms. This difference comes from the # of DFG nodes in a basic block. The problematic function has 43297 DFG nodes in one basic block and it makes AI and Local CSE super time-consuming.
+            Rather than relying on the bytecode cost which a bit indirectly related to this pathological compile-time, we should look into # of DFG nodes in a basic block which is more directly
+            related to this problem. And we also found that 61949's Octane-zlib function is very critical for performance. This fact makes a bit hard to pick a right threshold: 67904 causes the problem,
+            and 61949 must be compiled. This is why this patch is introducing conservative analysis instead of adjusting the threshold for DFG.
+
+            This patch has two changes.
+
+            1. DFG AI has structure transition tracking which has quadratic complexity
+
+            Structure transition tracking takes very long time since its complexity is O(N^2) where N is # of DFG nodes in a basic block.
+            CNN has very pathological script and it shows 43297 DFG nodes. We should reduce the complexity of this algorithm.
+            For now, we just say "structures are clobbered" if # of DFG nodes in a basic block exceeds the threshold (20000).
+            We could improve the current algorithm from O(N^2) to O(2N) without being conservative, and I'm tracking this in [1].
+
+            2. DFG Local CSE has quadratic complexity
+
+            Local CSE's clobbering iterates all the impure heap values to remove the clobbered one. Since # of impure heap values tend to be proportional to # of DFG nodes we visited,
+            each CSE for a basic block gets O(N^2) complexity. To avoid this, we introduce HugeMap. This has the same interface to LargeMap and SmallMap in CSE, but its clobbering
+            implementation just clears the map completely. We can further make this O(N) without introducing conservative behavior by using epochs. For now, we do not see such a huge basic block in
+            JetStream2 and Speedometer2 so I'll track it in a separate bug[2].
+
+            This patch reduces the compilation time from ~11 seconds to ~200 ms.
+
+            [1]: https://bugs.webkit.org/show_bug.cgi?id=199959
+            [2]: https://bugs.webkit.org/show_bug.cgi?id=200014
+
+            * dfg/DFGAbstractInterpreterInlines.h:
+            (JSC::DFG::AbstractInterpreter<AbstractStateType>::observeTransition):
+            (JSC::DFG::AbstractInterpreter<AbstractStateType>::observeTransitions):
+            * dfg/DFGCSEPhase.cpp:
+            * runtime/Options.h:
+
 2019-07-24  Alan Coon  <alancoon@apple.com>
 
-        Apply patch. rdar://problem/53457282
+        Apply patch. rdar://problem/53483188
 
     Disable ENABLE_LAYOUT_FORMATTING_CONTEXT https://bugs.webkit.org/show_bug.cgi?id=200038 <rdar://problem/53457282>
     

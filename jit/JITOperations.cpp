@@ -109,6 +109,15 @@ void JIT_OPERATION operationThrowStackOverflowError(ExecState* exec, CodeBlock* 
     throwStackOverflowError(exec, scope);
 }
 
+void JIT_OPERATION throwStackOverflowErrorFromThunk(VM* vm, ExecState* exec)
+{
+    auto scope = DECLARE_THROW_SCOPE(*vm);
+    NativeCallFrameTracer tracer(vm, exec);
+    throwStackOverflowError(exec, scope);
+    genericUnwind(vm, exec);
+    ASSERT(vm->targetMachinePCForThrow);
+}
+
 int32_t JIT_OPERATION operationCallArityCheck(ExecState* exec)
 {
     VM* vm = &exec->vm();
@@ -182,7 +191,7 @@ EncodedJSValue JIT_OPERATION operationTryGetByIdOptimize(ExecState* exec, Struct
     baseValue.getPropertySlot(exec, ident, slot);
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
 
-    if (stubInfo->considerCaching(exec->codeBlock(), baseValue.structureOrNull()) && !slot.isTaintedByOpaqueObject() && (slot.isCacheableValue() || slot.isCacheableGetter() || slot.isUnset()))
+    if (stubInfo->considerCaching(*vm, exec->codeBlock(), baseValue.structureOrNull()) && !slot.isTaintedByOpaqueObject() && (slot.isCacheableValue() || slot.isCacheableGetter() || slot.isUnset()))
         repatchGetByID(exec, baseValue, ident, slot, *stubInfo, GetByIDKind::Try);
 
     return JSValue::encode(slot.getPureResult());
@@ -234,7 +243,7 @@ EncodedJSValue JIT_OPERATION operationGetByIdDirectOptimize(ExecState* exec, Str
     bool found = baseValue.getOwnPropertySlot(exec, ident, slot);
     RETURN_IF_EXCEPTION(scope, encodedJSValue());
 
-    if (stubInfo->considerCaching(exec->codeBlock(), baseValue.structureOrNull()))
+    if (stubInfo->considerCaching(vm, exec->codeBlock(), baseValue.structureOrNull()))
         repatchGetByID(exec, baseValue, ident, slot, *stubInfo, GetByIDKind::Direct);
 
     RELEASE_AND_RETURN(scope, JSValue::encode(found ? slot.getValue(exec, ident) : jsUndefined()));
@@ -290,7 +299,7 @@ EncodedJSValue JIT_OPERATION operationGetByIdOptimize(ExecState* exec, Structure
         
         LOG_IC((ICEvent::OperationGetByIdOptimize, baseValue.classInfoOrNull(*vm), ident, baseValue == slot.slotBase()));
         
-        if (stubInfo->considerCaching(exec->codeBlock(), baseValue.structureOrNull()))
+        if (stubInfo->considerCaching(*vm, exec->codeBlock(), baseValue.structureOrNull()))
             repatchGetByID(exec, baseValue, ident, slot, *stubInfo, GetByIDKind::Normal);
         return found ? slot.getValue(exec, ident) : jsUndefined();
     }));
@@ -343,7 +352,7 @@ EncodedJSValue JIT_OPERATION operationGetByIdWithThisOptimize(ExecState* exec, S
     return JSValue::encode(baseValue.getPropertySlot(exec, ident, slot, [&] (bool found, PropertySlot& slot) -> JSValue {
         LOG_IC((ICEvent::OperationGetByIdWithThisOptimize, baseValue.classInfoOrNull(*vm), ident, baseValue == slot.slotBase()));
         
-        if (stubInfo->considerCaching(exec->codeBlock(), baseValue.structureOrNull()))
+        if (stubInfo->considerCaching(*vm, exec->codeBlock(), baseValue.structureOrNull()))
             repatchGetByID(exec, baseValue, ident, slot, *stubInfo, GetByIDKind::WithThis);
         return found ? slot.getValue(exec, ident) : jsUndefined();
     }));
@@ -421,7 +430,7 @@ EncodedJSValue JIT_OPERATION operationInByIdOptimize(ExecState* exec, StructureS
     scope.release();
     PropertySlot slot(baseObject, PropertySlot::InternalMethodType::HasProperty);
     bool found = baseObject->getPropertySlot(exec, ident, slot);
-    if (stubInfo->considerCaching(exec->codeBlock(), baseObject->structure(vm)))
+    if (stubInfo->considerCaching(vm, exec->codeBlock(), baseObject->structure(vm)))
         repatchInByID(exec, baseObject, ident, found, slot, *stubInfo);
     return JSValue::encode(jsBoolean(found));
 }
@@ -530,7 +539,7 @@ void JIT_OPERATION operationPutByIdStrictOptimize(ExecState* exec, StructureStub
     if (accessType != static_cast<AccessType>(stubInfo->accessType))
         return;
     
-    if (stubInfo->considerCaching(codeBlock, structure))
+    if (stubInfo->considerCaching(*vm, codeBlock, structure))
         repatchPutByID(exec, baseValue, structure, ident, slot, *stubInfo, NotDirect);
 }
 
@@ -560,7 +569,7 @@ void JIT_OPERATION operationPutByIdNonStrictOptimize(ExecState* exec, StructureS
     if (accessType != static_cast<AccessType>(stubInfo->accessType))
         return;
     
-    if (stubInfo->considerCaching(codeBlock, structure))
+    if (stubInfo->considerCaching(*vm, codeBlock, structure))
         repatchPutByID(exec, baseValue, structure, ident, slot, *stubInfo, NotDirect);
 }
 
@@ -589,7 +598,7 @@ void JIT_OPERATION operationPutByIdDirectStrictOptimize(ExecState* exec, Structu
     if (accessType != static_cast<AccessType>(stubInfo->accessType))
         return;
     
-    if (stubInfo->considerCaching(codeBlock, structure))
+    if (stubInfo->considerCaching(vm, codeBlock, structure))
         repatchPutByID(exec, baseObject, structure, ident, slot, *stubInfo, Direct);
 }
 
@@ -618,7 +627,7 @@ void JIT_OPERATION operationPutByIdDirectNonStrictOptimize(ExecState* exec, Stru
     if (accessType != static_cast<AccessType>(stubInfo->accessType))
         return;
     
-    if (stubInfo->considerCaching(codeBlock, structure))
+    if (stubInfo->considerCaching(vm, codeBlock, structure))
         repatchPutByID(exec, baseObject, structure, ident, slot, *stubInfo, Direct);
 }
 
@@ -1139,7 +1148,7 @@ void JIT_OPERATION operationLinkDirectCall(ExecState* exec, CallLinkInfo* callLi
         EXCEPTION_ASSERT_UNUSED(throwScope, throwScope.exception() == error);
         if (UNLIKELY(error))
             return;
-        unsigned argumentStackSlots = callLinkInfo->maxNumArguments();
+        unsigned argumentStackSlots = callLinkInfo->maxArgumentCountIncludingThis();
         if (argumentStackSlots < static_cast<size_t>(codeBlock->numParameters()))
             codePtr = functionExecutable->entrypointFor(kind, MustCheckArity);
         else
@@ -2229,7 +2238,7 @@ EncodedJSValue JIT_OPERATION operationInstanceOfOptimize(ExecState* exec, Struct
     bool result = JSObject::defaultHasInstance(exec, value, proto);
     RETURN_IF_EXCEPTION(scope, JSValue::encode(jsUndefined()));
     
-    if (stubInfo->considerCaching(exec->codeBlock(), value.structureOrNull()))
+    if (stubInfo->considerCaching(vm, exec->codeBlock(), value.structureOrNull()))
         repatchInstanceOf(exec, value, proto, *stubInfo, result);
     
     return JSValue::encode(jsBoolean(result));
