@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008, 2012, 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2008-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,11 +37,19 @@
 #include <wtf/PtrTag.h>
 #endif
 #include <wtf/StdLibExtras.h>
+#include <wtf/ThreadSpecific.h>
 #include <wtf/UnalignedAccess.h>
 
 namespace JSC {
+    class AssemblerData;
+
+    typedef ThreadSpecific<AssemblerData, WTF::CanBeGCThread::True> ThreadSpecificAssemblerData;
+
+    JS_EXPORT_PRIVATE ThreadSpecificAssemblerData& threadSpecificAssemblerData();
 
     class LinkBuffer;
+
+    DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(AssemblerData);
 
     struct AssemblerLabel {
         AssemblerLabel()
@@ -68,7 +76,7 @@ namespace JSC {
 
     class AssemblerData {
         WTF_MAKE_NONCOPYABLE(AssemblerData);
-        static const size_t InlineCapacity = 128;
+        static constexpr size_t InlineCapacity = 128;
     public:
         AssemblerData()
             : m_buffer(m_inlineBuffer)
@@ -83,7 +91,7 @@ namespace JSC {
                 m_buffer = m_inlineBuffer;
             } else {
                 m_capacity = initialCapacity;
-                m_buffer = static_cast<char*>(fastMalloc(m_capacity));
+                m_buffer = static_cast<char*>(AssemblerDataMalloc::malloc(m_capacity));
             }
         }
 
@@ -97,14 +105,14 @@ namespace JSC {
                 m_buffer = other.m_buffer;
             m_capacity = other.m_capacity;
 
-            other.m_buffer = nullptr;
-            other.m_capacity = 0;
+            other.m_buffer = other.m_inlineBuffer;
+            other.m_capacity = InlineCapacity;
         }
 
         AssemblerData& operator=(AssemblerData&& other)
         {
             if (m_buffer && !isInlineBuffer())
-                fastFree(m_buffer);
+                AssemblerDataMalloc::free(m_buffer);
 
             if (other.isInlineBuffer()) {
                 ASSERT(other.m_capacity == InlineCapacity);
@@ -114,15 +122,41 @@ namespace JSC {
                 m_buffer = other.m_buffer;
             m_capacity = other.m_capacity;
 
-            other.m_buffer = nullptr;
-            other.m_capacity = 0;
+            other.m_buffer = other.m_inlineBuffer;
+            other.m_capacity = InlineCapacity;
             return *this;
+        }
+
+        void takeBufferIfLarger(AssemblerData&& other)
+        {
+            if (other.isInlineBuffer())
+                return;
+
+            if (m_capacity >= other.m_capacity)
+                return;
+
+            if (m_buffer && !isInlineBuffer())
+                AssemblerDataMalloc::free(m_buffer);
+
+            m_buffer = other.m_buffer;
+            m_capacity = other.m_capacity;
+
+            other.m_buffer = other.m_inlineBuffer;
+            other.m_capacity = InlineCapacity;
         }
 
         ~AssemblerData()
         {
-            if (m_buffer && !isInlineBuffer())
-                fastFree(m_buffer);
+            clear();
+        }
+
+        void clear()
+        {
+            if (m_buffer && !isInlineBuffer()) {
+                AssemblerDataMalloc::free(m_buffer);
+                m_capacity = InlineCapacity;
+                m_buffer = m_inlineBuffer;
+            }
         }
 
         char* buffer() const { return m_buffer; }
@@ -133,10 +167,10 @@ namespace JSC {
         {
             m_capacity = m_capacity + m_capacity / 2 + extraCapacity;
             if (isInlineBuffer()) {
-                m_buffer = static_cast<char*>(fastMalloc(m_capacity));
+                m_buffer = static_cast<char*>(AssemblerDataMalloc::malloc(m_capacity));
                 memcpy(m_buffer, m_inlineBuffer, InlineCapacity);
             } else
-                m_buffer = static_cast<char*>(fastRealloc(m_buffer, m_capacity));
+                m_buffer = static_cast<char*>(AssemblerDataMalloc::realloc(m_buffer, m_capacity));
         }
 
     private:
@@ -175,6 +209,14 @@ namespace JSC {
             : m_storage()
             , m_index(0)
         {
+            auto& threadSpecific = threadSpecificAssemblerData();
+            m_storage.takeBufferIfLarger(WTFMove(*threadSpecific));
+        }
+
+        ~AssemblerBuffer()
+        {
+            auto& threadSpecific = threadSpecificAssemblerData();
+            threadSpecific->takeBufferIfLarger(WTFMove(m_storage));
         }
 
         bool isAvailable(unsigned space)
@@ -245,7 +287,7 @@ namespace JSC {
                 buffer.ensureSpace(requiredSpace);
                 m_storageBuffer = buffer.m_storage.buffer();
                 m_index = buffer.m_index;
-#if !defined(NDEBUG)
+#if ASSERT_ENABLED
                 m_initialIndex = m_index;
                 m_requiredSpace = requiredSpace;
 #endif
@@ -274,7 +316,7 @@ namespace JSC {
             AssemblerBuffer& m_buffer;
             char* m_storageBuffer;
             unsigned m_index;
-#if !defined(NDEBUG)
+#if ASSERT_ENABLED
             unsigned m_initialIndex;
             unsigned m_requiredSpace;
 #endif
