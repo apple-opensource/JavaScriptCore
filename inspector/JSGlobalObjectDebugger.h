@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2014-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -20,22 +20,34 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
 
-#if ENABLE(DFG_JIT)
+#include "Debugger.h"
+#include <wtf/RunLoop.h>
 
-namespace JSC { namespace DFG {
+namespace Inspector {
 
-class Graph;
+class JSGlobalObjectDebugger final : public JSC::Debugger {
+    WTF_MAKE_NONCOPYABLE(JSGlobalObjectDebugger);
+    WTF_MAKE_FAST_ALLOCATED;
+public:
+    JSGlobalObjectDebugger(JSC::JSGlobalObject&);
+    ~JSGlobalObjectDebugger() final { }
 
-// Cleans up unnecessary MovHints. A MovHint is necessary if the variable dies before there is an
-// exit.
+    JSC::JSGlobalObject& globalObject() const { return m_globalObject; }
 
-bool performMovHintRemoval(Graph&);
+    static RunLoopMode runLoopMode();
 
-} } // namespace JSC::DFG
+private:
+    // JSC::Debugger
+    void attachDebugger() final;
+    void detachDebugger(bool isBeingDestroyed) final;
+    void runEventLoopWhilePaused() final;
 
-#endif // ENABLE(DFG_JIT)
+    JSC::JSGlobalObject& m_globalObject;
+};
+
+} // namespace Inspector

@@ -1,6 +1,5 @@
 /*
  * Copyright (C) 2020 Apple Inc. All rights reserved.
- * Copyright (C) 2020 Igalia S.L.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -21,29 +20,32 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "config.h"
-#include "PutByValFlags.h"
+#include "JSLockRefPrivate.h"
 
-#include <wtf/CommaPrinter.h>
-#include <wtf/PrintStream.h>
-#include <wtf/StringPrintStream.h>
-
-namespace WTF {
+#include "JSLock.h"
 
 using namespace JSC;
 
-void printInternal(PrintStream& out, PutByValFlags flags)
+void JSLock(JSContextRef ctx)
 {
-    CommaPrinter comma("|");
-    if (flags.isDirect())
-        out.print(comma, "Direct");
-    if (flags.isPrivateFieldPut())
-        out.print(comma, "PrivateField+Put");
-    if (flags.isPrivateFieldAdd())
-        out.print(comma, "PrivateField+Add");
+    if (!ctx) {
+        ASSERT_NOT_REACHED();
+        return;
+    }
+    JSGlobalObject* globalObject = toJS(ctx);
+    globalObject->vm().apiLock().lock();
 }
 
-} // namespace WTF
+void JSUnlock(JSContextRef ctx)
+{
+    if (!ctx) {
+        ASSERT_NOT_REACHED();
+        return;
+    }
+    JSGlobalObject* globalObject = toJS(ctx);
+    globalObject->vm().apiLock().unlock();
+}

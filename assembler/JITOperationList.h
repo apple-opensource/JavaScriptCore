@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2019 Apple Inc. All rights reserved.
+ * Copyright (C) 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,37 +25,49 @@
 
 #pragma once
 
-#include "ScriptDebugServer.h"
-#include <wtf/RunLoop.h>
+#include "Options.h"
+#include <wtf/HashMap.h>
+#include <wtf/NeverDestroyed.h>
+#include <wtf/PtrTag.h>
 
-namespace Inspector {
+namespace JSC {
 
-class JSGlobalObjectScriptDebugServer final : public ScriptDebugServer {
-    WTF_MAKE_NONCOPYABLE(JSGlobalObjectScriptDebugServer);
-    WTF_MAKE_FAST_ALLOCATED;
+class JITOperationList {
 public:
-    JSGlobalObjectScriptDebugServer(JSC::JSGlobalObject&);
-    ~JSGlobalObjectScriptDebugServer() final { }
+    static JITOperationList& instance();
+    static void initialize();
 
-    JSC::JSGlobalObject& globalObject() const { return m_globalObject; }
+    void* map(void* pointer) const
+    {
+#if ENABLE(JIT_OPERATION_VALIDATION)
+        return m_validatedOperations.get(removeCodePtrTag(pointer));
+#else
+        return pointer;
+#endif
+    }
 
-    static RunLoopMode runLoopMode();
+    static void populatePointersInJavaScriptCore();
+    static void populatePointersInJavaScriptCoreForLLInt();
+
+    JS_EXPORT_PRIVATE static void populatePointersInEmbedder(const uintptr_t* beginOperations, const uintptr_t* endOperations);
+
+    template<typename T> static void assertIsJITOperation(T function)
+    {
+        UNUSED_PARAM(function);
+#if ENABLE(JIT_OPERATION_VALIDATION)
+        ASSERT(!Options::useJIT() || JITOperationList::instance().map(bitwise_cast<void*>(function)));
+#endif
+    }
 
 private:
-    void attachDebugger() final;
-    void detachDebugger(bool isBeingDestroyed) final;
-
-    void didPause(JSC::JSGlobalObject*) final { }
-    void didContinue(JSC::JSGlobalObject*) final { }
-    void runEventLoopWhilePaused() final;
-    bool isContentScript(JSC::JSGlobalObject*) const final { return false; }
-
-    // NOTE: Currently all exceptions are reported at the API boundary through reportAPIException.
-    // Until a time comes where an exception can be caused outside of the API (e.g. setTimeout
-    // or some other async operation in a pure JSContext) we can ignore exceptions reported here.
-    void reportException(JSC::JSGlobalObject*, JSC::Exception*) const final { }
-
-    JSC::JSGlobalObject& m_globalObject;
+    HashMap<void*, void*> m_validatedOperations;
 };
 
-} // namespace Inspector
+JS_EXPORT_PRIVATE extern LazyNeverDestroyed<JITOperationList> jitOperationList;
+
+inline JITOperationList& JITOperationList::instance()
+{
+    return jitOperationList.get();
+}
+
+} // namespace JSC

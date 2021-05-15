@@ -24,7 +24,7 @@
  */
 
 #include "config.h"
-#include "JSGlobalObjectScriptDebugServer.h"
+#include "JSGlobalObjectDebugger.h"
 
 #include "JSGlobalObject.h"
 #include "JSLock.h"
@@ -34,36 +34,42 @@ namespace Inspector {
 
 using namespace JSC;
 
-JSGlobalObjectScriptDebugServer::JSGlobalObjectScriptDebugServer(JSGlobalObject& globalObject)
-    : ScriptDebugServer(globalObject.vm())
+JSGlobalObjectDebugger::JSGlobalObjectDebugger(JSGlobalObject& globalObject)
+    : Debugger(globalObject.vm())
     , m_globalObject(globalObject)
 {
 }
 
-void JSGlobalObjectScriptDebugServer::attachDebugger()
+void JSGlobalObjectDebugger::attachDebugger()
 {
+    JSC::Debugger::attachDebugger();
+
     attach(&m_globalObject);
 }
 
-void JSGlobalObjectScriptDebugServer::detachDebugger(bool isBeingDestroyed)
+void JSGlobalObjectDebugger::detachDebugger(bool isBeingDestroyed)
 {
+    JSC::Debugger::detachDebugger(isBeingDestroyed);
+
     detach(&m_globalObject, isBeingDestroyed ? Debugger::GlobalObjectIsDestructing : Debugger::TerminatingDebuggingSession);
     if (!isBeingDestroyed)
         recompileAllJSFunctions();
 }
 
-void JSGlobalObjectScriptDebugServer::runEventLoopWhilePaused()
+void JSGlobalObjectDebugger::runEventLoopWhilePaused()
 {
+    JSC::Debugger::runEventLoopWhilePaused();
+
     // Drop all locks so another thread can work in the VM while we are nested.
     JSC::JSLock::DropAllLocks dropAllLocks(&m_globalObject.vm());
 
-    while (!m_doneProcessingDebuggerEvents) {
-        if (RunLoop::cycle(JSGlobalObjectScriptDebugServer::runLoopMode()) == RunLoop::CycleResult::Stop)
+    while (!doneProcessingDebuggerEvents()) {
+        if (RunLoop::cycle(JSGlobalObjectDebugger::runLoopMode()) == RunLoop::CycleResult::Stop)
             break;
     }
 }
 
-RunLoopMode JSGlobalObjectScriptDebugServer::runLoopMode()
+RunLoopMode JSGlobalObjectDebugger::runLoopMode()
 {
 #if USE(CF) && !PLATFORM(WATCHOS)
     // Run the RunLoop in a custom run loop mode to prevent default observers

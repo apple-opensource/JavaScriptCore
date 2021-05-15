@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Apple Inc. All rights reserved.
+ * Copyright (C) 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -20,41 +20,22 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
 
-#include "JSCJSValue.h"
+#include "BuiltinNames.h"
+#include "IntlDateTimeFormat.h"
+#include "IntlObjectInlines.h"
+#include "JSGlobalObject.h"
 
-#if !ENABLE(C_LOOP)
+namespace JSC  {
 
-#if CALLING_CONVENTION_IS_STDCALL
-#define HOST_CALL_RETURN_VALUE_OPTION CDECL
-#else
-#define HOST_CALL_RETURN_VALUE_OPTION
-#endif
-
-namespace JSC {
-
-extern "C" EncodedJSValue HOST_CALL_RETURN_VALUE_OPTION getHostCallReturnValue() REFERENCED_FROM_ASM WTF_INTERNAL;
-
-#if COMPILER(GCC_COMPATIBLE)
-
-// This is a public declaration only to convince CLANG not to elide it.
-extern "C" EncodedJSValue HOST_CALL_RETURN_VALUE_OPTION getHostCallReturnValueWithExecState(CallFrame*) REFERENCED_FROM_ASM WTF_INTERNAL;
-
-inline void initializeHostCallReturnValue()
+// https://tc39.es/ecma402/#sec-unwrapdatetimeformat
+inline IntlDateTimeFormat* IntlDateTimeFormat::unwrapForOldFunctions(JSGlobalObject* globalObject, JSValue thisValue)
 {
-    getHostCallReturnValueWithExecState(nullptr);
+    return unwrapForLegacyIntlConstructor<IntlDateTimeFormat>(globalObject, thisValue, globalObject->dateTimeFormatConstructor());
 }
 
-#else // COMPILER(GCC_COMPATIBLE)
-
-inline void initializeHostCallReturnValue() { }
-
-#endif // COMPILER(GCC_COMPATIBLE)
-
 } // namespace JSC
-
-#endif // !ENABLE(C_LOOP)

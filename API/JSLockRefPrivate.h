@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Apple Inc. All rights reserved.
+ * Copyright (C) 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -20,27 +20,33 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
+#pragma once
 
-#if ENABLE(C_LOOP) && COMPILER(MSVC) && CPU(X86_64)
+#include <JavaScriptCore/JSBase.h>
 
-#include "CallFrame.h"
-#include "JSCJSValue.h"
-#include "JSCInlines.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-namespace JSC {
+/*!
+ @function
+ @abstract Acquire the API lock for the given JSContextRef.
+ @param ctx The execution context to be locked.
+ @discussion The lock has to be held to perform any interactions with the JSContextRef. This function allows holding the lock across multiple interactions to amortize the cost. This lock is a recursive lock.
+ */
+JS_EXPORT void JSLock(JSContextRef ctx);
 
-// FIXME: The following is a workaround that is only needed because JITStubsMSVC64.asm
-// is built unconditionally even when the JIT is disable, and it references this function.
-// We only need to provide a stub to satisfy the linkage. It will never be called.
-extern "C" EncodedJSValue getHostCallReturnValueWithExecState(JSGlobalObject*)
-{
-    return JSValue::encode(JSValue());
+/*!
+ @function
+ @abstract Release the API lock for the given JSContextRef.
+ @param ctx The execution context to be unlocked.
+ @discussion Releases the lock that was previously acquired using JSLock.
+ */
+JS_EXPORT void JSUnlock(JSContextRef ctx);
+
+#ifdef __cplusplus
 }
-
-} // namespace JSC
-
-#endif // ENABLE(C_LOOP) && COMPILER(MSVC) && CPU(X86_64)
+#endif
